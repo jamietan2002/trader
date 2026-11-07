@@ -1,0 +1,14 @@
+# Core Python dependencies (used in Docker / standard virtual environments)
+# Note: The application also runs 100% standalone using Python 3.11+ standard library.
+fastapi>=0.115.0
+uvicorn>=0.30.0
+pydantic>=2.9.0
+sqlalchemy>=2.0.35
+psycopg2-binary>=2.9.9
+pandas>=2.2.3
+numpy>=2.1.0
+apscheduler>=3.10.4
+streamlit>=1.39.0
+httpx>=0.27.2
+pytest>=8.3.3
+

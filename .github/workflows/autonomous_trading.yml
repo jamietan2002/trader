@@ -1,0 +1,95 @@
+name: Autonomous Swing Trading Loop (Daily & Weekly)
+
+on:
+  schedule:
+    # Runs Monday-Friday at 21:30 UTC (16:30 EST / 17:30 EDT, right after US market close)
+    - cron: "30 21 * * 1-5"
+    # Runs every Saturday at 02:00 UTC (10:00 AM SGT) for the Weekly Self-Improving Strategy Discovery Loop
+    - cron: "0 2 * * 6"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Workflow mode to execute (auto | daily | weekly | demo)"
+        required: false
+        default: "auto"
+
+permissions:
+  contents: write
+
+jobs:
+  autonomous-trading-cycle:
+    runs-on: ubuntu-latest
+    env:
+      TRADING_MODE: paper
+      MARKET_DATA_PROVIDER: alpaca
+      ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+      ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Context & Safety Verification Suite
+        run: |
+          python3 .agents/skills/maintain-project-context/scripts/verify_context.py
+
+      - name: Execute Autonomous Daily / Weekly Trading & Self-Improvement Loop
+        run: |
+          python3 - << 'EOF'
+          import os
+          from datetime import datetime, timezone
+          from api.server import PlatformApplication
+          from core.market_data.models import USTradingCalendar
+
+          app = PlatformApplication()
+
+          # Ensure baseline strategies & historical dataset are initialized
+          if not app.orchestrator.registry.list_strategies():
+              print("[INIT] Bootstrapping baseline strategies and historical dataset...")
+              app.orchestrator.bootstrap_baseline_system()
+
+          mode = os.environ.get("INPUT_MODE", "auto").strip().lower()
+          today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+          # Refresh latest market data up to today
+          app.orchestrator.market_data.ingest_universe_and_history(
+              start_date="2023-01-03",
+              end_date=today_str,
+          )
+
+          # Determine latest valid US trading day
+          trading_days = USTradingCalendar.get_trading_days("2025-01-02", today_str)
+          session_date = trading_days[-1] if trading_days else "2025-06-27"
+
+          if mode == "demo":
+              from main import cmd_demo
+              cmd_demo(app)
+          elif mode == "weekly" or (mode == "auto" and datetime.now(timezone.utc).weekday() == 5):
+              print(f"[WEEKLY] Running Weekly AI Strategy Discovery & Walk-Forward Validation for {session_date}...")
+              app.orchestrator.run_daily_workflow(trading_date=session_date, force=False)
+              app.orchestrator.run_weekly_workflow(week_ending_date=session_date, force=True)
+          else:
+              print(f"[DAILY] Running Daily Pre-Market, Paper Execution & Post-Close Review for {session_date}...")
+              app.orchestrator.run_daily_workflow(trading_date=session_date, force=False)
+          EOF
+
+      - name: Commit & Push Updated Paper Account & Strategy Registry State
+        run: |
+          git config user.name "swing-trading-ai-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/swing_trader.db
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(state): autonomous paper trading & strategy registry update [skip ci]"
+            git push
+          else
+            echo "No state changes to commit."
+          fi
+
