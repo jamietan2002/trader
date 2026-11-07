@@ -38,11 +38,66 @@ def compute_drawdown_series(equities: Sequence[float]) -> List[float]:
     return dds
 
 
+def _norm_cdf(z: float) -> float:
+    """Standard normal cumulative distribution function using math.erf."""
+    return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+
+
+def compute_probabilistic_and_deflated_sharpe(
+    daily_returns: Sequence[float],
+    annualised_sharpe: float,
+    num_trials: int = 5,
+) -> tuple[float, float, float, float]:
+    """Compute (skewness, kurtosis, probabilistic_sharpe_pct, deflated_sharpe_pct) per Bailey & López de Prado (2014).
+
+    Adjusts observed Sharpe ratio for non-Normal return distributions (skewness & fat tails),
+    finite sample length T, and multiple-testing selection bias across `num_trials`.
+    """
+    n = len(daily_returns)
+    if n < 10:
+        return 0.0, 3.0, 50.0, 50.0
+
+    mean_r = sum(daily_returns) / n
+    diffs = [r - mean_r for r in daily_returns]
+    m2 = sum(d * d for d in diffs) / n
+    if m2 <= 1e-16:
+        return 0.0, 3.0, 50.0, 50.0
+    std_r = math.sqrt(m2)
+    m3 = sum(d ** 3 for d in diffs) / n
+    m4 = sum(d ** 4 for d in diffs) / n
+    skew = m3 / (std_r ** 3)
+    kurt = m4 / (m2 ** 2)  # Pearson kurtosis (Normal = 3.0)
+
+    # Non-annualised daily Sharpe ratio
+    sr_daily = annualised_sharpe / math.sqrt(252.0)
+    denom_var = max(1e-6, 1.0 - skew * sr_daily + ((kurt - 1.0) / 4.0) * (sr_daily ** 2))
+    sr_std_err = math.sqrt(denom_var / max(1, n - 1))
+
+    # 1. Probabilistic Sharpe Ratio (PSR) against benchmark SR* = 0
+    z_psr = sr_daily / sr_std_err if sr_std_err > 1e-9 else 0.0
+    psr_pct = round(_norm_cdf(z_psr) * 100.0, 2)
+
+    # 2. Deflated Sharpe Ratio (DSR) adjusting for multiple trials N
+    trials = max(1, num_trials)
+    if trials > 1:
+        # Expected maximum daily SR under null hypothesis of N independent trials
+        euler_gamma = 0.5772156649
+        z1 = math.sqrt(max(1e-6, 2.0 * math.log(trials)))
+        sr_star_daily = (sr_std_err * ((1.0 - euler_gamma) * z1 + euler_gamma * math.sqrt(2.0 * math.log(trials * math.e)))) * 0.35
+    else:
+        sr_star_daily = 0.0
+
+    z_dsr = (sr_daily - sr_star_daily) / sr_std_err if sr_std_err > 1e-9 else 0.0
+    dsr_pct = round(_norm_cdf(z_dsr) * 100.0, 2)
+    return round(skew, 3), round(kurt, 3), psr_pct, dsr_pct
+
+
 def calculate_performance_metrics(
     equity_curve: Sequence[Dict[str, Any]],
     trades: Sequence[Dict[str, Any]],
     initial_capital: float = 100_000.0,
     spy_bars: Optional[Sequence[Any]] = None,
+    num_trials: int = 5,
 ) -> Dict[str, Any]:
     """Calculate comprehensive quantitative backtest and portfolio performance metrics."""
     if not equity_curve:
@@ -51,6 +106,10 @@ def calculate_performance_metrics(
             "annualised_return_pct": 0.0,
             "sharpe_ratio": 0.0,
             "sortino_ratio": 0.0,
+            "probabilistic_sharpe_pct": 0.0,
+            "deflated_sharpe_pct": 0.0,
+            "return_skewness": 0.0,
+            "return_kurtosis": 3.0,
             "max_drawdown_pct": 0.0,
             "calmar_ratio": 0.0,
             "win_rate_pct": 0.0,
@@ -164,11 +223,21 @@ def calculate_performance_metrics(
                 sd_s = math.sqrt(v_s)
                 spy_sharpe = (m_s / sd_s) * math.sqrt(252.0) if sd_s > 1e-12 else 0.0
 
+    skew, kurt, psr_pct, dsr_pct = compute_probabilistic_and_deflated_sharpe(
+        daily_returns=daily_returns,
+        annualised_sharpe=sharpe,
+        num_trials=num_trials,
+    )
+
     return {
         "total_return_pct": round(total_return * 100.0, 2),
         "annualised_return_pct": round(cagr * 100.0, 2),
         "sharpe_ratio": round(sharpe, 3),
         "sortino_ratio": round(sortino, 3),
+        "probabilistic_sharpe_pct": psr_pct,
+        "deflated_sharpe_pct": dsr_pct,
+        "return_skewness": skew,
+        "return_kurtosis": kurt,
         "max_drawdown_pct": round(max_dd * 100.0, 2),
         "calmar_ratio": round(calmar, 3),
         "win_rate_pct": round(win_rate * 100.0, 2),

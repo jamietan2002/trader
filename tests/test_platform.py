@@ -660,6 +660,29 @@ class TestSwingTradingPlatform(unittest.TestCase):
         weekly_res = orch.run_weekly_workflow("2025-05-09", force=True)
         self.assertEqual(weekly_res["status"], "COMPLETED")
         self.assertIn("candidate_strategy_id", weekly_res["summary"])
+        self.assertIn("tournament_candidates", weekly_res["summary"])
+        self.assertIn("deflated_sharpe_pct", weekly_res["summary"]["metrics"])
+        self.assertIn("probabilistic_sharpe_pct", weekly_res["summary"]["metrics"])
+
+        # Verify Drawdown De-Gearing scales down position size when portfolio drawdown >= 7.5%
+        rm = orch.paper_engine.risk_manager
+        normal_sz = rm.calculate_atr_position_size(
+            portfolio_equity=100_000.0,
+            available_cash=100_000.0,
+            entry_price=100.0,
+            stop_loss_price=95.0,
+            atr_14=2.5,
+            current_drawdown_pct=0.02,
+        )
+        degeared_sz = rm.calculate_atr_position_size(
+            portfolio_equity=100_000.0,
+            available_cash=100_000.0,
+            entry_price=100.0,
+            stop_loss_price=95.0,
+            atr_14=2.5,
+            current_drawdown_pct=0.09,
+        )
+        self.assertLess(degeared_sz, normal_sz)
 
         # 6. Verify state persistence across a brand new orchestrator instance (simulating restart)
         orch_restarted = AutonomousWorkflowOrchestrator(self.settings, self.db, self.market_data)

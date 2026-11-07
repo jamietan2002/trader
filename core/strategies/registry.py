@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from core.indicators.technical import IndicatorSnapshot
 from core.market_data.models import EarningsEvent
@@ -313,6 +313,49 @@ class StrategySignalEngine:
         return None
 
     @staticmethod
+    def compute_effective_stop_price(
+        config: StrategyConfig,
+        entry_price: float,
+        highest_price_since_entry: float,
+        holding_days: int,
+        initial_stop_price: Optional[float],
+        atr_14: float,
+    ) -> Tuple[float, str]:
+        """Compute one-way ratcheted stop price combining initial ATR stop, +1.25R breakeven+friction ratchet, and Chandelier trail.
+
+        Returns `(effective_stop_price, stop_mode_label)`.
+        """
+        exits = config.exit_rules
+        stop_mult = float(exits.get("stop_loss_atr_mult", 2.0))
+        base_stop = (
+            float(initial_stop_price)
+            if (initial_stop_price is not None and initial_stop_price > 0)
+            else round(max(0.01, entry_price - stop_mult * atr_14), 2)
+        )
+        effective_stop = base_stop
+        mode_label = "Initial ATR Stop"
+
+        if holding_days >= config.holding_period_min_days:
+            risk_1r = max(entry_price * 0.015, entry_price - base_stop)
+            # 1. +1.25R Breakeven + Friction Buffer Ratchet
+            breakeven_trigger_r = float(exits.get("breakeven_trigger_r", 1.25))
+            if (highest_price_since_entry - entry_price) >= breakeven_trigger_r * risk_1r:
+                be_Plus_friction = round(entry_price + 0.15 * atr_14, 2)
+                if be_Plus_friction > effective_stop:
+                    effective_stop = be_Plus_friction
+                    mode_label = "Breakeven+Friction Ratchet (+1.25R)"
+
+            # 2. Chandelier ATR Trailing Stop Ratchet
+            trailing_atr_mult = exits.get("trailing_stop_atr_mult")
+            if trailing_atr_mult is not None:
+                trail_stop = round(highest_price_since_entry - float(trailing_atr_mult) * atr_14, 2)
+                if trail_stop > effective_stop:
+                    effective_stop = trail_stop
+                    mode_label = f"Chandelier Trail ({trailing_atr_mult}x ATR)"
+
+        return round(effective_stop, 2), mode_label
+
+    @staticmethod
     def evaluate_exit(
         config: StrategyConfig,
         ind: IndicatorSnapshot,
@@ -340,23 +383,28 @@ class StrategySignalEngine:
                 close_at_signal=stop_loss_price,
             )
 
-        # 2. Volatility-adjusted trailing stop check
-        trailing_atr_mult = exits.get("trailing_stop_atr_mult")
-        if trailing_atr_mult is not None and holding_days >= config.holding_period_min_days:
-            trail_stop = highest_price_since_entry - float(trailing_atr_mult) * atr
-            if ind.close <= trail_stop:
-                return TradeSignal(
-                    strategy_id=config.strategy_id,
-                    strategy_version=config.version,
-                    strategy_family=config.strategy_family,
-                    ticker=ind.ticker,
-                    signal_date=ind.bar_date,
-                    action="EXIT_LONG",
-                    reason=f"ATR Trailing Stop triggered at ${ind.close:.2f} (Peak=${highest_price_since_entry:.2f})",
-                    conviction_score=1.0,
-                    atr_at_signal=atr,
-                    close_at_signal=ind.close,
-                )
+        # 2. Volatility-adjusted trailing & breakeven ratchet stop check
+        eff_stop, stop_mode = StrategySignalEngine.compute_effective_stop_price(
+            config=config,
+            entry_price=entry_price,
+            highest_price_since_entry=highest_price_since_entry,
+            holding_days=holding_days,
+            initial_stop_price=stop_loss_price,
+            atr_14=atr,
+        )
+        if holding_days >= config.holding_period_min_days and ind.close <= eff_stop:
+            return TradeSignal(
+                strategy_id=config.strategy_id,
+                strategy_version=config.version,
+                strategy_family=config.strategy_family,
+                ticker=ind.ticker,
+                signal_date=ind.bar_date,
+                action="EXIT_LONG",
+                reason=f"{stop_mode} triggered at ${ind.close:.2f} (Stop=${eff_stop:.2f}, Peak=${highest_price_since_entry:.2f})",
+                conviction_score=1.0,
+                atr_at_signal=atr,
+                close_at_signal=ind.close,
+            )
 
         # 3. Take-profit target check (after minimum holding period or intraday high)
         if (

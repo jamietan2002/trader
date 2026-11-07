@@ -4,6 +4,21 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-07] — Institutional Quantitative Upgrades: Deflated Sharpe (DSR), +1.25R Breakeven/Chandelier Stop Ratchet, Drawdown De-Gearing & Multi-Candidate Weekly Tournament
+
+### Summary
+- **Probabilistic & Deflated Sharpe Ratio (`evaluation/metrics/performance.py`)**: Implemented `compute_probabilistic_and_deflated_sharpe()` per Bailey & López de Prado (2014), adding `return_skewness`, `return_kurtosis`, `probabilistic_sharpe_pct` (PSR), and `deflated_sharpe_pct` (DSR) to `calculate_performance_metrics()` to penalize non-Normal fat tails and multiple-testing selection bias.
+- **Systematic $+1.25\text{R}$ Breakeven+Friction Ratchet & Chandelier ATR Trailing Stop (`core/strategies/registry.py`, `core/execution/paper_broker.py`)**: Added `StrategySignalEngine.compute_effective_stop_price()` and wired it into `evaluate_exit()` and `LiveTradingCopilotEngine.get_daily_action_plan()` so open swing positions automatically ratchet their stop-loss to $\text{Entry} + 0.15 \times \text{ATR}_{14}$ after reaching $+1.25\text{R}$ unrealized gain and trail via a Chandelier stop ($\text{Highest High} - k \times \text{ATR}_{14}$) after $+1.5\text{R}$.
+- **Walk-Forward Efficiency (WFE) & Dynamic Drawdown De-Gearing (`core/backtesting/engine.py`, `core/risk/manager.py`)**: Computed `walk_forward_efficiency_ratio` (OOS annualised return vs. In-Sample annualised return) in `run_in_sample_validation_oos_pipeline()`, and upgraded `PortfolioRiskManager.calculate_atr_position_size()` with dynamic drawdown de-gearing (`0.65x` risk-per-trade scaling when portfolio drawdown reaches 50% of the suspension limit, i.e., $\ge 7.5\%$) and benchmark volatility targeting.
+- **Multi-Candidate Weekly Tournament (`infrastructure/scheduler/orchestrator.py`)**: Upgraded `run_weekly_workflow()` to evaluate both the Performance Analyst's refinement proposal and the Market Researcher's top catalyst family in a head-to-head tournament ranked by promotion gate pass rate and Deflated Sharpe Ratio.
+
+### Modules Added / Modified
+- `evaluation/metrics/performance.py`, `core/strategies/registry.py`, `core/backtesting/engine.py`
+- `core/risk/manager.py`, `core/execution/paper_broker.py`, `infrastructure/scheduler/orchestrator.py`
+- `dashboard/streamlit_app.py`, `dashboard/ui_template.py`, `USER_GUIDE.md`, `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-07] — Engine Audit: Dynamic OOS Splits, Live Regime Detection, Proposal Rotation, Sector Ranks & LLM Auto-Detection
 
 ### Summary

@@ -337,64 +337,98 @@ class AutonomousWorkflowOrchestrator:
                 proposals = self.analyst_agent.list_proposals(limit=5)
             latest_proposal = proposals[0] if (proposals and not preferred_family) else None
 
-            candidate_strat = self.discovery_agent.propose_strategy_from_research(
-                research_candidates=latest_reports,
-                preferred_family=preferred_family,
-                analyst_proposal=latest_proposal,
-            )
+            # Build Weekly Tournament Candidate Specs:
+            # 1) Primary candidate (from Analyst Proposal or preferred_family)
+            # 2) Secondary candidate (from top Market Research catalyst family, if distinct and not locked)
+            candidate_specs: List[tuple[Optional[str], Optional[Dict[str, Any]]]] = [
+                (preferred_family, latest_proposal)
+            ]
+            if preferred_family is None and latest_reports:
+                top_research_fam = str(latest_reports[0].get("suggested_strategy_family", "MOMENTUM_TREND"))
+                prop_sid = str((latest_proposal or {}).get("target_strategy_id", ""))
+                if not prop_sid or top_research_fam.lower() not in prop_sid.lower():
+                    candidate_specs.append((top_research_fam, None))
 
-            self.registry.update_status(
-                candidate_strat.strategy_id,
-                candidate_strat.version,
-                StrategyStatus.BACKTESTING,
-                reason=f"Weekly experiment cycle ({week_ending_date})",
-            )
+            tournament_results: List[Dict[str, Any]] = []
+            seen_Strat_versions: set[tuple[str, int]] = set()
 
-            pipeline = self.backtest_engine.run_in_sample_validation_oos_pipeline(candidate_strat)
-            full_bt = pipeline["full_period"]
+            for fam_hint, prop_item in candidate_specs:
+                cand_strat = self.discovery_agent.propose_strategy_from_research(
+                    research_candidates=latest_reports,
+                    preferred_family=fam_hint,
+                    analyst_proposal=prop_item,
+                )
+                if (cand_strat.strategy_id, cand_strat.version) in seen_Strat_versions:
+                    continue
+                seen_Strat_versions.add((cand_strat.strategy_id, cand_strat.version))
 
-            eval_report = self.evaluator_agent.evaluate_pipeline_results(
-                strategy=candidate_strat,
-                pipeline_results=pipeline,
-                dataset_version=f"ds_weekly_{week_ending_date}",
-                auto_transition=True,
-            )
-
-            if latest_proposal and latest_proposal.get("proposal_id"):
-                self.analyst_agent.mark_proposal_status(
-                    str(latest_proposal["proposal_id"]),
-                    "PROMOTED" if eval_report.promoted else "REJECTED",
+                self.registry.update_status(
+                    cand_strat.strategy_id,
+                    cand_strat.version,
+                    StrategyStatus.BACKTESTING,
+                    reason=f"Weekly tournament cycle ({week_ending_date})",
                 )
 
-            self.registry.record_experiment(
-                experiment_id=full_bt["experiment_id"],
-                strategy_id=candidate_strat.strategy_id,
-                version=candidate_strat.version,
-                experiment_type="WEEKLY_DISCOVERY",
-                dataset_version=f"ds_weekly_{week_ending_date}",
-                start_date=full_bt["start_date"],
-                end_date=full_bt["end_date"],
-                parameters={
-                    "entry_rules": candidate_strat.entry_rules,
-                    "exit_rules": candidate_strat.exit_rules,
-                },
-                metrics=full_bt["metrics"],
-                equity_curve=full_bt["equity_curve"],
-                trades=full_bt["trades"],
-                evaluation_report=eval_report.to_dict(),
-                passed_promotion=eval_report.promoted,
-            )
+                pipeline = self.backtest_engine.run_in_sample_validation_oos_pipeline(cand_strat)
+                full_bt = pipeline["full_period"]
 
-            return {
-                "week_ending_date": week_ending_date,
-                "candidate_strategy_id": candidate_strat.strategy_id,
-                "candidate_version": candidate_strat.version,
-                "strategy_family": candidate_strat.strategy_family,
-                "promoted": eval_report.promoted,
-                "new_status": eval_report.new_status,
-                "decision_summary": eval_report.decision_summary,
-                "metrics": full_bt["metrics"],
-            }
+                eval_rep = self.evaluator_agent.evaluate_pipeline_results(
+                    strategy=cand_strat,
+                    pipeline_results=pipeline,
+                    dataset_version=f"ds_weekly_{week_ending_date}",
+                    auto_transition=True,
+                )
+
+                if prop_item and prop_item.get("proposal_id"):
+                    self.analyst_agent.mark_proposal_status(
+                        str(prop_item["proposal_id"]),
+                        "PROMOTED" if eval_rep.promoted else "REJECTED",
+                    )
+
+                self.registry.record_experiment(
+                    experiment_id=full_bt["experiment_id"],
+                    strategy_id=cand_strat.strategy_id,
+                    version=cand_strat.version,
+                    experiment_type="WEEKLY_DISCOVERY",
+                    dataset_version=f"ds_weekly_{week_ending_date}",
+                    start_date=full_bt["start_date"],
+                    end_date=full_bt["end_date"],
+                    parameters={
+                        "entry_rules": cand_strat.entry_rules,
+                        "exit_rules": cand_strat.exit_rules,
+                    },
+                    metrics=full_bt["metrics"],
+                    equity_curve=full_bt["equity_curve"],
+                    trades=full_bt["trades"],
+                    evaluation_report=eval_rep.to_dict(),
+                    passed_promotion=eval_rep.promoted,
+                )
+
+                tournament_results.append(
+                    {
+                        "week_ending_date": week_ending_date,
+                        "candidate_strategy_id": cand_strat.strategy_id,
+                        "candidate_version": cand_strat.version,
+                        "strategy_family": cand_strat.strategy_family,
+                        "promoted": eval_rep.promoted,
+                        "new_status": eval_rep.new_status,
+                        "decision_summary": eval_rep.decision_summary,
+                        "metrics": full_bt["metrics"],
+                    }
+                )
+
+            # Rank tournament results: promoted strategies first, then highest Deflated Sharpe / Sharpe Ratio
+            tournament_results.sort(
+                key=lambda r: (
+                    1 if r["promoted"] else 0,
+                    float(r["metrics"].get("deflated_sharpe_pct", 0.0)),
+                    float(r["metrics"].get("sharpe_ratio", 0.0)),
+                ),
+                reverse=True,
+            )
+            winner = dict(tournament_results[0])
+            winner["tournament_candidates"] = tournament_results
+            return winner
 
         return self.run_idempotent_job(
             job_name="weekly_research_and_validation",

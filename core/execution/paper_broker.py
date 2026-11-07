@@ -1583,6 +1583,17 @@ class LiveTradingCopilotEngine:
             else:
                 max_hold = strat.holding_period_max_days
                 days_left = max(0, max_hold - int(pos["holding_days"]))
+                eff_stop, stop_mode = StrategySignalEngine.compute_effective_stop_price(
+                    config=strat,
+                    ind=ind_today,
+                    entry_price=float(pos["avg_entry_price"]),
+                    highest_price_since_entry=float(pos["highest_price_since_entry"]),
+                    holding_days=int(pos["holding_days"]),
+                    stop_loss_price=float(pos["stop_loss_price"]) if pos.get("stop_loss_price") else None,
+                )
+                stop_note = ""
+                if stop_mode in ("BREAKEVEN_RATCHET", "CHANDELIER_TRAIL") and eff_stop is not None:
+                    stop_note = f" · Ratchet Broker Stop → ${eff_stop:.2f} ({stop_mode.replace('_', ' ').title()})"
                 hold_updates.append(
                     {
                         "ticker": ticker,
@@ -1591,9 +1602,11 @@ class LiveTradingCopilotEngine:
                         "avg_entry_price": float(pos["avg_entry_price"]),
                         "current_price": float(pos["current_price"]),
                         "unrealised_pnl": float(pos["unrealised_pnl"]),
-                        "stop_loss_price": pos.get("stop_loss_price"),
+                        "stop_loss_price": eff_stop if eff_stop is not None else pos.get("stop_loss_price"),
+                        "initial_stop_price": pos.get("stop_loss_price"),
+                        "stop_mode": stop_mode,
                         "take_profit_price": pos.get("take_profit_price"),
-                        "status": f"HOLD ({days_left} trading days until max time-exit)",
+                        "status": f"HOLD ({days_left}d left{stop_note})",
                     }
                 )
 

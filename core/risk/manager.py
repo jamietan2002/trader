@@ -78,8 +78,10 @@ class PortfolioRiskManager:
         atr_14: float,
         strategy_risk_per_trade_pct: Optional[float] = None,
         strategy_max_exposure_pct: Optional[float] = None,
+        current_drawdown_pct: float = 0.0,
+        market_vol_annualised: Optional[float] = None,
     ) -> int:
-        """Calculate deterministic ATR-based position size subject to risk and exposure caps."""
+        """Calculate deterministic ATR-based position size subject to risk, drawdown de-gearing, and volatility caps."""
         if portfolio_equity <= 0 or available_cash <= 0 or entry_price <= 0:
             return 0
 
@@ -87,6 +89,15 @@ class PortfolioRiskManager:
             self.config.max_risk_per_trade_pct,
             strategy_risk_per_trade_pct or self.config.max_risk_per_trade_pct,
         )
+        # Dynamic Drawdown De-Gearing: scale risk by 0.65x when drawdown reaches 50% of suspension threshold (e.g., >=7.5%)
+        half_dd_threshold = 0.5 * self.config.drawdown_suspension_threshold_pct
+        if current_drawdown_pct >= half_dd_threshold > 0:
+            effective_risk_pct *= 0.65
+        # Volatility-Regime Targeting: scale risk inversely when benchmark annualised vol > 22%
+        if market_vol_annualised is not None and market_vol_annualised > 22.0:
+            vol_scalar = max(0.5, min(1.0, 20.0 / float(market_vol_annualised)))
+            effective_risk_pct *= vol_scalar
+
         max_risk_dollars = portfolio_equity * effective_risk_pct
 
         # Risk per share is distance from entry to stop-loss (or 2.0 * ATR fallback)
@@ -221,7 +232,7 @@ class PortfolioRiskManager:
                 f"non-PEAD entries blocked within {self.config.earnings_blackout_days_before} days.",
             )
 
-        # 6. Calculate ATR Position Size
+        # 6. Calculate ATR Position Size (with dynamic drawdown de-gearing)
         shares = self.calculate_atr_position_size(
             portfolio_equity=portfolio_equity,
             available_cash=available_cash,
@@ -230,7 +241,12 @@ class PortfolioRiskManager:
             atr_14=atr_14,
             strategy_risk_per_trade_pct=strategy_risk_pct,
             strategy_max_exposure_pct=strategy_max_exp_pct,
+            current_drawdown_pct=current_dd,
         )
+        if current_dd >= 0.5 * self.config.drawdown_suspension_threshold_pct > 0:
+            warnings.append(
+                f"Drawdown de-gearing active ({current_dd * 100:.2f}% DD): scaled risk-per-trade to 65% to protect capital."
+            )
         if shares <= 0:
             return self._veto(
                 account_id,

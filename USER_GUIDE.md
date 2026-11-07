@@ -120,15 +120,18 @@ Once a strategy reaches `READY FOR LIVE REVIEW` (or whenever you choose to mirro
    - Computes strictly causal technical series (`bars[0 : i + 1]`) for every bar: `SMA(20, 50, 200)`, `EMA(12, 26)`, `MACD(12, 26, 9)`, Wilder's `RSI(14)`, Wilder's `ATR(14)`, `Bollinger Bands(20, 2)`, `20-day Volume Ratio`, `10-day Consolidation Range %`, `20-day / 252-day Prior Highs`, and `20-day / 60-day Relative Strength vs. SPY`.
 3. **Strategy Signal Engine & Version Registry (`core/strategies/registry.py`)**:
    - Evaluates structured JSON entry and exit rules (`StrategyConfig`) without free-form text interpretation.
+   - Includes a **Systematic $+1.25\text{R}$ Breakeven+Friction Ratchet & Chandelier ATR Trailing Stop** (`compute_effective_stop_price()`): once a trade reaches $+1.25\text{R}$ unrealized gain, the stop-loss automatically ratchets to $\text{Entry} + 0.15 \times \text{ATR}$ (covering commissions and slippage), and once it reaches $+1.5\text{R}$, a Chandelier trailing stop ($\text{Highest High Since Entry} - k \times \text{ATR}_{14}$) locks in swing gains.
    - Enforces immutable versioning (`DRAFT -> BACKTESTING -> VALIDATION -> PAPER_TRADING -> RETIRED / REJECTED`). Promoting `v+1` automatically transitions `v` to `RETIRED`.
-4. **Chronological Backtesting & Walk-Forward Engine (`core/backtesting/engine.py`)**:
-   - Simulates bar-by-bar trading across **In-Sample (60%)**, **Validation (20%)**, and **Out-of-Sample (20%)** partitions, plus a **4-Window Rolling Walk-Forward** audit and a **2x Transaction Cost Stress Test**.
+4. **Chronological Backtesting, Walk-Forward Efficiency & Deflated Sharpe (`core/backtesting/engine.py`, `evaluation/metrics/performance.py`)**:
+   - Simulates bar-by-bar trading across **In-Sample (50–60%)**, **Validation (20–25%)**, and **Out-of-Sample (20–25%)** partitions, plus a **4-Window Rolling Walk-Forward** audit, **Walk-Forward Efficiency (WFE) Ratio**, and a **2x Transaction Cost Stress Test**.
+   - Computes **Probabilistic Sharpe Ratio (PSR %)** and **Deflated Sharpe Ratio (DSR %)** (Bailey & López de Prado) adjusted for return skewness, fat tails (kurtosis), sample length, and multiple-testing bias across weekly strategy tournaments.
    - Signals triggered at Day `T` close fill at Day `T + 1` open (`adj_open` + `2.5 bps` half-spread + `3.0 bps` slippage + `$0.005/sh` commission).
 5. **Portfolio Risk Manager (`core/risk/manager.py`)**:
-   - Sizes every position using `14-day ATR` so entry-to-stop-loss risk is capped at `1.0%` of equity.
+   - Sizes every position using `14-day ATR` so entry-to-stop-loss risk is capped at `1.0%` of equity, with **Dynamic Drawdown De-Gearing** (automatically scaling risk per trade down to `0.65x` if portfolio drawdown exceeds `7.5%`, halfway to the `15%` kill switch) and **Volatility-Regime Targeting**.
    - Exercises hard veto authority over 7 limits: `1.0%` per-trade risk, `5.0%` total open portfolio heat (`MAX_TOTAL_OPEN_RISK`), `15.0%` single-stock cap, `30.0%` sector cap, `10` max positions, `0.80` pairwise return correlation cap, `$20M` minimum daily dollar volume, and a `15.0%` drawdown kill switch.
-6. **Paper Brokerage & Multi-Strategy Execution Engine (`core/execution/paper_broker.py`)**:
-   - Manages the `$100,000` virtual account, prevents duplicate orders via SHA-256 `idempotency_key`s, interleaves signals round-robin across active strategies by conviction score, reconciles cash/positions/dividends, and writes an immutable `trade_ledger`.
+6. **Paper Brokerage & Air-Gapped Live Trading Copilot (`core/execution/paper_broker.py`)**:
+   - `PaperTradingEngine`: Manages the `$100,000` virtual account, prevents duplicate orders via SHA-256 `idempotency_key`s, interleaves signals round-robin across active strategies by conviction score, reconciles cash/positions/dividends, and writes an immutable `trade_ledger`.
+   - `LiveTradingCopilotEngine`: Air-gapped shadow portfolio engine (`shadow_accounts`, `shadow_positions`, `shadow_trade_history`, `shadow_dismissed_signals`) that provides daily step-by-step `SELL`, `HOLD` (including live stop-ratchet alerts), and `BUY` instructions sized to your real cash and holdings without ever connecting to your brokerage account.
 
 ### B. Autonomous Agent Layer (`agents/`)
 | Agent Class | File | Role & Permitted Scope |

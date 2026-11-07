@@ -487,6 +487,11 @@ class BacktestEngine:
         wf_res = self.run_walk_forward_validation(strategy, in_sample_range[0], oos_range[1], num_windows=4)
         stress_res = self.run_transaction_cost_stress_test(strategy, oos_range[0], oos_range[1])
 
+        is_cagr = float(is_res.metrics.get("cagr_pct", 0.0))
+        oos_cagr = float(oos_res.metrics.get("cagr_pct", 0.0))
+        wfe_ratio = round(oos_cagr / is_cagr, 4) if abs(is_cagr) > 0.5 else (1.0 if oos_cagr > 0 else 0.0)
+        wf_res["walk_forward_efficiency_ratio"] = wfe_ratio
+
         return {
             "in_sample": is_res.to_dict(),
             "validation": val_res.to_dict(),
@@ -494,6 +499,7 @@ class BacktestEngine:
             "full_period": full_res.to_dict(),
             "walk_forward": wf_res,
             "stress_test": stress_res,
+            "walk_forward_efficiency_ratio": wfe_ratio,
         }
 
     def run_walk_forward_validation(
