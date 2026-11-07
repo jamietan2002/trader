@@ -4,6 +4,16 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-07] — Fix Streamlit Community Cloud `sys.path` Root Import
+
+### Summary
+- Added repository root resolution (`sys.path.insert(0, str(Path(__file__).resolve().parents[1]))`) at the top of `dashboard/streamlit_app.py` so Streamlit Community Cloud can resolve top-level packages (`api`, `core`, `infrastructure`, `agents`, `evaluation`) when executing `dashboard/streamlit_app.py`.
+
+### Modules Added / Modified
+- `dashboard/streamlit_app.py`
+
+---
+
 ## [2026-11-07] — Zero-Cost Autonomous Cloud Hosting (GitHub Actions + Streamlit Cloud + Alpaca Integration)
 
 ### Summary
