@@ -17,7 +17,7 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 - `core/strategies/registry.py`
 - `dashboard/streamlit_app.py`, `dashboard/ui_template.py`
 - `.github/workflows/autonomous_trading.yml`
-- `docs/AGENT_CHANGELOG.md`
+- `USER_GUIDE.md`, `docs/AGENT_CHANGELOG.md`
 
 ---
 
