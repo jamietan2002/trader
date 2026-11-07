@@ -287,7 +287,7 @@ def _render_tab_header(st: Any, summary: str, guide_title: str, guide_markdown: 
         st.caption(summary)
     with c_help:
         if hasattr(st, "popover"):
-            with st.popover(f"? {guide_title}", use_container_width=True):
+            with st.popover(f"? {guide_title}", width="stretch"):
                 st.markdown(guide_markdown)
         else:
             with st.expander(f"? {guide_title}"):
@@ -311,6 +311,47 @@ def main() -> None:
     )
 
     app = PlatformApplication()
+    _code_version = "2026-11-07-v5"
+    import api.server as _srv_mod
+    if (
+        getattr(_srv_mod, "_STREAMLIT_SYNC_VERSION", None) != _code_version
+        or not hasattr(app.orchestrator, "live_copilot")
+    ):
+        import importlib
+
+        _ordered_modules = [
+            "infrastructure.configuration.settings",
+            "infrastructure.database.db",
+            "core.market_data.models",
+            "core.market_data.providers",
+            "core.indicators.technical",
+            "evaluation.metrics.performance",
+            "core.strategies.registry",
+            "core.risk.manager",
+            "core.backtesting.engine",
+            "core.execution.paper_broker",
+            "agents.base",
+            "agents.market_researcher.agent",
+            "agents.strategy_architect.agent",
+            "agents.strategy_evaluator.agent",
+            "agents.performance_analyst.agent",
+            "agents.risk_manager.agent",
+            "infrastructure.scheduler.orchestrator",
+            "api.server",
+        ]
+        for _mod_name in _ordered_modules:
+            if _mod_name in sys.modules:
+                importlib.reload(sys.modules[_mod_name])
+        import api.server as _srv_mod
+        import core.execution.paper_broker as _pb_mod
+
+        setattr(_srv_mod, "_STREAMLIT_SYNC_VERSION", _code_version)
+        app = _srv_mod.PlatformApplication()
+        app.db.initialize_schema()
+        if not hasattr(app.orchestrator, "live_copilot"):
+            app.orchestrator.live_copilot = _pb_mod.LiveTradingCopilotEngine(
+                app.settings, app.db, app.market_data, app.orchestrator.registry
+            )
     if not app.orchestrator.registry.list_strategies():
         with st.spinner("Initializing market dataset, baseline strategies, and 60-day paper portfolio..."):
             app.orchestrator.bootstrap_baseline_system()
@@ -358,7 +399,7 @@ def main() -> None:
             st.markdown("---")
             if st.button(
                 "Reset Paper Account ($100k)",
-                use_container_width=True,
+                width="stretch",
                 help="Clears the kill-switch lock and resets the simulated paper portfolio back to $100,000 cash.",
             ):
                 app.orchestrator.paper_engine.reset_account_to_starting_capital()
@@ -437,15 +478,15 @@ def main() -> None:
             st.session_state["walkthrough_step"] = "step_daily_vs_weekly"
 
         b1, b2, b3, b4, b5 = st.columns(5)
-        if b1.button("1. Daily vs Weekly Run", use_container_width=True):
+        if b1.button("1. Daily vs Weekly Run", width="stretch"):
             st.session_state["walkthrough_step"] = "step_daily_vs_weekly"
-        if b2.button("2. How Strategies Share Capital", use_container_width=True):
+        if b2.button("2. How Strategies Share Capital", width="stretch"):
             st.session_state["walkthrough_step"] = "step_multi_strategy"
-        if b3.button("3. Risk & Position Sizing", use_container_width=True):
+        if b3.button("3. Risk & Position Sizing", width="stretch"):
             st.session_state["walkthrough_step"] = "step_risk"
-        if b4.button("4. When to Trade Real Money", use_container_width=True):
+        if b4.button("4. When to Trade Real Money", width="stretch"):
             st.session_state["walkthrough_step"] = "step_readiness"
-        if b5.button("5. What Is Needed From You", use_container_width=True):
+        if b5.button("5. What Is Needed From You", width="stretch"):
             st.session_state["walkthrough_step"] = "step_user_role"
 
         step_info = {
@@ -584,7 +625,7 @@ def main() -> None:
         st.markdown("#### Strategy-Level P&L Breakdown (Paper Account)")
         strat_pnl_rows = _summarize_pnl_by_strategy(ledger, positions, strats)
         if strat_pnl_rows:
-            st.dataframe(strat_pnl_rows, use_container_width=True)
+            st.dataframe(strat_pnl_rows, width="stretch")
         else:
             st.info("No paper trades executed in the current window.")
 
@@ -606,7 +647,7 @@ def main() -> None:
                 }
                 for p in positions
             ]
-            st.dataframe(clean_pos, use_container_width=True)
+            st.dataframe(clean_pos, width="stretch")
         else:
             st.write("No open positions currently held (100% cash).")
 
@@ -630,7 +671,7 @@ def main() -> None:
             {k: v for k, v in r.items() if not k.startswith("_")}
             for r in readiness_rows
         ]
-        st.dataframe(display_scorecard, use_container_width=True)
+        st.dataframe(display_scorecard, width="stretch")
 
         st.markdown("#### Expand Any Strategy for Its 9-Gate Audit & Rulebook Details")
         for r in readiness_rows:
@@ -732,7 +773,7 @@ def main() -> None:
                     value=False,
                     key="copilot_reset_base",
                 )
-                if st.button("Save Real Cash Balance", use_container_width=True):
+                if st.button("Save Real Cash Balance", width="stretch"):
                     app.orchestrator.live_copilot.update_cash_balance(new_cash_val, reset_base)
                     st.rerun()
             with cfg_c2:
@@ -750,7 +791,7 @@ def main() -> None:
                     default=valid_defaults,
                     key="copilot_strats_select",
                 )
-                if st.button("Save Strategy Selection", use_container_width=True):
+                if st.button("Save Strategy Selection", width="stretch"):
                     app.orchestrator.live_copilot.set_enabled_strategies(chosen_keys)
                     st.rerun()
 
@@ -791,7 +832,7 @@ def main() -> None:
                     )
                     with sc4:
                         st.write("")
-                        if st.button(f"Confirm Sold {sa['ticker']}", key=f"btn_sell_{sa['ticker']}_{idx}", use_container_width=True):
+                        if st.button(f"Confirm Sold {sa['ticker']}", key=f"btn_sell_{sa['ticker']}_{idx}", width="stretch"):
                             app.orchestrator.live_copilot.confirm_sell_execution(
                                 ticker=sa["ticker"],
                                 quantity=int(s_qty),
@@ -802,7 +843,7 @@ def main() -> None:
                             st.rerun()
                     with sc5:
                         st.write("")
-                        if st.button("Hold Today", key=f"btn_skip_sell_{sa['ticker']}_{idx}", use_container_width=True):
+                        if st.button("Hold Today", key=f"btn_skip_sell_{sa['ticker']}_{idx}", width="stretch"):
                             app.orchestrator.live_copilot.dismiss_signal(
                                 signal_date=sa["signal_date"],
                                 strategy_id=sa["strategy_id"],
@@ -857,7 +898,7 @@ def main() -> None:
                         if st.button(
                             f"Confirm Bought {ba['ticker']}",
                             key=f"btn_buy_{ba['ticker']}_{idx}",
-                            use_container_width=True,
+                            width="stretch",
                         ):
                             app.orchestrator.live_copilot.confirm_buy_execution(
                                 ticker=ba["ticker"],
@@ -877,7 +918,7 @@ def main() -> None:
                         if st.button(
                             "Skip Trade",
                             key=f"btn_skip_{ba['ticker']}_{idx}",
-                            use_container_width=True,
+                            width="stretch",
                         ):
                             app.orchestrator.live_copilot.dismiss_signal(
                                 signal_date=ba["signal_date"],
@@ -893,14 +934,14 @@ def main() -> None:
         if vetoed_sigs:
             with st.expander(f"View Signals Filtered Out by Your Risk Caps Today ({len(vetoed_sigs)} blocked)", expanded=False):
                 st.caption("These strategy candidates triggered an entry rule today but were blocked by your real-account cash, sector cap, or 5% portfolio heat limit:")
-                st.dataframe(vetoed_sigs, use_container_width=True)
+                st.dataframe(vetoed_sigs, width="stretch")
 
         # 2. My Confirmed Real Positions & Manual Position Editor
         st.markdown("#### 2. My Confirmed Real Positions & Hold Status")
         if hold_updates:
-            st.dataframe(hold_updates, use_container_width=True)
+            st.dataframe(hold_updates, width="stretch")
         elif real_positions:
-            st.dataframe(real_positions, use_container_width=True)
+            st.dataframe(real_positions, width="stretch")
         else:
             st.write(
                 "You currently have 0 confirmed real positions. Click **Confirm Bought** on a recommendation above "
@@ -920,7 +961,7 @@ def main() -> None:
             e_stop = ec4.number_input("Stop-Loss ($ · 0=Auto ATR)", min_value=0.0, value=0.0, step=0.50, key="edit_pos_sl")
             e_tp = ec5.number_input("Take-Profit ($ · 0=Auto ATR)", min_value=0.0, value=0.0, step=0.50, key="edit_pos_tp")
             deduct_chk = st.checkbox("Deduct cost (Shares × Entry Price) from my Real Cash Balance", value=False, key="edit_pos_deduct")
-            if st.button("Save Position Update", use_container_width=True):
+            if st.button("Save Position Update", width="stretch"):
                 app.orchestrator.live_copilot.edit_or_add_position(
                     ticker=e_ticker,
                     quantity=int(e_qty),
@@ -934,7 +975,7 @@ def main() -> None:
         # 3. Confirmed Real Trade History
         with st.expander(f"3. My Confirmed Real Trade History ({len(real_history)} fills)", expanded=False):
             if real_history:
-                st.dataframe(real_history, use_container_width=True)
+                st.dataframe(real_history, width="stretch")
             else:
                 st.write("No real trades confirmed yet.")
 
@@ -970,13 +1011,13 @@ def main() -> None:
             }
             for idx, r in enumerate(state["research_reports"])
         ]
-        st.dataframe(reports_summary, use_container_width=True)
+        st.dataframe(reports_summary, width="stretch")
         st.caption(
             "*Evidence Score reflects data completeness and indicator alignment; it is not a guarantee of future profit."
         )
 
         with st.expander("View Post-Session Experiment Proposals (`PerformanceAnalystAgent`)", expanded=False):
-            st.dataframe(state["proposals"], use_container_width=True)
+            st.dataframe(state["proposals"], width="stretch")
 
     # =========================================================================
     # TAB 5: BACKTESTING
@@ -1011,7 +1052,7 @@ def main() -> None:
                     - **Risk Metrics**: Sharpe `{m.get('sharpe_ratio', 0.0):.2f}` | Deflated Sharpe (DSR) `{m.get('deflated_sharpe_pct', 0.0):.1f}%` | Probabilistic Sharpe (PSR) `{m.get('probabilistic_sharpe_pct', 0.0):.1f}%` | Sortino `{m.get('sortino_ratio', 0.0):.2f}` | Profit Factor `{m.get('profit_factor', 0.0):.2f}` | Max Drawdown `-{m.get('max_drawdown_pct', 0.0):.2f}%`
                     """
                 )
-                st.dataframe(exp["trades"][:25], use_container_width=True)
+                st.dataframe(exp["trades"][:25], width="stretch")
 
     # =========================================================================
     # TAB 6: PAPER TRADING LEDGER
@@ -1044,7 +1085,7 @@ def main() -> None:
                 }
                 for l in ledger
             ]
-            st.dataframe(clean_ledger, use_container_width=True)
+            st.dataframe(clean_ledger, width="stretch")
         else:
             st.write("No paper executions recorded yet.")
 
@@ -1068,7 +1109,7 @@ def main() -> None:
                     {"Sector": sec, "Portfolio Exposure": f"{pct:.2f}%", "Hard Limit": "30.00%"}
                     for sec, pct in acc["sector_exposures_pct"].items()
                 ]
-                st.dataframe(sec_rows, use_container_width=True)
+                st.dataframe(sec_rows, width="stretch")
             else:
                 st.write("0% sector exposure (100% cash).")
         with c2:
@@ -1084,7 +1125,7 @@ def main() -> None:
                 chosen_s = strats[sel_idx]
                 if chosen_s.get("validation_summary"):
                     wf_windows = (chosen_s["validation_summary"].get("walk_forward") or {}).get("windows", [])
-                    st.dataframe(wf_windows, use_container_width=True)
+                    st.dataframe(wf_windows, width="stretch")
 
     # =========================================================================
     # TAB 8: SYSTEM LOGS
@@ -1100,12 +1141,12 @@ def main() -> None:
         )
         st.markdown("#### Risk Vetoes & Alerts")
         if state["risk_alerts"]:
-            st.dataframe(state["risk_alerts"], use_container_width=True)
+            st.dataframe(state["risk_alerts"], width="stretch")
         else:
             st.write("No risk alerts triggered.")
 
         with st.expander("View Workflow Execution Log", expanded=True):
-            st.dataframe(state["jobs"], use_container_width=True)
+            st.dataframe(state["jobs"], width="stretch")
 
 
 if __name__ == "__main__":
