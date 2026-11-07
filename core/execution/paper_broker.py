@@ -16,7 +16,7 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass, asdict
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from core.indicators.technical import compute_indicator_series
 from core.market_data.models import DailyBar
@@ -790,67 +790,103 @@ class PaperTradingEngine:
                 )
                 exits_executed.append(res.to_dict())
 
-        # 2. Evaluate new entry signals across active strategies
-        for strat in active_strategies:
+        # 2. Evaluate new entry signals across active strategies with fair multi-strategy allocation
+        # Deduplicate active strategies by strategy_id (keep highest promoted version)
+        latest_active_by_id: Dict[str, StrategyConfig] = {}
+        for s in active_strategies:
+            prev = latest_active_by_id.get(s.strategy_id)
+            if prev is None or s.version > prev.version:
+                latest_active_by_id[s.strategy_id] = s
+        deduped_strategies = list(latest_active_by_id.values())
+
+        # Precompute bars & causal indicators up to prior close once per ticker
+        all_tickers = sorted({t for s in deduped_strategies for t in s.universe if t != self.settings.benchmark_ticker})
+        ticker_context: Dict[str, Tuple[DailyBar, DailyBar, Any, List[ Any ]]] = {}
+        for ticker in all_tickers:
+            bars = self.market_data.get_bars(ticker, end_date=trading_date)
+            if len(bars) < 25 or bars[-1].bar_date != trading_date:
+                continue
+            today_bar = bars[-1]
+            prev_bar = bars[-2]
+            inds = compute_indicator_series(bars[:-1], spy_bars=spy_bars)
+            ind_prev = inds.get(prev_bar.bar_date)
+            if ind_prev is None:
+                continue
+            recent_ev = self.market_data.get_point_in_time_earnings(
+                ticker, prev_bar.bar_date, lookback_days=10
+            )
+            ticker_context[ticker] = (today_bar, prev_bar, ind_prev, recent_ev)
+
+        # Collect signals per strategy and sort by conviction_score descending
+        signals_by_strategy: Dict[str, List[Tuple[StrategyConfig, str, DailyBar, DailyBar, Any]]] = {}
+        for strat in deduped_strategies:
+            strat_sigs: List[Tuple[StrategyConfig, str, DailyBar, DailyBar, Any]] = []
             for ticker in strat.universe:
-                if ticker == self.settings.benchmark_ticker:
+                ctx = ticker_context.get(ticker)
+                if ctx is None:
                     continue
-                bars = self.market_data.get_bars(ticker, end_date=trading_date)
-                if len(bars) < 25 or bars[-1].bar_date != trading_date:
-                    continue
-                today_bar = bars[-1]
-                # Signal is evaluated on prior close (bars[-2]) and filled at today's open (today_bar)
-                prev_bar = bars[-2]
-                inds = compute_indicator_series(bars[:-1], spy_bars=spy_bars)
-                ind_prev = inds.get(prev_bar.bar_date)
-                if ind_prev is None:
-                    continue
-                recent_ev = self.market_data.get_point_in_time_earnings(
-                    ticker, prev_bar.bar_date, lookback_days=10
-                )
+                today_bar, prev_bar, ind_prev, recent_ev = ctx
                 sig = StrategySignalEngine.evaluate_entry(
                     config=strat,
                     ind=ind_prev,
                     spy_ind=spy_inds.get(prev_bar.bar_date),
                     recent_earnings=recent_ev,
                 )
-                if sig is None:
-                    continue
+                if sig is not None:
+                    strat_sigs.append((strat, ticker, today_bar, prev_bar, sig))
+            strat_sigs.sort(key=lambda item: float(item[4].conviction_score), reverse=True)
+            if strat_sigs:
+                signals_by_strategy[strat.strategy_id] = strat_sigs
 
-                summary_now = self.get_account_summary()
-                rec_shares = self.risk_manager.calculate_atr_position_size(
-                    portfolio_equity=summary_now["total_equity"],
-                    available_cash=summary_now["cash_balance"],
-                    entry_price=today_bar.adj_open,
-                    stop_loss_price=sig.stop_loss_price,
-                    atr_14=sig.atr_at_signal,
-                    strategy_risk_per_trade_pct=strat.risk_params.get("risk_per_trade_pct"),
-                    strategy_max_exposure_pct=strat.risk_params.get("max_position_exposure_pct"),
-                )
-                if rec_shares <= 0:
-                    continue
+        # Interleave signals round-robin across strategies so no single strategy monopolizes capital/sector caps
+        ordered_candidates: List[Tuple[StrategyConfig, str, DailyBar, DailyBar, Any]] = []
+        # Order strategies so rarer breakout/catalyst strategies get first pick before broad trend-following
+        strat_order = sorted(
+            signals_by_strategy.keys(),
+            key=lambda sid: (0 if "breakout" in sid or "pead" in sid else 1, sid),
+        )
+        max_len = max((len(v) for v in signals_by_strategy.values()), default=0)
+        for idx in range(max_len):
+            for sid in strat_order:
+                bucket = signals_by_strategy[sid]
+                if idx < len(bucket):
+                    ordered_candidates.append(bucket[idx])
 
-                meta = universe_meta.get(ticker)
-                sector = meta.sector if meta else "Technology"
-                res = self.submit_and_execute_order(
-                    strategy_id=strat.strategy_id,
-                    strategy_version=strat.version,
-                    strategy_family=strat.strategy_family,
-                    ticker=ticker,
-                    side="BUY",
-                    requested_qty=rec_shares,
-                    signal_date=prev_bar.bar_date,
-                    execution_bar=today_bar,
-                    sector=sector,
-                    stop_loss_target=sig.stop_loss_price,
-                    take_profit_target=sig.take_profit_price,
-                    atr_14=sig.atr_at_signal,
-                    notes=sig.reason,
-                )
-                if res.status in ("FILLED", "PARTIALLY_FILLED"):
-                    entries_executed.append(res.to_dict())
-                elif res.status == "REJECTED":
-                    vetoed_orders.append(res.to_dict())
+        for strat, ticker, today_bar, prev_bar, sig in ordered_candidates:
+            summary_now = self.get_account_summary()
+            rec_shares = self.risk_manager.calculate_atr_position_size(
+                portfolio_equity=summary_now["total_equity"],
+                available_cash=summary_now["cash_balance"],
+                entry_price=today_bar.adj_open,
+                stop_loss_price=sig.stop_loss_price,
+                atr_14=sig.atr_at_signal,
+                strategy_risk_per_trade_pct=strat.risk_params.get("risk_per_trade_pct"),
+                strategy_max_exposure_pct=strat.risk_params.get("max_position_exposure_pct"),
+            )
+            if rec_shares <= 0:
+                continue
+
+            meta = universe_meta.get(ticker)
+            sector = meta.sector if meta else "Technology"
+            res = self.submit_and_execute_order(
+                strategy_id=strat.strategy_id,
+                strategy_version=strat.version,
+                strategy_family=strat.strategy_family,
+                ticker=ticker,
+                side="BUY",
+                requested_qty=rec_shares,
+                signal_date=prev_bar.bar_date,
+                execution_bar=today_bar,
+                sector=sector,
+                stop_loss_target=sig.stop_loss_price,
+                take_profit_target=sig.take_profit_price,
+                atr_14=sig.atr_at_signal,
+                notes=sig.reason,
+            )
+            if res.status in ("FILLED", "PARTIALLY_FILLED"):
+                entries_executed.append(res.to_dict())
+            elif res.status == "REJECTED":
+                vetoed_orders.append(res.to_dict())
 
         # 3. End-of-day mark-to-market & snapshot
         updated_summary = self.mark_to_market_and_snapshot(trading_date)

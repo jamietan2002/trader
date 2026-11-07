@@ -712,6 +712,25 @@ class StrategyRegistry:
                 version,
             ),
         )
+        # Automatically retire older PAPER_TRADING versions of the same strategy_id when a newer version is promoted
+        if new_status == StrategyStatus.PAPER_TRADING:
+            self.db.execute(
+                """
+                UPDATE strategy_registry
+                SET status = ?,
+                    promotion_decision_reason = ?,
+                    updated_at = ?
+                WHERE strategy_id = ? AND version < ? AND status = ?
+                """,
+                (
+                    StrategyStatus.RETIRED.value,
+                    f"Superseded by promoted {strategy_id} v{version}.",
+                    now_iso,
+                    strategy_id,
+                    version,
+                    StrategyStatus.PAPER_TRADING.value,
+                ),
+            )
         updated = self.get_strategy(strategy_id, version)
         assert updated is not None
         return updated

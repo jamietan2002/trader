@@ -4,6 +4,23 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-07] — Fair Multi-Strategy Allocation, Live-Readiness Scorecard & Hands-Off Autonomous UI
+
+### Summary
+- **Fair Multi-Strategy Signal Interleaving (`core/execution/paper_broker.py`)**: Updated `PaperTradingEngine.run_trading_session_for_strategies` to precompute ticker indicators once per session, collect entry signals across all active `PAPER_TRADING` strategies, and interleave signals round-robin across strategy families ordered by conviction score (`strat_volatility_breakout`, `strat_momentum_trend`) so no single strategy monopolizes buying power or sector caps.
+- **Automatic Retirement of Superseded Versions (`core/strategies/registry.py`)**: Updated `StrategyRegistry.update_status` so promoting `v+1` to `PAPER_TRADING` automatically transitions older `PAPER_TRADING` versions (`< v+1`) of the same `strategy_id` to `RETIRED`.
+- **Strategy Evaluation & Live-Readiness Scorecard (`dashboard/streamlit_app.py`, `dashboard/ui_template.py`)**: Upgraded the `Strategies & Readiness` tab to evaluate every strategy across both the 9-gate historical backtest audit and a 4-point forward paper-trading checklist (`>= 20` closed paper trades, Forward Profit Factor `>= 1.30`, positive net paper P&L), surfacing a clear `Live Trading Readiness` verdict (`READY FOR LIVE REVIEW`, `BUILDING PAPER TRACK RECORD`, `RETIRED`, or `NOT READY`).
+- **Hands-Off Autonomous Interface & 60-Day Multi-Strategy Replay**: Removed manual daily/weekly trigger buttons from the main UI header/sidebar and replayed the last 60 trading sessions (~3 months) of Alpaca data so multiple strategies populate the paper ledger.
+
+### Modules Added / Modified
+- `core/execution/paper_broker.py`
+- `core/strategies/registry.py`
+- `dashboard/streamlit_app.py`, `dashboard/ui_template.py`
+- `.github/workflows/autonomous_trading.yml`
+- `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-07] — Interactive Platform Guide with Visual Mental Model Diagram & Per-Tab Tooltips
 
 ### Summary

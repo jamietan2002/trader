@@ -243,17 +243,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <span class="badge badge-paper" id="mode-badge" title="All trades execute in a simulated $100,000 paper account.">TRADING_MODE = PAPER ($100K)</span>
       <span class="badge badge-info" id="tz-badge" title="US market execution (NYSE/NASDAQ) with Singapore (SGT) reporting.">NYSE/NASDAQ • SGT Reporting</span>
     </div>
-    <div style="display:flex; gap:10px;">
-      <button class="btn btn-secondary" title="Download latest market prices, check stop-loss/take-profit exits, and evaluate new entries." onclick="triggerDailyWorkflow()">Run Daily Session</button>
-      <button class="btn" title="Review closed trades, propose a candidate strategy improvement, and run the 9-gate backtest audit." onclick="triggerWeeklyDiscovery()">Run AI Strategy Discovery</button>
+    <div style="display:flex; gap:10px; align-items:center;">
+      <span class="badge badge-paper" title="Daily execution runs Mon–Fri at 21:30 UTC; Weekly strategy discovery runs Saturday at 10:00 SGT. Zero user input required.">AUTONOMOUS SCHEDULE ACTIVE • ZERO INPUT REQUIRED</span>
     </div>
   </header>
 
   <nav id="main-nav">
     <button class="active" onclick="switchTab('guide', this)">Platform Guide</button>
     <button onclick="switchTab('overview', this)">Overview &amp; P&amp;L</button>
+    <button onclick="switchTab('strategies', this)">Strategies &amp; Readiness</button>
     <button onclick="switchTab('research', this)">Market Research</button>
-    <button onclick="switchTab('strategies', this)">Strategies</button>
     <button onclick="switchTab('backtesting', this)">Backtesting</button>
     <button onclick="switchTab('paper', this)">Paper Ledger</button>
     <button onclick="switchTab('analytics', this)">Risk &amp; Analytics</button>
@@ -734,29 +733,60 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     function renderStrategies() {
       const strats = STATE.strategies || [];
+      const ledger = STATE.trade_ledger || [];
+      const positions = STATE.positions || [];
       const sel = document.getElementById('bt-strategy-select');
       sel.innerHTML = strats.map(s => `<option value="${s.strategy_id}:${s.version}">${s.name} (${s.strategy_id} v${s.version})</option>`).join('');
 
+      const paperByStrat = {};
+      ledger.forEach(l => {
+        const k = `${l.strategy_id}:${l.strategy_version}`;
+        if (!paperByStrat[k]) paperByStrat[k] = {closed: 0, wins: 0, grossWin: 0, grossLoss: 0, realised: 0, unrealised: 0};
+        if (l.side === 'SELL') {
+          paperByStrat[k].closed += 1;
+          const rp = Number(l.realised_pnl || 0);
+          paperByStrat[k].realised += rp;
+          if (rp > 0) { paperByStrat[k].wins += 1; paperByStrat[k].grossWin += rp; }
+          else if (rp < 0) { paperByStrat[k].grossLoss += Math.abs(rp); }
+        }
+      });
+      positions.forEach(p => {
+        const k = `${p.strategy_id}:${p.strategy_version}`;
+        if (!paperByStrat[k]) paperByStrat[k] = {closed: 0, wins: 0, grossWin: 0, grossLoss: 0, realised: 0, unrealised: 0};
+        paperByStrat[k].unrealised += Number(p.unrealised_pnl || 0);
+      });
+
       document.getElementById('strategies-table').innerHTML = `
         <table>
-          <thead><tr><th>Strategy ID</th><th>Ver</th><th>Name</th><th>Family</th><th>Status</th><th>Holding</th><th>Sharpe</th><th>Profit Factor</th><th>Total Return</th><th>Max DD</th><th>Promotion / Rejection Audit</th></tr></thead>
+          <thead><tr><th>Strategy</th><th>Name</th><th>Status</th><th>Backtest Gates</th><th>Backtest Return</th><th>Sharpe / PF</th><th>Forward Paper Trades</th><th>Forward Paper P&amp;L</th><th>Live Trading Readiness</th></tr></thead>
           <tbody>
             ${strats.map(s => {
               const m = s.backtest_summary || {};
+              const val = s.validation_summary || {};
+              const checks = val.criteria_checks || {};
+              const passedGates = Object.values(checks).filter(Boolean).length;
+              const totalGates = Object.keys(checks).length || 9;
+              const p = paperByStrat[`${s.strategy_id}:${s.version}`] || {closed: 0, wins: 0, grossWin: 0, grossLoss: 0, realised: 0, unrealised: 0};
+              const netPaper = p.realised + p.unrealised;
+              const pf = p.grossLoss > 0 ? (p.grossWin / p.grossLoss) : (p.grossWin > 0 ? 2.5 : 0);
+              let readiness = `<span class="badge badge-info">BUILDING PAPER PROOF (${p.closed}/20 trades)</span>`;
+              if (s.status === 'REJECTED') readiness = '<span class="badge badge-danger">NOT READY (Failed Backtest)</span>';
+              else if (s.status === 'RETIRED') readiness = '<span class="badge badge-warn">RETIRED (Superseded)</span>';
+              else if (passedGates === totalGates && p.closed >= 20 && pf >= 1.3 && netPaper > 0) {
+                readiness = `<span class="badge badge-paper">READY FOR LIVE REVIEW (${p.closed} trades, PF ${pf.toFixed(2)})</span>`;
+              }
               const stCls = s.status === 'PAPER_TRADING' ? 'badge-paper' : (s.status === 'REJECTED' ? 'badge-danger' : 'badge-warn');
               return `
                 <tr>
-                  <td><strong>${s.strategy_id}</strong></td>
-                  <td>v${s.version}</td>
+                  <td><strong>${s.strategy_id} v${s.version}</strong></td>
                   <td>${s.name}</td>
-                  <td>${s.strategy_family}</td>
                   <td><span class="badge ${stCls}">${s.status}</span></td>
-                  <td>${s.holding_period_min_days}–${s.holding_period_max_days}d</td>
-                  <td>${m.sharpe_ratio !== undefined ? Number(m.sharpe_ratio).toFixed(2) : '-'}</td>
-                  <td>${m.profit_factor !== undefined ? Number(m.profit_factor).toFixed(2) : '-'}</td>
+                  <td><strong>${passedGates} / ${totalGates}</strong></td>
                   <td class="${(m.total_return_pct || 0) >= 0 ? 'pos' : 'neg'}">${m.total_return_pct !== undefined ? fmtPct(m.total_return_pct) : '-'}</td>
-                  <td class="neg">${m.max_drawdown_pct !== undefined ? '-' + Number(m.max_drawdown_pct).toFixed(2) + '%' : '-'}</td>
-                  <td style="max-width:340px;font-size:0.78rem;color:#94a3b8;">${s.promotion_decision_reason || s.hypothesis}</td>
+                  <td>${m.sharpe_ratio !== undefined ? Number(m.sharpe_ratio).toFixed(2) : '-'} / ${m.profit_factor !== undefined ? Number(m.profit_factor).toFixed(2) : '-'}</td>
+                  <td>${p.closed} closed</td>
+                  <td class="${netPaper >= 0 ? 'pos' : 'neg'}">${fmtUsd(netPaper)}</td>
+                  <td>${readiness}</td>
                 </tr>
               `;
             }).join('')}

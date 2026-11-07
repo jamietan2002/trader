@@ -1,12 +1,12 @@
 """Streamlit Community Cloud & Local Dashboard Entrypoint (`streamlit run dashboard/streamlit_app.py`).
 
-Minimalist, institutional-grade layout with interactive progressive disclosure:
-- Every tab features a concise one-line summary, hover tooltips on metrics/columns, and an expandable
-  "How this tab works" guide.
-- The "Platform Guide" tab provides a visual mental-model diagram of the Daily and Weekly loops,
-  an interactive step-by-step lifecycle explorer, and expandable deep-dive sections.
-- Profit & Loss (P&L) is presented with complete transparency: explicitly stating the Strategy Used,
-  Exact Date Span, and step-by-step accounting formula (`Starting Capital + Realised P&L + Unrealised P&L = Total Equity`).
+Minimalist, institutional-grade layout with zero-intervention autonomous monitoring:
+- No manual daily/weekly trigger buttons cluttering the interface (runs 100% autonomously via scheduled cloud workflows).
+- Every tab features a concise one-line summary, hover tooltips on metrics, and an interactive "? How this tab works" guide.
+- Dedicated "Strategies & Live Readiness" tab with a 5-point Real-Money Readiness Scorecard comparing 9-gate historical
+  backtests against forward paper-trading proof.
+- The "Platform Guide" tab provides a visual mental-model diagram of the Daily and Weekly loops, a clear explanation of
+  what is (and isn't) needed from the user, an interactive step-by-step walkthrough, and expandable deep-dive sections.
 """
 
 from __future__ import annotations
@@ -59,6 +59,9 @@ def _summarize_pnl_by_strategy(
                 "_last_dt": row["fill_date"],
                 "Executions": 0,
                 "Closed Trades": 0,
+                "_wins": 0,
+                "_gross_profit": 0.0,
+                "_gross_loss": 0.0,
                 "Realised P&L ($)": 0.0,
                 "Unrealised P&L ($)": 0.0,
                 "Transaction Costs ($)": 0.0,
@@ -72,9 +75,13 @@ def _summarize_pnl_by_strategy(
         item["Transaction Costs ($)"] = round(item["Transaction Costs ($)"] + fees, 2)
         if row["side"] == "SELL":
             item["Closed Trades"] += 1
-            item["Realised P&L ($)"] = round(
-                item["Realised P&L ($)"] + float(row.get("realised_pnl", 0.0)), 2
-            )
+            rpnl = float(row.get("realised_pnl", 0.0))
+            item["Realised P&L ($)"] = round(item["Realised P&L ($)"] + rpnl, 2)
+            if rpnl > 0:
+                item["_wins"] += 1
+                item["_gross_profit"] += rpnl
+            elif rpnl < 0:
+                item["_gross_loss"] += abs(rpnl)
 
     for pos in positions:
         key = f"{pos['strategy_id']} v{pos['strategy_version']}"
@@ -88,6 +95,9 @@ def _summarize_pnl_by_strategy(
                 "_last_dt": pos["opened_date"],
                 "Executions": 1,
                 "Closed Trades": 0,
+                "_wins": 0,
+                "_gross_profit": 0.0,
+                "_gross_loss": 0.0,
                 "Realised P&L ($)": 0.0,
                 "Unrealised P&L ($)": 0.0,
                 "Transaction Costs ($)": 0.0,
@@ -100,13 +110,22 @@ def _summarize_pnl_by_strategy(
     out: List[Dict[str, Any]] = []
     for item in by_strat.values():
         net_total = round(item["Realised P&L ($)"] + item["Unrealised P&L ($)"], 2)
+        closed = item["Closed Trades"]
+        win_rate = (item["_wins"] / closed * 100.0) if closed > 0 else 0.0
+        pf = (
+            (item["_gross_profit"] / item["_gross_loss"])
+            if item["_gross_loss"] > 0
+            else (2.5 if item["_gross_profit"] > 0 else 0.0)
+        )
         out.append(
             {
                 "Strategy": item["Strategy"],
                 "Strategy Name": item["Strategy Name"],
                 "Date Span": item["Date Span"],
                 "Executions": item["Executions"],
-                "Closed Trades": item["Closed Trades"],
+                "Closed Trades": closed,
+                "Paper Win Rate": f"{win_rate:.1f}%" if closed > 0 else "-",
+                "Paper Profit Factor": f"{pf:.2f}" if closed > 0 else "-",
                 "Realised P&L ($)": item["Realised P&L ($)"],
                 "Unrealised P&L ($)": item["Unrealised P&L ($)"],
                 "Transaction Costs ($)": item["Transaction Costs ($)"],
@@ -121,14 +140,104 @@ def _summarize_pnl_by_strategy(
     return out
 
 
+def _build_strategy_readiness_rows(
+    strategies: List[Dict[str, Any]],
+    ledger: List[Dict[str, Any]],
+    positions: List[Dict[str, Any]],
+    min_paper_trades: int = 20,
+) -> List[Dict[str, Any]]:
+    """Evaluate every strategy version across both 9-gate backtests and forward paper-trading readiness."""
+    paper_stats: Dict[str, Dict[str, Any]] = {}
+    for row in ledger:
+        key = f"{row['strategy_id']}:{row['strategy_version']}"
+        st_item = paper_stats.setdefault(
+            key, {"closed": 0, "wins": 0, "gross_win": 0.0, "gross_loss": 0.0, "realised": 0.0, "unrealised": 0.0}
+        )
+        if row["side"] == "SELL":
+            st_item["closed"] += 1
+            rpnl = float(row.get("realised_pnl", 0.0))
+            st_item["realised"] += rpnl
+            if rpnl > 0:
+                st_item["wins"] += 1
+                st_item["gross_win"] += rpnl
+            elif rpnl < 0:
+                st_item["gross_loss"] += abs(rpnl)
+
+    for pos in positions:
+        key = f"{pos['strategy_id']}:{pos['strategy_version']}"
+        st_item = paper_stats.setdefault(
+            key, {"closed": 0, "wins": 0, "gross_win": 0.0, "gross_loss": 0.0, "realised": 0.0, "unrealised": 0.0}
+        )
+        st_item["unrealised"] += float(pos.get("unrealised_pnl", 0.0))
+
+    rows: List[Dict[str, Any]] = []
+    for s in strategies:
+        key = f"{s['strategy_id']}:{s['version']}"
+        m = s.get("backtest_summary") or {}
+        val = s.get("validation_summary") or {}
+        checks = val.get("criteria_checks") or {}
+        passed_gates = sum(1 for v in checks.values() if v)
+        total_gates = len(checks) if checks else 9
+
+        p = paper_stats.get(
+            key, {"closed": 0, "wins": 0, "gross_win": 0.0, "gross_loss": 0.0, "realised": 0.0, "unrealised": 0.0}
+        )
+        closed = p["closed"]
+        net_paper = round(p["realised"] + p["unrealised"], 2)
+        paper_pf = (
+            p["gross_win"] / p["gross_loss"]
+            if p["gross_loss"] > 0
+            else (2.5 if p["gross_win"] > 0 else 0.0)
+        )
+        paper_wr = (p["wins"] / closed * 100.0) if closed > 0 else 0.0
+
+        status = s["status"]
+        if status == "REJECTED":
+            readiness = "NOT READY — Failed Backtest Gates"
+        elif status == "RETIRED":
+            readiness = "RETIRED — Superseded by Newer Version"
+        elif passed_gates == total_gates and closed >= min_paper_trades and paper_pf >= 1.3 and net_paper > 0:
+            readiness = f"READY FOR LIVE REVIEW ({closed} paper trades, PF {paper_pf:.2f})"
+        else:
+            readiness = f"BUILDING PAPER TRACK RECORD ({closed} / {min_paper_trades} closed trades)"
+
+        start_eq = 100_000.0
+        final_eq = float(m.get("final_equity", start_eq))
+        net_bt_profit = final_eq - start_eq
+
+        rows.append(
+            {
+                "Strategy": f"{s['strategy_id']} v{s['version']}",
+                "Name": s["name"],
+                "Family": s["strategy_family"],
+                "Status": status,
+                "Backtest Gates": f"{passed_gates} / {total_gates} Passed",
+                "Backtest Return (vs SPY)": f"{m.get('total_return_pct', 0.0):+.2f}% (SPY {m.get('benchmark_return_pct', 0.0):+.2f}%)",
+                "Backtest Sharpe / PF": f"{m.get('sharpe_ratio', 0.0):.2f} / {m.get('profit_factor', 0.0):.2f}",
+                "Backtest Max DD": f"-{m.get('max_drawdown_pct', 0.0):.2f}%",
+                "Forward Paper Trades": f"{closed} closed",
+                "Forward Paper P&L": f"${net_paper:+,.2f}" + (f" (WR {paper_wr:.0f}%, PF {paper_pf:.2f})" if closed > 0 else ""),
+                "Live Trading Readiness": readiness,
+                "_raw_strategy": s,
+                "_checks": checks,
+                "_bt_net_profit": net_bt_profit,
+                "_paper_closed": closed,
+                "_paper_net_pnl": net_paper,
+                "_paper_pf": paper_pf,
+                "_paper_wr": paper_wr,
+            }
+        )
+    return rows
+
+
 MENTAL_MODEL_HTML = """
 <div style="background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:18px 20px;margin:10px 0 18px 0;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
   <div style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.06em;color:#94a3b8;margin-bottom:10px;">
-    System Mental Model — Two Automated Loops
+    System Mental Model — 100% Autonomous Two-Loop Architecture (Zero User Input Required)
   </div>
   <div style="margin-bottom:14px;">
     <div style="font-size:0.84rem;font-weight:600;color:#38bdf8;margin-bottom:6px;">
-      1. Daily Execution Loop (Mon–Fri, After US Market Close)
+      1. Daily Execution Loop (Mon–Fri at 21:30 UTC · Runs All Promoted Strategies in Parallel)
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;font-size:0.8rem;">
       <div style="background:#1e293b;padding:10px 12px;border-radius:6px;border-left:3px solid #38bdf8;">
@@ -138,7 +247,7 @@ MENTAL_MODEL_HTML = """
         <strong>Step 2 · AI Research</strong><br/><span style="color:#94a3b8;">Rank liquid US stocks by trend &amp; catalysts.</span>
       </div>
       <div style="background:#1e293b;padding:10px 12px;border-radius:6px;border-left:3px solid #38bdf8;">
-        <strong>Step 3 · Rule Signals</strong><br/><span style="color:#94a3b8;">Check active strategies for buy/sell triggers.</span>
+        <strong>Step 3 · Multi-Strategy Signals</strong><br/><span style="color:#94a3b8;">Check all approved strategies &amp; rank signals fairly.</span>
       </div>
       <div style="background:#1e293b;padding:10px 12px;border-radius:6px;border-left:3px solid #10b981;">
         <strong>Step 4 · Risk Gate</strong><br/><span style="color:#94a3b8;">Size trade (1% risk) &amp; verify 7 safety caps.</span>
@@ -150,20 +259,20 @@ MENTAL_MODEL_HTML = """
   </div>
   <div>
     <div style="font-size:0.84rem;font-weight:600;color:#a855f7;margin-bottom:6px;">
-      2. Weekly Self-Improvement Loop (Saturdays, 10:00 SGT)
+      2. Weekly Self-Improvement Loop (Saturdays at 10:00 SGT · Discovers &amp; Promotes Better Strategy Versions)
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;font-size:0.8rem;">
       <div style="background:#1e293b;padding:10px 12px;border-radius:6px;border-left:3px solid #a855f7;">
         <strong>Step A · Review Trades</strong><br/><span style="color:#94a3b8;">Diagnose wins, losses &amp; current market regime.</span>
       </div>
       <div style="background:#1e293b;padding:10px 12px;border-radius:6px;border-left:3px solid #a855f7;">
-        <strong>Step B · Draft Hypothesis</strong><br/><span style="color:#94a3b8;">Create a new candidate strategy version (v+1).</span>
+        <strong>Step B · Draft Upgrade</strong><br/><span style="color:#94a3b8;">Create a candidate strategy version (v+1).</span>
       </div>
       <div style="background:#1e293b;padding:10px 12px;border-radius:6px;border-left:3px solid #f59e0b;">
         <strong>Step C · 9-Gate Backtest</strong><br/><span style="color:#94a3b8;">Test across historical &amp; walk-forward periods.</span>
       </div>
       <div style="background:#1e293b;padding:10px 12px;border-radius:6px;border-left:3px solid #10b981;">
-        <strong>Step D · Promote or Reject</strong><br/><span style="color:#94a3b8;">Only versions passing all 9 gates go live.</span>
+        <strong>Step D · Promote &amp; Retire Old</strong><br/><span style="color:#94a3b8;">If all 9 gates pass, v+1 goes live &amp; old version retires.</span>
       </div>
     </div>
   </div>
@@ -203,10 +312,10 @@ def main() -> None:
 
     app = PlatformApplication()
     if not app.orchestrator.registry.list_strategies():
-        with st.spinner("Initializing market dataset, baseline strategies, and paper portfolio..."):
+        with st.spinner("Initializing market dataset, baseline strategies, and 60-day paper portfolio..."):
             app.orchestrator.bootstrap_baseline_system()
             spy_bars = app.orchestrator.market_data.get_bars("SPY")
-            for b in spy_bars[-10:]:
+            for b in spy_bars[-60:]:
                 app.orchestrator.run_daily_workflow(b.bar_date)
 
     state = app.get_dashboard_state()
@@ -229,30 +338,22 @@ def main() -> None:
         2,
     )
     net_dollar_pnl = round(float(acc["total_equity"]) - float(acc["starting_capital"]), 2)
+    readiness_rows = _build_strategy_readiness_rows(strats, ledger, positions)
+    ready_live_count = sum(1 for r in readiness_rows if r["Live Trading Readiness"].startswith("READY FOR LIVE REVIEW"))
 
-    # Minimalist Sidebar Controls
+    # Minimalist Autonomous Status Sidebar (No manual intervention required)
     with st.sidebar:
-        st.markdown("### Portfolio Controls")
-        st.caption(f"Execution Mode: **{acc['trading_mode'].upper()}** ($100,000 Virtual)")
-        st.caption(f"Data Source: **{app.settings.market_data_provider.upper()}**")
-        st.caption(f"Timezone: **{app.settings.operator_timezone}**")
+        st.markdown("### Autonomous Status")
+        st.caption(f"Mode: **{acc['trading_mode'].upper()}** ($100,000 Virtual)")
+        st.caption(f"Market Data: **{app.settings.market_data_provider.upper()}**")
+        st.caption(f"Active Strategies: **{len(active_paper_strats)} running daily**")
+        st.caption(f"Ready for Live Review: **{ready_live_count} strategy**")
         st.markdown("---")
-        spy_bars_all = app.orchestrator.market_data.get_bars("SPY")
-        latest_bar_dt = spy_bars_all[-1].bar_date if spy_bars_all else "2025-06-27"
-        if st.button(
-            "Run Daily Session",
-            use_container_width=True,
-            help="Downloads latest market prices, evaluates stop-loss/take-profit exits, and checks for new strategy entries.",
-        ):
-            app.orchestrator.run_daily_workflow(latest_bar_dt, force=True)
-            st.rerun()
-        if st.button(
-            "Run Weekly Strategy Discovery",
-            use_container_width=True,
-            help="Reviews recent trades, drafts a candidate strategy improvement, and tests it against the 9 validation gates.",
-        ):
-            app.orchestrator.run_weekly_workflow(latest_bar_dt, force=True)
-            st.rerun()
+        st.markdown("#### Automated Schedule")
+        st.caption("**Daily Execution**: Mon–Fri, 21:30 UTC (after US market close)")
+        st.caption("**Weekly Upgrade**: Saturday, 10:00 SGT (walk-forward discovery)")
+        st.caption("**User Action Needed**: None (100% hands-off)")
+
         if acc["kill_switch_engaged"]:
             st.markdown("---")
             if st.button(
@@ -268,7 +369,7 @@ def main() -> None:
         "Autonomous US Equities Research, Statistical Validation, and Paper-Trading Platform • Benchmark: SPY"
     )
 
-    # Compact Executive Summary Expander (collapsed by default for minimalism, 1-click to open)
+    # Compact Executive Summary Expander
     status_label = (
         "Active"
         if not acc["kill_switch_engaged"]
@@ -276,7 +377,8 @@ def main() -> None:
     )
     with st.expander(
         f"System Snapshot — Equity: ${acc['total_equity']:,.2f} ({acc['total_return_pct']:+.2f}%) · "
-        f"Status: {status_label} · Open Positions: {acc['open_positions_count']}/10",
+        f"Active Strategies: {len(active_paper_strats)} · Ready for Live Review: {ready_live_count} · "
+        f"Open Positions: {acc['open_positions_count']}/10",
         expanded=False,
     ):
         c1, c2, c3 = st.columns(3)
@@ -296,16 +398,16 @@ def main() -> None:
             )
             st.write(f"- **Strategies**: `{len(active_paper_strats)}` active (`{len(rejected_strats)}` rejected in testing)")
         with c3:
-            st.markdown("**Automated Schedule**")
-            st.write("- **Weekdays (21:30 UTC)**: Market scan, signal check, and paper execution.")
-            st.write("- **Saturdays (10:00 SGT)**: Strategy discovery and walk-forward validation.")
+            st.markdown("**Your Role (Zero Daily Input)**")
+            st.write("- **Daily & Weekly**: Runs automatically on GitHub Actions.")
+            st.write("- **When Ready for Real Trading**: Check the **Strategies & Readiness** tab for strategies marked `READY FOR LIVE REVIEW`.")
 
     tabs = st.tabs(
         [
             "Platform Guide",
             "Overview & P&L",
+            "Strategies & Readiness",
             "Market Research",
-            "Strategies",
             "Backtesting",
             "Paper Ledger",
             "Risk & Analytics",
@@ -320,7 +422,8 @@ def main() -> None:
         st.markdown("#### What This System Does & How It Runs")
         st.write(
             "This platform manages a simulated **$100,000 US stock portfolio** over **3 to 15 trading-day** holding periods (swing trading). "
-            "To keep decision-making disciplined, **AI agents only research stocks and propose strategy rules**, while **strict mathematical code** "
+            "It runs **100% automatically in the cloud**—you do not need to click any buttons or make daily decisions. "
+            "**AI agents only research stocks and propose strategy upgrades**, while **strict mathematical code** "
             "tests those rules on historical data, enforces risk limits, and executes every trade."
         )
 
@@ -328,60 +431,61 @@ def main() -> None:
         st.markdown(MENTAL_MODEL_HTML, unsafe_allow_html=True)
 
         # Interactive Step-by-Step Explorer
-        st.markdown("##### Interactive Walkthrough — Click a Stage to Inspect How It Works")
+        st.markdown("##### Interactive Walkthrough — Click Any Question or Stage Below")
         if "walkthrough_step" not in st.session_state:
-            st.session_state["walkthrough_step"] = "step1"
+            st.session_state["walkthrough_step"] = "step_daily_vs_weekly"
 
         b1, b2, b3, b4, b5 = st.columns(5)
-        if b1.button("1. Stock Scan", use_container_width=True):
-            st.session_state["walkthrough_step"] = "step1"
-        if b2.button("2. Strategy Signal", use_container_width=True):
-            st.session_state["walkthrough_step"] = "step2"
-        if b3.button("3. Risk & Sizing", use_container_width=True):
-            st.session_state["walkthrough_step"] = "step3"
-        if b4.button("4. Execution & Exit", use_container_width=True):
-            st.session_state["walkthrough_step"] = "step4"
-        if b5.button("5. Weekly Upgrade", use_container_width=True):
-            st.session_state["walkthrough_step"] = "step5"
+        if b1.button("1. Daily vs Weekly Run", use_container_width=True):
+            st.session_state["walkthrough_step"] = "step_daily_vs_weekly"
+        if b2.button("2. How Strategies Share Capital", use_container_width=True):
+            st.session_state["walkthrough_step"] = "step_multi_strategy"
+        if b3.button("3. Risk & Position Sizing", use_container_width=True):
+            st.session_state["walkthrough_step"] = "step_risk"
+        if b4.button("4. When to Trade Real Money", use_container_width=True):
+            st.session_state["walkthrough_step"] = "step_readiness"
+        if b5.button("5. What Is Needed From You", use_container_width=True):
+            st.session_state["walkthrough_step"] = "step_user_role"
 
         step_info = {
-            "step1": (
-                "**Stage 1 — Daily Stock Scan (`MarketResearchAgent`)**\n\n"
-                "- **What happens**: After the US market closes, the system downloads daily prices for liquid NYSE/NASDAQ large-cap stocks and compares them against the S&P 500 (`SPY`).\n"
-                "- **What it looks for**: Stocks outperforming `SPY` over the last 20 days, trading on above-average volume, or reacting to positive quarterly earnings.\n"
-                "- **Safety boundary**: Research rankings only highlight candidates—they never place orders on their own."
+            "step_daily_vs_weekly": (
+                "**1. Daily Run vs. Weekly Run — What is the difference?**\n\n"
+                "- **Daily Run (Mon–Fri after US Market Close)**: Executes the **currently approved strategies** (`PAPER_TRADING` status) on today's real market prices. It does *not* invent new rules—its job is to trade the approved rulebooks day after day to build a real-time paper track record.\n"
+                "- **Weekly Run (Saturday 10:00 SGT)**: This is the **self-improvement engine**. It reviews the week's closed trades, drafts a refined strategy version (`v+1`), and tests it against the 9-gate historical & walk-forward exam. If `v+1` passes all 9 gates, it automatically replaces the older version (`RETIRED`)."
             ),
-            "step2": (
-                "**Stage 2 — Deterministic Strategy Signal (`StrategySignalEngine`)**\n\n"
-                "- **What happens**: Approved strategy rulebooks check whether any stock meets exact mathematical entry criteria at today's close.\n"
-                "- **Example (`Momentum Trend`)**: Price is above both its 20-day and 50-day moving averages, 20-day return beats `SPY` by at least `+2%`, RSI is between `50` and `72` (trending but not overheated), and volume is above average."
+            "step_multi_strategy": (
+                "**2. How Multiple Strategies Run Together Every Day**\n\n"
+                "- The system starts with **3 baseline strategy families** (`Momentum Trend`, `Volatility Breakout`, and `Earnings Drift`) and tests all of them.\n"
+                "- Every strategy that passes all 9 validation gates is set to **`PAPER_TRADING`** and runs **every single day**.\n"
+                "- **Fair Signal Allocation**: When multiple strategies trigger buy signals on the same day, the execution engine interleaves signals across strategy families by conviction score so no single strategy hogs the portfolio's cash or sector limits."
             ),
-            "step3": (
-                "**Stage 3 — Position Sizing & Risk Check (`PortfolioRiskManager`)**\n\n"
-                "- **What happens**: Before a buy order is allowed, the Risk Manager calculates how many shares to buy and checks 7 portfolio limits.\n"
-                "- **Volatility Sizing**: Share count is set so that if the stock drops to its stop-loss price, the portfolio loses at most **1.0% of total equity** (`~$1,000`).\n"
-                "- **Veto Power**: If a trade would push a single stock above `15%`, a sector above `30%`, or total open stop-loss risk above `5%`, the trade is automatically blocked."
+            "step_risk": (
+                "**3. Position Sizing & 7 Risk Guardrails (`PortfolioRiskManager`)**\n\n"
+                "- **1.0% Risk Per Trade**: Share size is calculated from stock volatility (`ATR`) so that if a stock hits its stop-loss, the portfolio loses at most `~1.0%` (`$1,000` on `$100,000`).\n"
+                "- **Portfolio Caps**: Max `5.0%` combined open stop-loss risk across all positions, max `15.0%` in one stock, max `30.0%` in one sector, max `10` open positions, and an automatic `15.0%` drawdown circuit breaker."
             ),
-            "step4": (
-                "**Stage 4 — Realistic Fill & Automatic Exit (`PaperTradingEngine`)**\n\n"
-                "- **What happens**: Approved signals at Day `T` close fill at Day `T+1` open price, deducting realistic brokerage commission, bid-ask spread, and slippage.\n"
-                "- **Automatic Exit**: Every position carries a protective **Stop-Loss**, a **Take-Profit target**, a **Trailing Stop**, and a **Maximum Holding Time (10–15 days)**. Whichever is hit first closes the trade."
+            "step_readiness": (
+                "**4. How to Evaluate a Strategy for Real-Money Trading**\n\n"
+                "Open the **Strategies & Readiness** tab. A strategy is flagged **`READY FOR LIVE REVIEW`** only when it proves itself in **both** historical testing and live forward paper trading:\n"
+                "1. **9 / 9 Backtest & Walk-Forward Gates Passed** (Sharpe $\\ge 1.0$, Profit Factor $\\ge 1.3$, Max Drawdown $\\le 15\\%$, profitable after $2\\times$ fees).\n"
+                "2. **At least 20 Closed Forward Paper Trades** (proving the edge works in live daily market conditions, not just past history).\n"
+                "3. **Forward Paper Profit Factor $\\ge 1.30$** and **Positive Net Paper P&L** after brokerage commissions and slippage."
             ),
-            "step5": (
-                "**Stage 5 — Saturday Self-Improvement (`StrategyDiscoveryAgent` & `StrategyEvaluationAgent`)**\n\n"
-                "- **What happens**: Every Saturday, the system reviews closed trades from the week and proposes a refined strategy version (`v+1`).\n"
-                "- **The 9-Gate Audit**: The new version is tested across historical and walk-forward windows. If it beats the 9 risk-adjusted criteria, it is promoted; if it fails even one gate, it is rejected."
+            "step_user_role": (
+                "**5. What Exactly Is Needed From You?**\n\n"
+                "- **Day-to-Day / Week-to-Week**: **Nothing (`0` user input).** Data ingestion, daily paper trading, and Saturday strategy discovery all run automatically in the background.\n"
+                "- **Periodic Check-In (Whenever You Like)**: Glance at the **Strategies & Readiness** tab. Once a strategy reaches `READY FOR LIVE REVIEW` and you are comfortable with its drawdown and trade history, you can mirror its signals in your personal brokerage account."
             ),
         }
         st.info(step_info[st.session_state["walkthrough_step"]])
 
         st.markdown("##### Deeper Dives — Expand Any Topic Below")
-        with st.expander("The 3 Trading Strategies — How signals are generated"):
+        with st.expander("The 3 Strategy Families — How buy and sell signals work"):
             st.markdown(
                 """
                 1. **Momentum & Relative Strength (`strat_momentum_trend`)** — Buys liquid stocks in established uptrends (above 20d and 50d moving averages) that are outperforming the S&P 500 (`SPY`) with strong volume. Held for 4–12 trading days.
-                2. **Post-Earnings Drift (`strat_pead_drift`)** — Captures multi-day follow-through after a company beats quarterly earnings and revenue estimates with a volume surge. Held for 3–10 trading days.
-                3. **Volatility Breakout (`strat_volatility_breakout`)** — Identifies stocks that trade quietly in a tight 10-day range and then break above their 20-day high on 1.35x normal volume. Held for 3–12 trading days.
+                2. **Volatility Breakout (`strat_volatility_breakout`)** — Identifies stocks that consolidate quietly in a tight 10-day range and then break above their 20-day high on 1.35x normal volume. Held for 3–12 trading days.
+                3. **Post-Earnings Drift (`strat_pead_drift`)** — Captures multi-day follow-through after a company beats quarterly earnings and revenue estimates with a volume surge. Held for 3–10 trading days.
                 """
             )
         with st.expander("The 7 Risk Controls — How the portfolio is protected from large losses"):
@@ -415,7 +519,7 @@ def main() -> None:
             st.markdown(
                 """
                 - **Simulated Paper Portfolio (Overview & Paper Ledger tabs)**: Tracks day-by-day trades starting from `$100,000.00`.
-                  $$\text{Current Equity} = \text{Starting Capital (\$100,000)} + \text{Realised P\&L (Closed Trades)} + \text{Unrealised P\&L (Open Positions)}$$
+                  $$\\text{Current Equity} = \\text{Starting Capital (\\$100,000)} + \\text{Realised P\\&L (Closed Trades)} + \\text{Unrealised P\\&L (Open Positions)}$$
                   Every trade deducts realistic brokerage commissions (`$0.005/share`, min `$1.00`) and bid-ask slippage (`5.5 bps`).
                 - **Historical Backtests (Strategies & Backtesting tabs)**: Simulates how a strategy rulebook would have performed over multi-year historical data (`2023–2025`). Backtest numbers are used strictly to validate strategies and are never mixed into your live paper account balance.
                 """
@@ -427,18 +531,18 @@ def main() -> None:
     with tabs[1]:
         _render_tab_header(
             st,
-            "Overview & P&L: Real-time simulated portfolio value, strategy attribution, and currently held positions.",
+            "Overview & P&L: Real-time simulated portfolio value, multi-strategy attribution, and currently held positions.",
             "How this tab works",
             "**What this tab shows:** Your simulated `$100,000` paper trading account.\n\n"
             "- **Realised P&L**: Profit or loss locked in from completed (closed) trades after subtracting commissions and slippage.\n"
             "- **Unrealised P&L**: Floating profit or loss on stocks currently held, based on the latest market close price.\n"
-            "- **Strategy Attribution Table**: Shows exactly which strategy generated each dollar of P&L and over what date range.",
+            "- **Strategy Attribution Table**: Shows every strategy that has traded in the paper account, its win rate, profit factor, date span, and exact P&L contribution.",
         )
 
         st.markdown("#### Paper Portfolio Profit & Loss Attribution")
         st.markdown(
             f"""
-            - **Active Strategies**: {active_strat_names}
+            - **Active Daily Strategies**: {active_strat_names}
             - **Measurement Window**: `{paper_date_span}`
             - **Derivation**:
               `Starting Capital ($100,000.00)` + `Realised P&L (${acc['realised_pnl']:+,.2f})` + `Unrealised P&L (${acc['unrealised_pnl']:+,.2f})` = **`Current Equity (${acc['total_equity']:,.2f})`** *(Net of `${total_fees_paid:,.2f}` in transaction costs)*
@@ -506,9 +610,62 @@ def main() -> None:
             st.write("No open positions currently held (100% cash).")
 
     # =========================================================================
-    # TAB 2: MARKET RESEARCH
+    # TAB 2: STRATEGIES & LIVE READINESS SCORECARD
     # =========================================================================
     with tabs[2]:
+        _render_tab_header(
+            st,
+            "Strategies & Readiness: Side-by-side scorecard comparing 9-gate historical backtests with forward paper-trading proof to tell you when a strategy is ready for real trading.",
+            "How to evaluate readiness",
+            "**How to know when a strategy is ready for real money:**\n\n"
+            "1. **Backtest Gates (`9 / 9 Passed`)**: Proves the strategy survived multi-year historical data, walk-forward windows, and $2\\times$ cost stress tests.\n"
+            "2. **Forward Paper Trades (`>= 20 Closed Trades`)**: Proves the strategy works in live day-by-day market conditions.\n"
+            "3. **Forward Profit Factor (`>= 1.30`) & Positive P&L**: Proves winning paper trades outweigh losing paper trades by at least $1.30 to $1.00 after fees.\n"
+            "When all criteria are met, **Live Trading Readiness** turns **`READY FOR LIVE REVIEW`**.",
+        )
+
+        st.markdown("#### Strategy Evaluation & Live-Trading Readiness Scorecard")
+        display_scorecard = [
+            {k: v for k, v in r.items() if not k.startswith("_")}
+            for r in readiness_rows
+        ]
+        st.dataframe(display_scorecard, use_container_width=True)
+
+        st.markdown("#### Expand Any Strategy for Its 9-Gate Audit & Rulebook Details")
+        for r in readiness_rows:
+            s = r["_raw_strategy"]
+            checks = r["_checks"]
+            header_label = (
+                f"{r['Strategy']} — {r['Name']}  ·  Status: {r['Status']}  ·  "
+                f"Backtest: {r['Backtest Gates']}  ·  Readiness: {r['Live Trading Readiness']}"
+            )
+            with st.expander(header_label, expanded=False):
+                c_left, c_right = st.columns(2)
+                with c_left:
+                    st.markdown("**1. Historical Backtest Audit (9 Promotion Gates)**")
+                    if checks:
+                        for gate_name, passed in checks.items():
+                            icon = "PASS" if passed else "FAIL"
+                            clean_gate = gate_name.replace("_", " ").title()
+                            st.write(f"- **[{icon}]** {clean_gate}")
+                    else:
+                        st.write(s.get("promotion_decision_reason", "No gate breakdown recorded."))
+                with c_right:
+                    st.markdown("**2. Forward Paper-Trading Readiness Checklist**")
+                    g1_ok = r["Backtest Gates"].startswith("9 / 9")
+                    g2_ok = r["_paper_closed"] >= 20
+                    g3_ok = r["_paper_pf"] >= 1.3 and r["_paper_closed"] > 0
+                    g4_ok = r["_paper_net_pnl"] > 0
+                    st.write(f"- **[{'PASS' if g1_ok else 'WAIT'}]** Passed all 9 historical backtest gates (`{r['Backtest Gates']}`)")
+                    st.write(f"- **[{'PASS' if g2_ok else 'WAIT'}]** Minimum 20 closed paper trades (`{r['_paper_closed']} / 20 completed`)")
+                    st.write(f"- **[{'PASS' if g3_ok else 'WAIT'}]** Forward Paper Profit Factor $\\ge 1.30$ (`Current: {r['_paper_pf']:.2f}`)")
+                    st.write(f"- **[{'PASS' if g4_ok else 'WAIT'}]** Positive Forward Net Paper P&L (`Current: ${r['_paper_net_pnl']:+,.2f}`)")
+                    st.caption(f"**Hypothesis**: {s['hypothesis']}")
+
+    # =========================================================================
+    # TAB 3: MARKET RESEARCH
+    # =========================================================================
+    with tabs[3]:
         _render_tab_header(
             st,
             "Market Research: Daily ranking of liquid US stocks by trend strength vs. SPY, volume activity, and earnings catalysts.",
@@ -544,46 +701,6 @@ def main() -> None:
 
         with st.expander("View Post-Session Experiment Proposals (`PerformanceAnalystAgent`)", expanded=False):
             st.dataframe(state["proposals"], use_container_width=True)
-
-    # =========================================================================
-    # TAB 3: STRATEGIES
-    # =========================================================================
-    with tabs[3]:
-        _render_tab_header(
-            st,
-            "Strategies: Registry of all quantitative rulebooks, their historical test scores, and whether they are approved for paper trading.",
-            "How this tab works",
-            "**What this tab shows:** Every strategy version in the registry.\n\n"
-            "- **`PAPER_TRADING` Status**: Passed all 9 validation gates and is actively trading in the paper portfolio.\n"
-            "- **`REJECTED` Status**: Failed one or more validation gates (for example, Sharpe `< 1.0` or Profit Factor `< 1.3`) and is blocked from trading.\n"
-            "- **Sharpe Ratio**: Risk-adjusted return (`>1.0` is good, `>1.5` is strong).\n"
-            "- **Profit Factor**: Total dollars won divided by total dollars lost (`>1.3` required).",
-        )
-        st.markdown("#### Registered Strategy Versions & Validation Status")
-        strat_rows = []
-        for s in strats:
-            m = s["backtest_summary"] or {}
-            start_eq = 100_000.0
-            final_eq = m.get("final_equity", start_eq)
-            net_bt_profit = final_eq - start_eq
-            strat_rows.append(
-                {
-                    "Strategy ID": s["strategy_id"],
-                    "Version": f"v{s['version']}",
-                    "Name": s["name"],
-                    "Family": s["strategy_family"],
-                    "Status": s["status"],
-                    "Holding Horizon": f"{s['holding_period_min_days']}–{s['holding_period_max_days']}d",
-                    "Backtest Net P&L ($100k Base)": f"${net_bt_profit:+,.2f} ({m.get('total_return_pct', 0.0):+.2f}%)",
-                    "Benchmark (SPY)": f"{m.get('benchmark_return_pct', 0.0):+.2f}%",
-                    "Sharpe": m.get("sharpe_ratio"),
-                    "Profit Factor": m.get("profit_factor"),
-                    "Max Drawdown": f"-{m.get('max_drawdown_pct', 0.0):.2f}%",
-                    "Trades": m.get("trade_count", 0),
-                    "Validation Audit": s["promotion_decision_reason"],
-                }
-            )
-        st.dataframe(strat_rows, use_container_width=True)
 
     # =========================================================================
     # TAB 4: BACKTESTING
@@ -626,7 +743,7 @@ def main() -> None:
     with tabs[5]:
         _render_tab_header(
             st,
-            "Paper Ledger: Chronological log of every simulated buy/sell fill, transaction fee, and resulting cash balance.",
+            "Paper Ledger: Chronological log of every simulated buy/sell fill across all active strategies, transaction fees, and resulting cash balance.",
             "How this tab works",
             "**What this tab shows:** The accounting ledger for the simulated `$100,000` portfolio.\n\n"
             "- **`BUY` rows**: Deduct purchase cost plus commission/slippage from cash (`Realised P&L` is `$0.00` on entry).\n"
