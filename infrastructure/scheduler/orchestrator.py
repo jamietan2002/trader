@@ -523,6 +523,12 @@ class AutonomousWorkflowOrchestrator:
         ][:8]
 
         return {
+            "calendar_date": date.today().isoformat(),
+            "is_trading_day": USTradingCalendar.is_trading_day(date.today()),
+            "market_status_reason": USTradingCalendar.non_trading_reason(date.today()),
+            "next_trading_day": USTradingCalendar.next_trading_day(
+                date.today(), include_same_day=USTradingCalendar.is_trading_day(date.today())
+            ),
             "session_date": latest_date,
             "market_regime": {
                 "regime": regime,
@@ -552,7 +558,7 @@ class AutonomousWorkflowOrchestrator:
         dt_str = session_date or payload.get("session_date") or (spy_bars[-1].bar_date if spy_bars else date.today().isoformat())
         now_iso = utc_now_iso()
 
-        # 1. Enrich candidate research reports with IDE LLM's live web-search catalyst analysis
+        # 1. Enrich candidate research reports and catalyst table with IDE LLM's live web-search analysis
         research_updates = payload.get("research_updates") or []
         updated_tickers: List[str] = []
         for upd in research_updates:
@@ -563,26 +569,48 @@ class AutonomousWorkflowOrchestrator:
                 "SELECT report_id, report_json FROM research_reports WHERE ticker = ? ORDER BY as_of_date DESC, created_at DESC LIMIT 1",
                 (tkr,),
             )
-            if not row:
-                continue
-            rep = json.loads(row["report_json"])
-            if upd.get("bullish_thesis"):
-                rep["bullish_thesis"] = str(upd["bullish_thesis"])
-            if upd.get("bearish_thesis"):
-                rep["bearish_thesis"] = str(upd["bearish_thesis"])
-            if upd.get("catalyst_assessment"):
-                rep["catalyst_assessment"] = str(upd["catalyst_assessment"])
-            if upd.get("main_risks") and isinstance(upd["main_risks"], list):
-                rep["main_risks"] = [str(x) for x in upd["main_risks"]]
-            if upd.get("research_confidence_score") is not None:
-                rep["research_confidence_score"] = round(
-                    max(0.1, min(0.95, float(upd["research_confidence_score"]))), 2
+            if row:
+                rep = json.loads(row["report_json"])
+                if upd.get("bullish_thesis"):
+                    rep["bullish_thesis"] = str(upd["bullish_thesis"])
+                if upd.get("bearish_thesis"):
+                    rep["bearish_thesis"] = str(upd["bearish_thesis"])
+                if upd.get("catalyst_assessment"):
+                    rep["catalyst_assessment"] = str(upd["catalyst_assessment"])
+                if upd.get("main_risks") and isinstance(upd["main_risks"], list):
+                    rep["main_risks"] = [str(x) for x in upd["main_risks"]]
+                if upd.get("research_confidence_score") is not None:
+                    rep["research_confidence_score"] = round(
+                        max(0.1, min(0.95, float(upd["research_confidence_score"]))), 2
+                    )
+                self.db.execute(
+                    "UPDATE research_reports SET report_json = ? WHERE report_id = ?",
+                    (json.dumps(rep), row["report_id"]),
                 )
-            self.db.execute(
-                "UPDATE research_reports SET report_json = ? WHERE report_id = ?",
-                (json.dumps(rep), row["report_id"]),
-            )
-            updated_tickers.append(tkr)
+                updated_tickers.append(tkr)
+
+            # Also persist a structured MarketCatalyst record if catalyst_assessment or sentiment_score is provided
+            cat_text = str(upd.get("catalyst_assessment") or upd.get("bullish_thesis") or "").strip()
+            if cat_text:
+                sent_val = float(upd.get("sentiment_score", 0.5))
+                if upd.get("sentiment_score") is None and upd.get("research_confidence_score") is not None:
+                    sent_val = round((float(upd["research_confidence_score"]) - 0.5) * 2.0, 2)
+                self.db.execute(
+                    """
+                    INSERT INTO market_catalysts (
+                        ticker, published_date, published_timestamp, catalyst_type,
+                        headline, summary, sentiment_score, source_name, url
+                    ) VALUES (?, ?, ?, 'IDE_AI_RESEARCH', ?, ?, ?, 'IDE AI Catalyst Engine', '')
+                    """,
+                    (
+                        tkr,
+                        dt_str,
+                        now_iso,
+                        cat_text[:140],
+                        str(upd.get("bullish_thesis") or cat_text),
+                        max(-1.0, min(1.0, sent_val)),
+                    ),
+                )
 
         # 2. Record optional AI Performance Analyst proposal
         prop_in = payload.get("analyst_proposal")
@@ -684,11 +712,35 @@ class AutonomousWorkflowOrchestrator:
                 recorded_proposal_id, "PROMOTED" if any_promoted else "REJECTED"
             )
 
-        return {
+        res_summary = {
             "session_date": dt_str,
             "research_tickers_enriched": updated_tickers,
             "recorded_proposal_id": recorded_proposal_id,
             "tournament_results": tournament_results,
             "updated_copilot_action_plan": self.live_copilot.get_daily_action_plan(as_of_date=dt_str),
         }
+        self.db.execute(
+            """
+            INSERT INTO job_executions (
+                job_run_id, job_name, idempotency_key, status, started_at, completed_at, summary_json
+            ) VALUES (?, 'ide_ai_cycle', ?, 'COMPLETED', ?, ?, ?)
+            ON CONFLICT(idempotency_key) DO UPDATE SET
+                status='COMPLETED', completed_at=excluded.completed_at, summary_json=excluded.summary_json
+            """,
+            (
+                f"job_ide_{uuid.uuid4().hex[:10]}",
+                f"ide_ai_cycle:{dt_str}:{uuid.uuid4().hex[:6]}",
+                now_iso,
+                now_iso,
+                json.dumps(
+                    {
+                        "session_date": dt_str,
+                        "research_tickers_enriched": updated_tickers,
+                        "candidates_tested": len(tournament_results),
+                        "promoted_count": sum(1 for r in tournament_results if r["promoted"]),
+                    }
+                ),
+            ),
+        )
+        return res_summary
 

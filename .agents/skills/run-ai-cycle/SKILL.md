@@ -48,7 +48,7 @@ Based on the detected `market_regime`, recent closed trade attribution (`recent_
   - `stop_loss_atr_mult` (e.g., `1.6` to `2.4`), `take_profit_atr_mult` (e.g., `3.0` to `4.5`), `trailing_stop_atr_mult` (e.g., `2.0` to `2.8`).
 - **Valid `holding_period_max_days`**: Integer between `5` and `18`.
 
-Apply both your qualitative research updates and your strategy tournament candidates using `main.py ide-apply`:
+Apply both your qualitative research updates (including `sentiment_score` from `-1.0` to `+1.0`) and your strategy tournament candidates using `main.py ide-apply` (which also persists `IDE_AI_RESEARCH` catalyst records to `market_catalysts` and logs `ide_ai_cycle` in `job_executions` so the dashboard's **IDE AI Reminder Checklist** turns green):
 ```bash
 .venv/bin/python main.py ide-apply --json '{
   "research_updates": [
@@ -58,6 +58,7 @@ Apply both your qualitative research updates and your strategy tournament candid
       "bearish_thesis": "...",
       "catalyst_assessment": "...",
       "main_risks": ["...", "..."],
+      "sentiment_score": 0.78,
       "research_confidence_score": 0.88
     }
   ],

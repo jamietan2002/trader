@@ -249,15 +249,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </header>
 
   <nav id="main-nav">
-    <button class="active" onclick="switchTab('guide', this)">Platform Guide</button>
-    <button onclick="switchTab('overview', this)">Overview &amp; P&amp;L</button>
-    <button onclick="switchTab('strategies', this)">Strategies &amp; Readiness</button>
-    <button onclick="switchTab('copilot', this)">Live Copilot (Real Account)</button>
-    <button onclick="switchTab('research', this)">Market Research</button>
-    <button onclick="switchTab('backtesting', this)">Backtesting</button>
-    <button onclick="switchTab('paper', this)">Paper Ledger</button>
-    <button onclick="switchTab('analytics', this)">Risk &amp; Analytics</button>
-    <button onclick="switchTab('monitoring', this)">System Logs</button>
+    <button class="active" onclick="switchTab('copilot', this)">1. Live Copilot (Real Account)</button>
+    <button onclick="switchTab('overview', this)">2. Overview &amp; P&amp;L</button>
+    <button onclick="switchTab('paper', this)">3. Paper Ledger</button>
+    <button onclick="switchTab('strategies', this)">4. Strategies &amp; Readiness</button>
+    <button onclick="switchTab('backtesting', this)">5. Backtesting</button>
+    <button onclick="switchTab('research', this)">6. AI Research &amp; IDE Bridge</button>
+    <button onclick="switchTab('analytics', this)">7. Risk &amp; Analytics</button>
+    <button onclick="switchTab('monitoring', this)">8. System Logs</button>
+    <button onclick="switchTab('guide', this)">9. Platform Guide</button>
   </nav>
 
   <main>
@@ -268,7 +268,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
 
     <!-- 0. PLATFORM GUIDE -->
-    <section id="tab-guide" class="tab-section active">
+    <section id="tab-guide" class="tab-section">
       <div class="card">
         <div class="card-header"><span class="card-title">What This System Does &amp; How It Runs</span></div>
         <p style="font-size:0.9rem;color:#cbd5e1;margin-bottom:16px;">
@@ -576,12 +576,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </section>
 
     <!-- 8. LIVE TRADING COPILOT (AIR-GAPPED REAL ACCOUNT) -->
-    <section id="tab-copilot" class="tab-section">
+    <section id="tab-copilot" class="tab-section active">
       <div class="tab-intro">
-        <p><strong>Live Copilot (Real Account)</strong> — Step-by-step daily BUY and SELL instructions sized to your real account balance, with zero access to your brokerage account.</p>
+        <p><strong>Live Copilot (Real Account)</strong> — Today's trading-day-aware BUY and SELL instructions sized to your real account balance, with zero access to your brokerage account.</p>
         <details class="tab-help">
           <summary>? How Live Copilot works</summary>
           <div class="help-body">
+            • <strong>Trading-Day Aware:</strong> Automatically checks today's NYSE/NASDAQ calendar date. On weekends or holidays, it states the market is closed and suppresses trade suggestions.<br/>
             • <strong>Zero Broker Access:</strong> Never connects to your broker. You execute trades in your own brokerage app.<br/>
             • <strong>Never Assumes Positions:</strong> Recommendations stay pending until you click <strong>Confirm Bought</strong> or <strong>Confirm Sold</strong>.<br/>
             • <strong>Adapts to Your Real Account:</strong> Position sizing (1% risk), stop-losses, and exit rules adapt to your actual confirmed cash and holdings.
@@ -591,12 +592,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="kpi-grid" id="copilot-kpis"></div>
       <div class="card">
         <div class="card-header">
-          <span class="card-title">1. Today's Step-by-Step Action Checklist (Next Market Open)</span>
+          <span class="card-title" id="copilot-checklist-title">1. Today's Step-by-Step Action Checklist</span>
           <div style="display:flex;gap:8px;">
             <button class="btn btn-secondary" id="cop-restore-skipped-btn" style="display:none;" onclick="restoreSkippedCopilotSignals()">Restore Skipped Signals</button>
             <button class="btn btn-secondary" onclick="undoLastCopilotTrade()">Undo Last Trade</button>
           </div>
         </div>
+        <div id="copilot-calendar-banner" style="margin-bottom:10px;"></div>
         <div id="copilot-sell-box" style="margin-bottom:14px;"></div>
         <div id="copilot-buy-box"></div>
       </div>
@@ -709,7 +711,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="kpi-card"><div class="kpi-label">Unrealised P&amp;L</div><div class="kpi-value ${acc.unrealised_pnl >= 0 ? 'pos' : 'neg'}">${fmtUsd(acc.unrealised_pnl)}</div><div class="kpi-sub">Confirmed Open Holdings</div></div>
       `;
 
-      document.getElementById('copilot-sell-box').innerHTML = sells.length ? `
+      const isTradingDay = plan.is_trading_day !== false;
+      const calDate = plan.calendar_date || plan.session_date || '';
+      const statusReason = plan.market_status_reason || 'Open Trading Session';
+      const nextTradingDay = plan.next_trading_day || calDate;
+      const chkTitle = document.getElementById('copilot-checklist-title');
+      if (chkTitle) chkTitle.textContent = `1. Today's Action Checklist — ${calDate} (${statusReason})`;
+      const calBanner = document.getElementById('copilot-calendar-banner');
+
+      if (!isTradingDay) {
+        if (calBanner) {
+          calBanner.innerHTML = `<div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);padding:10px 14px;border-radius:6px;font-size:0.84rem;color:#fcd34d;"><strong>No Trade Suggestions Today (${calDate} — ${statusReason}):</strong> US equity markets (NYSE &amp; NASDAQ) are closed today, so no BUY or SELL orders are suggested today. Next trading session: <strong>${nextTradingDay}</strong>.</div>`;
+        }
+        document.getElementById('copilot-sell-box').innerHTML = '';
+        document.getElementById('copilot-buy-box').innerHTML = '';
+      } else {
+        if (calBanner) {
+          calBanner.innerHTML = `<div style="font-size:0.8rem;color:#94a3b8;">Today (<strong>${calDate}</strong>) is an active US trading session. Signals evaluated from latest market close (<strong>${plan.session_date}</strong>).</div>`;
+        }
+        document.getElementById('copilot-sell-box').innerHTML = sells.length ? `
         <div style="font-size:0.84rem;font-weight:600;color:var(--amber);margin-bottom:6px;">Step A — SELL Orders (Exits Triggered on Your Confirmed Holdings)</div>
         <table>
           <thead><tr><th>Ticker</th><th>Qty Sold</th><th>Your Entry</th><th>Actual Exit ($)</th><th>Est. P&amp;L</th><th>Exit Reason</th><th>Action</th></tr></thead>
@@ -732,7 +752,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </table>
       ` : '<div style="font-size:0.84rem;color:var(--muted);">No SELL exit triggers on your confirmed holdings today.</div>';
 
-      document.getElementById('copilot-buy-box').innerHTML = buys.length ? `
+        document.getElementById('copilot-buy-box').innerHTML = buys.length ? `
         <div style="font-size:0.84rem;font-weight:600;color:var(--accent);margin:10px 0 6px;">Step B — BUY Candidates (Sized to 1% Risk of Your Real Account)</div>
         <table>
           <thead><tr><th>Ticker</th><th>Strategy</th><th>Shares Bought</th><th>Fill Price ($)</th><th>Est. Cost</th><th>Stop-Loss</th><th>Take-Profit</th><th>Max Risk</th><th>Actions</th></tr></thead>
@@ -756,6 +776,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </tbody>
         </table>
       ` : '<div style="font-size:0.84rem;color:var(--muted);margin-top:8px;">No new BUY candidates pass your real-account cash and risk caps today.</div>';
+      }
 
       document.getElementById('copilot-positions-table').innerHTML = holds.length ? `
         <table>

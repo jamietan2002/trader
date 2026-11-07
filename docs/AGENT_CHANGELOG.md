@@ -4,6 +4,27 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-07] — Trading-Day-Aware Copilot Checklist, Top-of-Mind Tab Hierarchy, Unified Strategy Encyclopaedia & Direct IDE AI Prompt-to-Engine Bridge
+
+### Summary
+- **Trading-Day-Aware Action Checklist (`USTradingCalendar.next_trading_day` & `non_trading_reason` in `core/market_data/models.py`, `LiveTradingCopilotEngine.get_daily_action_plan` in `core/execution/paper_broker.py`, `dashboard/streamlit_app.py`, `dashboard/ui_template.py`)**: `Today's Action Checklist` now displays today's real calendar date and weekday, checks `USTradingCalendar.is_trading_day()`, and when today is a weekend or US market holiday (`Saturday`, `Sunday`, or `NYSE`/`NASDAQ` holiday), clearly states that US equity markets are closed, displays the next trading session date, and suppresses stale `BUY`/`SELL` suggestions (with an optional preview toggle for weekend preparation).
+- **Top-of-Mind 6-Tab UI Hierarchy (`dashboard/streamlit_app.py`, `dashboard/ui_template.py`)**: Reordered and consolidated the dashboard into 6 high-signal tabs placing the most actionable information first:
+  1. `1. Live Copilot (Real Account)` *(Default Landing Tab)*
+  2. `2. Paper Account & Ledger` *(Unified forward `$100,000` P&L + open positions + day-filtered execution ledger)*
+  3. `3. Strategies, Rules & Backtests` *(Complete Strategy Encyclopaedia consolidating how each strategy is conceived, its economic edge, exact `entry_rules`/`exit_rules`/`risk_params`, 9-gate `SPY` benchmark audit, historical backtest trade log, and 1-click `Revert All to Golden Base (v1)`)*
+  4. `4. AI Research & IDE Bridge` *(Daily watchlist + IDE AI Reminder Checklist + Direct Prompt-to-Engine JSON feed)*
+  5. `5. Risk, Walk-Forward & Logs` *(Sector concentration vs. `30%` cap, 4-window Walk-Forward folds, risk vetoes, and job logs)*
+  6. `6. Platform Guide` *(Visual mental-model diagram and interactive walkthrough)*
+- **IDE AI Reminder Checklist & Direct Prompt-to-Engine Feed (`infrastructure/scheduler/orchestrator.py`, `api/server.py`, `dashboard/streamlit_app.py`, `.agents/skills/run-ai-cycle/SKILL.md`)**: Added a persistent **Daily & Weekly AI Checklist** in the sidebar tracking the last `ide_ai_cycle` execution timestamp, an auto-generated **Ready-to-Paste AI Prompt** pre-populated with today's top candidates, and an interactive **Paste AI JSON Output Directly into Engine** bridge (`/api/ide/apply`) that enriches `research_reports`, logs structured `IDE_AI_RESEARCH` rows to `market_catalysts`, and runs the 9-gate strategy tournament.
+
+### Modules Added / Modified
+- `core/market_data/models.py`, `core/execution/paper_broker.py`
+- `infrastructure/scheduler/orchestrator.py`, `api/server.py`
+- `dashboard/streamlit_app.py`, `dashboard/ui_template.py`
+- `.agents/skills/run-ai-cycle/SKILL.md`, `tests/test_platform.py`, `USER_GUIDE.md`, `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-07] — Live Trading Copilot Persistence Hardening, `st.session_state` Widget Sync & Real-World Edge-Case Support
 
 ### Summary

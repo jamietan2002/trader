@@ -16,10 +16,11 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass, asdict
+from datetime import date
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from core.indicators.technical import compute_indicator_series
-from core.market_data.models import DailyBar
+from core.market_data.models import DailyBar, USTradingCalendar
 from core.market_data.providers import MarketDataService
 from core.risk.manager import PortfolioRiskManager
 from core.strategies.registry import StrategyConfig, StrategySignalEngine
@@ -1760,10 +1761,27 @@ class LiveTradingCopilotEngine:
         )
         return self.get_account_summary()
 
-    def get_daily_action_plan(self, as_of_date: Optional[str] = None) -> Dict[str, Any]:
+    def get_daily_action_plan(
+        self,
+        as_of_date: Optional[str] = None,
+        check_calendar_today: bool = False,
+    ) -> Dict[str, Any]:
         """Compute step-by-step SELL and BUY recommendations tailored to the user's real account."""
+        calendar_today_str = as_of_date or date.today().isoformat()
+        try:
+            calendar_today_dt = date.fromisoformat(calendar_today_str[:10])
+        except ValueError:
+            calendar_today_dt = date.today()
+            calendar_today_str = calendar_today_dt.isoformat()
+
+        is_today_trading_day = USTradingCalendar.is_trading_day(calendar_today_dt)
+        market_status_reason = USTradingCalendar.non_trading_reason(calendar_today_dt)
+        next_open_session = USTradingCalendar.next_trading_day(
+            calendar_today_dt, include_same_day=is_today_trading_day
+        )
+
         spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker, end_date=as_of_date)
-        session_date = spy_bars[-1].bar_date if spy_bars else (as_of_date or utc_now_iso()[:10])
+        session_date = spy_bars[-1].bar_date if spy_bars else calendar_today_str
         spy_inds = compute_indicator_series(spy_bars) if spy_bars else {}
 
         summary = self.get_account_summary(as_of_date=session_date)
@@ -1820,7 +1838,7 @@ class LiveTradingCopilotEngine:
                 stop_loss_price=float(pos["stop_loss_price"]) if pos.get("stop_loss_price") else None,
                 take_profit_price=float(pos["take_profit_price"]) if pos.get("take_profit_price") else None,
             )
-            if exit_sig is not None:
+            if exit_sig is not None and not (check_calendar_today and not is_today_trading_day):
                 sell_actions.append(
                     {
                         "action": "SELL",
@@ -1868,6 +1886,22 @@ class LiveTradingCopilotEngine:
                         "status": f"HOLD ({days_left}d left{stop_note})",
                     }
                 )
+
+        # If check_calendar_today=True and today is a weekend or market holiday, do not suggest new trades today
+        if check_calendar_today and not is_today_trading_day:
+            return {
+                "calendar_date": calendar_today_str,
+                "is_trading_day": False,
+                "market_status_reason": market_status_reason,
+                "next_trading_day": next_open_session,
+                "session_date": session_date,
+                "account_summary": summary,
+                "sell_actions": [],
+                "buy_actions": [],
+                "hold_updates": hold_updates,
+                "vetoed_signals": [],
+                "dismissed_count": len(dismissed_set),
+            }
 
         # 2. Evaluate BUY signals sized to the user's real account equity & cash
         buy_actions: List[Dict[str, Any]] = []
@@ -2021,6 +2055,10 @@ class LiveTradingCopilotEngine:
                 )
 
         return {
+            "calendar_date": calendar_today_str,
+            "is_trading_day": is_today_trading_day,
+            "market_status_reason": market_status_reason,
+            "next_trading_day": next_open_session,
             "session_date": session_date,
             "account_summary": summary,
             "sell_actions": sell_actions,

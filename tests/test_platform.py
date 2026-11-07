@@ -802,6 +802,14 @@ class TestSwingTradingPlatform(unittest.TestCase):
         self.assertAlmostEqual(float(msft_pos["stop_loss_price"]), 142.0, places=2)
         self.assertAlmostEqual(float(msft_pos["take_profit_price"]), 167.0, places=2)
 
+        # Verify non-trading day (Saturday 2025-05-10) check_calendar_today=True suppresses trade suggestions
+        sat_plan = copilot.get_daily_action_plan(as_of_date="2025-05-10", check_calendar_today=True)
+        self.assertFalse(sat_plan["is_trading_day"])
+        self.assertIn("Saturday", sat_plan["market_status_reason"])
+        self.assertEqual(sat_plan["next_trading_day"], "2025-05-12")
+        self.assertEqual(len(sat_plan["buy_actions"]), 0)
+        self.assertEqual(len(sat_plan["sell_actions"]), 0)
+
         # 8. Verify IDE-Native AI Bridge (`export_ide_ai_context` & `apply_ide_ai_cycle`)
         ide_ctx = orch.export_ide_ai_context(trading_date="2025-05-09", run_daily_first=False)
         self.assertEqual(ide_ctx["session_date"], "2025-05-09")
@@ -816,6 +824,7 @@ class TestSwingTradingPlatform(unittest.TestCase):
                         "bullish_thesis": "IDE LLM verified strong institutional catalyst and relative strength.",
                         "bearish_thesis": "Broad sector multiple compression if yields spike.",
                         "catalyst_assessment": "Positive earnings guidance follow-through.",
+                        "sentiment_score": 0.82,
                         "research_confidence_score": 0.89,
                     }
                 ],
@@ -839,6 +848,8 @@ class TestSwingTradingPlatform(unittest.TestCase):
         )
         self.assertIn(top_tkr, ide_res["research_tickers_enriched"])
         self.assertEqual(len(ide_res["tournament_results"]), 1)
+        ide_jobs = [j for j in orch.get_job_history(limit=10) if j["job_name"] == "ide_ai_cycle"]
+        self.assertTrue(len(ide_jobs) >= 1)
 
 
 if __name__ == "__main__":

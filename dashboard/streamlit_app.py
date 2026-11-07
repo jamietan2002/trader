@@ -1,17 +1,19 @@
 """Streamlit Community Cloud & Local Dashboard Entrypoint (`streamlit run dashboard/streamlit_app.py`).
 
-Minimalist, institutional-grade layout with zero-intervention autonomous monitoring:
-- No manual daily/weekly trigger buttons cluttering the interface (runs 100% autonomously via scheduled cloud workflows).
-- Every tab features a concise one-line summary, hover tooltips on metrics, and an interactive "? How this tab works" guide.
-- Dedicated "Strategies & Live Readiness" tab with a 5-point Real-Money Readiness Scorecard comparing 9-gate historical
-  backtests against forward paper-trading proof.
-- The "Platform Guide" tab provides a visual mental-model diagram of the Daily and Weekly loops, a clear explanation of
-  what is (and isn't) needed from the user, an interactive step-by-step walkthrough, and expandable deep-dive sections.
+Minimalist, institutional-grade layout with top-of-mind operator hierarchy:
+1. Live Copilot (Real Account) — Today's trading-day-aware action checklist, 1-click confirmations, and real account shadow ledger.
+2. Paper Account & Ledger — Forward $100,000 paper portfolio (Daily, Weekly, Total P&L) and day-filtered execution ledger.
+3. Strategies, Rules & Backtests — Unified hub for how every strategy is conceived, its exact entry/exit rules, 9-gate SPY benchmark audit, historical backtest trade logs, and 1-click Golden Base (v1) revert.
+4. AI Research & IDE Bridge — Daily watchlist, post-session proposals, IDE AI reminder checklist, and direct JSON feed bridge (`apply_ide_ai_cycle`).
+5. Risk, Walk-Forward & Logs — Sector concentration vs. 30% cap, 4-window Walk-Forward folds, risk vetoes, and job logs.
+6. Platform Guide — Visual mental-model diagram, interactive walkthrough, and expandable deep dives.
 """
 
 from __future__ import annotations
 
+import json
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -21,6 +23,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from api.server import PlatformApplication
+from core.market_data.models import USTradingCalendar
 
 
 def _get_paper_date_span(snapshots: List[Dict[str, Any]], ledger: List[Dict[str, Any]]) -> str:
@@ -248,30 +251,59 @@ def _build_strategy_readiness_rows(
     return rows
 
 
+STRATEGY_GENESIS_BY_FAMILY: Dict[str, Dict[str, str]] = {
+    "MOMENTUM_TREND": {
+        "origin": "Cross-sectional intermediate-horizon relative strength (Jegadeesh & Titman) combined with dual moving-average trend alignment.",
+        "edge": "Institutional fund accumulation occurs over multi-week cycles; stocks trading above rising 20d/50d SMAs that outperform SPY over 20 days with volume expansion continue drifting higher over 4–14 day swing windows.",
+        "regime": "Bull & steady uptrend regimes (`SPY > SMA50`).",
+    },
+    "PEAD": {
+        "origin": "Post-Earnings Announcement Drift (`PEAD`, Ball & Brown / Bernard & Thomas) with strict point-in-time (`BMO`/`AMC`) visibility.",
+        "edge": "Analysts and institutional committees under-react to major quarterly EPS/revenue beats accompanied by volume surges, creating a multi-day upward drift.",
+        "regime": "Earnings season across all non-crash market regimes.",
+    },
+    "BREAKOUT": {
+        "origin": "Volatility Contraction Pattern (`VCP`) and 20-day Donchian channel breakout with institutional volume confirmation.",
+        "edge": "When a leading stock consolidates in a tight 10-day range (`<= 14%`) and breaks above its prior 20-day high on `>= 1.1x` volume, overhead supply is exhausted and rapid price expansion follows.",
+        "regime": "Transition from consolidation to expansion (`SPY > SMA50`).",
+    },
+    "MEAN_REVERSION": {
+        "origin": "Short-horizon institutional value-zone pullback inside a primary structural uptrend (`Close > SMA200` and `SPY > SMA50`).",
+        "edge": "Liquid leaders experiencing temporary 3-to-5 day pullbacks (`RSI < 55` or near `SMA20` / Lower Bollinger Band) attract dip-buying liquidity and revert toward their upper trend channel.",
+        "regime": "Rotational bull and sideways-up markets.",
+    },
+    "SECTOR_ROTATION": {
+        "origin": "Top-Down GICS Sector Relative Strength Leadership paired with bottom-up stock momentum.",
+        "edge": "Over 60% of intermediate equity movement is driven by sector-level institutional rotation; buying the strongest stocks inside the #1 and #2 ranked sectors captures concentrated institutional inflows.",
+        "regime": "Sector-led bull and macro-rotation markets.",
+    },
+}
+
+
 MENTAL_MODEL_HTML = """
 <div style="background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:18px 20px;margin:10px 0 18px 0;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
   <div style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.06em;color:#94a3b8;margin-bottom:10px;">
-    System Mental Model — 100% Autonomous Two-Loop Architecture (Zero User Input Required)
+    System Mental Model — 100% Autonomous Two-Loop Architecture + IDE AI Alpha Booster
   </div>
   <div style="margin-bottom:14px;">
     <div style="font-size:0.84rem;font-weight:600;color:#38bdf8;margin-bottom:6px;">
-      1. Daily Execution Loop (Mon–Fri at 21:30 UTC · Runs All Promoted Strategies in Parallel)
+      1. Daily Execution Loop (Mon–Fri at 21:30 UTC · Or Type "run" in Antigravity IDE)
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;font-size:0.8rem;">
       <div style="background:#1e293b;padding:10px 12px;border-radius:6px;border-left:3px solid #38bdf8;">
-        <strong>Step 1 · Market Data</strong><br/><span style="color:#94a3b8;">Download daily prices &amp; earnings updates.</span>
+        <strong>Step 1 · Market Data</strong><br/><span style="color:#94a3b8;">Download daily prices &amp; point-in-time earnings.</span>
       </div>
       <div style="background:#1e293b;padding:10px 12px;border-radius:6px;border-left:3px solid #38bdf8;">
-        <strong>Step 2 · AI Research</strong><br/><span style="color:#94a3b8;">Rank liquid US stocks by trend &amp; catalysts.</span>
+        <strong>Step 2 · AI Research</strong><br/><span style="color:#94a3b8;">Rank liquid US stocks by trend &amp; live catalysts.</span>
       </div>
       <div style="background:#1e293b;padding:10px 12px;border-radius:6px;border-left:3px solid #38bdf8;">
-        <strong>Step 3 · Multi-Strategy Signals</strong><br/><span style="color:#94a3b8;">Check all approved strategies &amp; rank signals fairly.</span>
+        <strong>Step 3 · Multi-Strategy Signals</strong><br/><span style="color:#94a3b8;">Evaluate 5 Golden Base models &amp; interleave signals.</span>
       </div>
       <div style="background:#1e293b;padding:10px 12px;border-radius:6px;border-left:3px solid #10b981;">
         <strong>Step 4 · Risk Gate</strong><br/><span style="color:#94a3b8;">Size trade (1% risk) &amp; verify 7 safety caps.</span>
       </div>
       <div style="background:#1e293b;padding:10px 12px;border-radius:6px;border-left:3px solid #10b981;">
-        <strong>Step 5 · Paper Ledger</strong><br/><span style="color:#94a3b8;">Simulate fill after fees &amp; update P&amp;L.</span>
+        <strong>Step 5 · Copilot &amp; Paper</strong><br/><span style="color:#94a3b8;">Update Paper Ledger &amp; Real-Account Copilot Plan.</span>
       </div>
     </div>
   </div>
@@ -287,10 +319,10 @@ MENTAL_MODEL_HTML = """
         <strong>Step B · Draft Upgrade</strong><br/><span style="color:#94a3b8;">Create a candidate strategy version (v+1).</span>
       </div>
       <div style="background:#1e293b;padding:10px 12px;border-radius:6px;border-left:3px solid #f59e0b;">
-        <strong>Step C · 9-Gate Backtest</strong><br/><span style="color:#94a3b8;">Test across historical &amp; walk-forward periods.</span>
+        <strong>Step C · 9-Gate + SPY Exam</strong><br/><span style="color:#94a3b8;">Must beat SPY &amp; incumbent champion in OOS &amp; WF.</span>
       </div>
       <div style="background:#1e293b;padding:10px 12px;border-radius:6px;border-left:3px solid #10b981;">
-        <strong>Step D · Promote &amp; Retire Old</strong><br/><span style="color:#94a3b8;">If all 9 gates pass, v+1 goes live &amp; old version retires.</span>
+        <strong>Step D · Promote or Revert</strong><br/><span style="color:#94a3b8;">Promote v+1 if superior; revert to v1 Golden Base anytime.</span>
       </div>
     </div>
   </div>
@@ -323,13 +355,13 @@ def main() -> None:
         return
 
     st.set_page_config(
-        page_title="Swing Trading AI — Systematic Research & Paper Portfolio",
+        page_title="Swing Trading AI — Systematic Research, Copilot & Paper Portfolio",
         layout="wide",
         initial_sidebar_state="expanded",
     )
 
     app = PlatformApplication()
-    _code_version = "2026-11-07-v9"
+    _code_version = "2026-11-07-v10"
     import api.server as _srv_mod
     if (
         getattr(_srv_mod, "_STREAMLIT_SYNC_VERSION", None) != _code_version
@@ -383,6 +415,21 @@ def main() -> None:
     snapshots = state["snapshots"]
     ledger = state["trade_ledger"]
     positions = state["positions"]
+    jobs = state["jobs"]
+
+    # Determine today's real calendar date and NYSE/NASDAQ market open status
+    today_dt = date.today()
+    today_iso = today_dt.isoformat()
+    today_weekday_name = today_dt.strftime("%A")
+    is_today_trading_day = USTradingCalendar.is_trading_day(today_dt)
+    market_status_reason = USTradingCalendar.non_trading_reason(today_dt)
+    next_trading_day_iso = USTradingCalendar.next_trading_day(today_dt, include_same_day=is_today_trading_day)
+
+    # Check when the IDE AI Cycle (`ide_ai_cycle`) or Daily Workflow was last executed
+    ide_jobs = [j for j in jobs if j.get("job_name") == "ide_ai_cycle"]
+    last_ide_job = ide_jobs[0] if ide_jobs else None
+    last_ide_run_ts = str(last_ide_job["completed_at"])[:16].replace("T", " ") if (last_ide_job and last_ide_job.get("completed_at")) else "Never run yet"
+    ide_ran_today = bool(last_ide_job and str(last_ide_job.get("completed_at", "")).startswith(today_iso))
 
     active_paper_strats = [s for s in strats if s["status"] == "PAPER_TRADING"]
     rejected_strats = [s for s in strats if s["status"] == "REJECTED"]
@@ -402,20 +449,51 @@ def main() -> None:
     weekly_pnl_usd = float(acc.get("weekly_pnl_usd", 0.0))
     weekly_ret_pct = float(acc.get("weekly_return_pct", 0.0))
     readiness_rows = _build_strategy_readiness_rows(strats, ledger, positions)
-    ready_live_count = sum(1 for r in readiness_rows if r["Live Trading Readiness"].startswith("READY FOR LIVE REVIEW"))
+    golden_ready_count = sum(
+        1 for r in readiness_rows if "READY" in r["Live Trading Readiness"]
+    )
 
-    # Minimalist Autonomous Status Sidebar
+    # Minimalist Autonomous Status & IDE AI Reminder Sidebar
     with st.sidebar:
+        st.markdown("### Market & Calendar Status")
+        if is_today_trading_day:
+            st.success(f"**Today: `{today_iso}` ({today_weekday_name})**\n\n🟢 **NYSE / NASDAQ Trading Day**")
+        else:
+            st.warning(
+                f"**Today: `{today_iso}` ({today_weekday_name})**\n\n"
+                f"⏸️ **{market_status_reason}**\n\n"
+                f"Next Market Open: **`{next_trading_day_iso}`**"
+            )
+
+        st.markdown("---")
+        st.markdown("### Daily & Weekly AI Checklist")
+        st.caption("To maximize Paper & Real P&L with live news catalysts and strategy optimization:")
+        st.checkbox(
+            "1. Type `run` in Antigravity IDE chat",
+            value=ide_ran_today,
+            key="sidebar_chk_ide_run",
+            help="Triggers the `run-ai-cycle` skill: runs `ide-context`, searches live web news (`search_web`), tests candidate upgrades (`ide-apply`), and pushes to GitHub.",
+        )
+        st.checkbox(
+            "2. Review Live Copilot Checklist",
+            value=False,
+            key="sidebar_chk_copilot",
+            help="Check Tab 1 (Live Copilot) for any SELL exits, Stop-Loss ratchets, or 1%-risk BUY setups.",
+        )
+        st.checkbox(
+            "3. Confirm Broker Fills (If Traded)",
+            value=False,
+            key="sidebar_chk_fills",
+            help="Click `✓ Bought` or `✓ Sold` in Live Copilot only after executing in your broker.",
+        )
+        st.caption(f"Last IDE AI Run: **`{last_ide_run_ts}`**")
+
+        st.markdown("---")
         st.markdown("### Autonomous Status")
         st.caption(f"Mode: **{acc['trading_mode'].upper()}** ($100,000 Virtual)")
         st.caption(f"Market Data: **{app.settings.market_data_provider.upper()}**")
-        st.caption(f"Active Strategies: **{len(active_paper_strats)} running daily**")
-        st.caption(f"Ready for Live Review: **{ready_live_count} strategy**")
-        st.markdown("---")
-        st.markdown("#### Automated Schedule")
-        st.caption("**Daily Execution**: Mon–Fri, 21:30 UTC (after US market close)")
-        st.caption("**Weekly Upgrade**: Saturday, 10:00 SGT (walk-forward discovery)")
-        st.caption("**Forward Paper Policy**: Only actual daily runs affect the Paper Account; all historical tests run strictly in Backtesting.")
+        st.caption(f"Active Strategies: **{len(active_paper_strats)} Golden Base / Champions**")
+        st.caption(f"Benchmark-Validated: **{golden_ready_count} strategies beat SPY**")
         st.markdown("---")
         if st.button(
             "Reset Paper Account ($100k)",
@@ -427,29 +505,30 @@ def main() -> None:
 
     st.title("Swing Trading AI")
     st.caption(
-        "Autonomous US Equities Research, Statistical Validation, and Paper-Trading Platform • Benchmark: SPY"
+        f"Today: **{today_iso} ({today_weekday_name})** · "
+        f"US Market: **{'OPEN SESSION' if is_today_trading_day else market_status_reason}** · "
+        f"Next Trading Session: **{next_trading_day_iso}** · Benchmark: **SPY**"
     )
 
-    # Compact Executive Summary Expander
+    # Top-of-Mind Executive Command Bar
     status_label = (
         "Active"
         if not acc["kill_switch_engaged"]
         else f"Paused ({acc['kill_switch_reason']})"
     )
     with st.expander(
-        f"System Snapshot — Equity: ${acc['total_equity']:,.2f} ({acc['total_return_pct']:+.2f}%) · "
-        f"Active Strategies: {len(active_paper_strats)} · Ready for Live Review: {ready_live_count} · "
-        f"Open Positions: {acc['open_positions_count']}/10",
+        f"Executive Snapshot & IDE AI Reminder — Paper Equity: ${acc['total_equity']:,.2f} ({acc['total_return_pct']:+.2f}%) · "
+        f"Active Strategies: {len(active_paper_strats)} · IDE AI Status: {'Ran Today' if ide_ran_today else 'Ready to Run (`type run in IDE`)'}",
         expanded=False,
     ):
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.markdown("**Portfolio & Risk Status**")
-            st.write(f"- **State**: {status_label}")
-            st.write(f"- **Drawdown from Peak**: `-{acc['current_drawdown_pct']:.2f}%` (Limit: `15.0%`)")
-            st.write(f"- **Open Positions**: `{acc['open_positions_count']} / 10`")
+            st.markdown("**1. Market Calendar & Portfolio Health**")
+            st.write(f"- **Today's Date**: `{today_iso}` (`{today_weekday_name}`)")
+            st.write(f"- **Market Status**: `{market_status_reason}` (Next Open: `{next_trading_day_iso}`)")
+            st.write(f"- **Risk State**: {status_label} (Drawdown `-{acc['current_drawdown_pct']:.2f}%` / Limit `15.0%`)")
         with c2:
-            st.markdown("**Paper Portfolio Accounting**")
+            st.markdown("**2. Paper Portfolio Accounting (Forward Only)**")
             st.write(f"- **Window**: `{paper_date_span}`")
             st.write(
                 f"- **Formula**: `${acc['starting_capital']:,.2f}` (Start) "
@@ -457,352 +536,37 @@ def main() -> None:
                 f"+ `${acc['unrealised_pnl']:+,.2f}` (Open) "
                 f"= **`${acc['total_equity']:,.2f}`**"
             )
-            st.write(f"- **Strategies**: `{len(active_paper_strats)}` active (`{len(rejected_strats)}` rejected in testing)")
+            st.write(f"- **Active Strategies**: `{len(active_paper_strats)}` (`{len(rejected_strats)}` rejected in testing)")
         with c3:
-            st.markdown("**Your Role (Zero Daily Input)**")
-            st.write("- **Daily & Weekly**: Runs automatically on GitHub Actions.")
-            st.write("- **When Ready for Real Trading**: Check the **Strategies & Readiness** tab for strategies marked `READY FOR LIVE REVIEW`.")
+            st.markdown("**3. Maximize P&L with IDE AI (`run`)**")
+            st.write("- **One-Word IDE Trigger**: Type **`run`** in the Antigravity IDE chat on any trading day (or weekend).")
+            st.write("- **Or Paste AI JSON Directly**: Open **Tab 4 (`AI Research & IDE Bridge`)** to copy an LLM prompt and feed the JSON response directly into the engine.")
 
+    # Reorganized Top-of-Mind Tab Hierarchy (6 Focused, High-Signal Tabs)
     tabs = st.tabs(
         [
-            "Platform Guide",
-            "Overview & P&L",
-            "Strategies & Readiness",
-            "Live Copilot (Real Account)",
-            "Market Research",
-            "Backtesting",
-            "Paper Ledger",
-            "Risk & Analytics",
-            "System Logs",
+            "1. Live Copilot (Real Account)",
+            "2. Paper Account & Ledger",
+            "3. Strategies, Rules & Backtests",
+            "4. AI Research & IDE Bridge",
+            "5. Risk, Walk-Forward & Logs",
+            "6. Platform Guide",
         ]
     )
 
     # =========================================================================
-    # TAB 0: PLATFORM GUIDE (SIMPLE OVERVIEW, DIAGRAM & EXPANDABLE DEEP-DIVES)
+    # TAB 0: LIVE TRADING COPILOT (TOP-OF-MIND DAILY ACTION CHECKLIST)
     # =========================================================================
     with tabs[0]:
-        st.markdown("#### What This System Does & How It Runs")
-        st.write(
-            "This platform manages a simulated **$100,000 US stock portfolio** over **3 to 15 trading-day** holding periods (swing trading). "
-            "It runs **100% automatically in the cloud**—you do not need to click any buttons or make daily decisions. "
-            "**AI agents only research stocks and propose strategy upgrades**, while **strict mathematical code** "
-            "tests those rules on historical data, enforces risk limits, and executes every trade."
-        )
-
-        # Visual Mental Model Diagram
-        st.markdown(MENTAL_MODEL_HTML, unsafe_allow_html=True)
-
-        # Interactive Step-by-Step Explorer
-        st.markdown("##### Interactive Walkthrough — Click Any Question or Stage Below")
-        if "walkthrough_step" not in st.session_state:
-            st.session_state["walkthrough_step"] = "step_daily_vs_weekly"
-
-        b1, b2, b3, b4, b5 = st.columns(5)
-        if b1.button("1. Daily vs Weekly Run", width="stretch"):
-            st.session_state["walkthrough_step"] = "step_daily_vs_weekly"
-        if b2.button("2. How Strategies Share Capital", width="stretch"):
-            st.session_state["walkthrough_step"] = "step_multi_strategy"
-        if b3.button("3. Risk & Position Sizing", width="stretch"):
-            st.session_state["walkthrough_step"] = "step_risk"
-        if b4.button("4. When to Trade Real Money", width="stretch"):
-            st.session_state["walkthrough_step"] = "step_readiness"
-        if b5.button("5. What Is Needed From You", width="stretch"):
-            st.session_state["walkthrough_step"] = "step_user_role"
-
-        step_info = {
-            "step_daily_vs_weekly": (
-                "**1. Daily Run vs. Weekly Run — What is the difference?**\n\n"
-                "- **Daily Run (Mon–Fri after US Market Close)**: Executes the **currently approved strategies** (`PAPER_TRADING` status) on today's real market prices. It does *not* invent new rules—its job is to trade the approved rulebooks day after day to build a real-time paper track record.\n"
-                "- **Weekly Run (Saturday 10:00 SGT)**: This is the **self-improvement engine**. It reviews the week's closed trades, drafts a refined strategy version (`v+1`), and tests it against the 9-gate historical & walk-forward exam. If `v+1` passes all 9 gates, it automatically replaces the older version (`RETIRED`)."
-            ),
-            "step_multi_strategy": (
-                "**2. How Multiple Strategies Run Together Every Day**\n\n"
-                "- The system starts with **3 baseline strategy families** (`Momentum Trend`, `Volatility Breakout`, and `Earnings Drift`) and tests all of them.\n"
-                "- Every strategy that passes all 9 validation gates is set to **`PAPER_TRADING`** and runs **every single day**.\n"
-                "- **Fair Signal Allocation**: When multiple strategies trigger buy signals on the same day, the execution engine interleaves signals across strategy families by conviction score so no single strategy hogs the portfolio's cash or sector limits."
-            ),
-            "step_risk": (
-                "**3. Position Sizing & 7 Risk Guardrails (`PortfolioRiskManager`)**\n\n"
-                "- **1.0% Risk Per Trade**: Share size is calculated from stock volatility (`ATR`) so that if a stock hits its stop-loss, the portfolio loses at most `~1.0%` (`$1,000` on `$100,000`).\n"
-                "- **Portfolio Caps**: Max `5.0%` combined open stop-loss risk across all positions, max `15.0%` in one stock, max `30.0%` in one sector, max `10` open positions, and an automatic `15.0%` drawdown circuit breaker."
-            ),
-            "step_readiness": (
-                "**4. How to Evaluate a Strategy for Real-Money Trading**\n\n"
-                "Open the **Strategies & Readiness** tab. A strategy is flagged **`READY FOR LIVE REVIEW`** only when it proves itself in **both** historical testing and live forward paper trading:\n"
-                "1. **9 / 9 Backtest & Walk-Forward Gates Passed** (Sharpe $\\ge 1.0$, Profit Factor $\\ge 1.3$, Max Drawdown $\\le 15\\%$, profitable after $2\\times$ fees).\n"
-                "2. **At least 20 Closed Forward Paper Trades** (proving the edge works in live daily market conditions, not just past history).\n"
-                "3. **Forward Paper Profit Factor $\\ge 1.30$** and **Positive Net Paper P&L** after brokerage commissions and slippage."
-            ),
-            "step_user_role": (
-                "**5. What Exactly Is Needed From You?**\n\n"
-                "- **Day-to-Day / Week-to-Week**: **Nothing (`0` user input).** Data ingestion, daily paper trading, and Saturday strategy discovery all run automatically in the background.\n"
-                "- **Periodic Check-In (Whenever You Like)**: Glance at the **Strategies & Readiness** tab. Once a strategy reaches `READY FOR LIVE REVIEW` and you are comfortable with its drawdown and trade history, you can mirror its signals in your personal brokerage account."
-            ),
-        }
-        st.info(step_info[st.session_state["walkthrough_step"]])
-
-        st.markdown("##### Deeper Dives — Expand Any Topic Below")
-        with st.expander("The 3 Strategy Families — How buy and sell signals work"):
-            st.markdown(
-                """
-                1. **Momentum & Relative Strength (`strat_momentum_trend`)** — Buys liquid stocks in established uptrends (above 20d and 50d moving averages) that are outperforming the S&P 500 (`SPY`) with strong volume. Held for 4–12 trading days.
-                2. **Volatility Breakout (`strat_volatility_breakout`)** — Identifies stocks that consolidate quietly in a tight 10-day range and then break above their 20-day high on 1.35x normal volume. Held for 3–12 trading days.
-                3. **Post-Earnings Drift (`strat_pead_drift`)** — Captures multi-day follow-through after a company beats quarterly earnings and revenue estimates with a volume surge. Held for 3–10 trading days.
-                """
-            )
-        with st.expander("The 7 Risk Controls — How the portfolio is protected from large losses"):
-            st.markdown(
-                """
-                - **1.0% Max Risk Per Trade**: Position size scales automatically with stock volatility (`ATR`) so a stop-loss exit loses at most `~$1,000` on a `$100,000` account.
-                - **5.0% Max Total Open Risk (Portfolio Heat)**: Combined stop-loss risk across all open positions cannot exceed `5.0%` of equity.
-                - **15.0% Single-Stock Limit**: Prevents over-allocating to any single company.
-                - **30.0% Sector Limit**: Prevents over-concentration in any single industry (e.g., Technology).
-                - **Max 10 Open Positions**: Keeps the portfolio focused and liquid.
-                - **Correlation & Liquidity Filter**: Blocks stocks with `<$20M` daily trading volume or `>0.80` return correlation with an existing holding.
-                - **15.0% Drawdown Kill Switch**: Automatically pauses new buying if total portfolio equity drops `15%` below its peak.
-                """
-            )
-        with st.expander("The 9 Validation Gates — How new strategy versions are tested before trading"):
-            st.markdown(
-                """
-                A strategy or weekly upgrade is only allowed to trade paper capital (`PAPER_TRADING` status) if it passes all 9 tests on historical data:
-                1. **Positive Out-of-Sample Return** (profitable on unseen test dates)
-                2. **Sharpe Ratio $\\ge 1.0$** (strong return relative to daily volatility)
-                3. **Profit Factor $\\ge 1.3$** (gross winning dollars $\\ge 1.3\\times$ gross losing dollars)
-                4. **Maximum Drawdown $\\le 15.0\\%$** (worst peak-to-valley drop stays under 15%)
-                5. **Minimum 15 Trades** (statistically meaningful sample size)
-                6. **Walk-Forward Consistency $\\ge 60\\%$** (profitable across multiple rolling time windows)
-                7. **Survives $2\\times$ Transaction Cost Stress Test** (remains profitable even if fees and slippage double)
-                8. **Beats `SPY` Risk-Adjusted** (delivers higher Sharpe or lower drawdown than passive index holding)
-                9. **No Single-Trade Dependency** (no single lucky trade accounts for $>65\\%$ of total profit)
-                """
-            )
-        with st.expander("How Profit & Loss (P&L) Is Calculated — Paper Account vs. Historical Backtests"):
-            st.markdown(
-                """
-                - **Simulated Paper Portfolio (Overview & Paper Ledger tabs)**: Tracks day-by-day trades starting from `$100,000.00`.
-                  $$\\text{Current Equity} = \\text{Starting Capital (\\$100,000)} + \\text{Realised P\\&L (Closed Trades)} + \\text{Unrealised P\\&L (Open Positions)}$$
-                  Every trade deducts realistic brokerage commissions (`$0.005/share`, min `$1.00`) and bid-ask slippage (`5.5 bps`).
-                - **Historical Backtests (Strategies & Backtesting tabs)**: Simulates how a strategy rulebook would have performed over multi-year historical data (`2023–2025`). Backtest numbers are used strictly to validate strategies and are never mixed into your live paper account balance.
-                """
-            )
-
-    # =========================================================================
-    # TAB 1: OVERVIEW & TRANSPARENT P&L BREAKDOWN
-    # =========================================================================
-    with tabs[1]:
         _render_tab_header(
             st,
-            "Overview & P&L: Real-time simulated portfolio value, multi-strategy attribution, and currently held positions.",
-            "How this tab works",
-            "**What this tab shows:** Your simulated `$100,000` paper trading account.\n\n"
-            "- **Realised P&L**: Profit or loss locked in from completed (closed) trades after subtracting commissions and slippage.\n"
-            "- **Unrealised P&L**: Floating profit or loss on stocks currently held, based on the latest market close price.\n"
-            "- **Strategy Attribution Table**: Shows every strategy that has traded in the paper account, its win rate, profit factor, date span, and exact P&L contribution.",
-        )
-
-        st.markdown("#### Paper Portfolio Profit & Loss Attribution (Forward Runs Only)")
-        st.markdown(
-            f"""
-            - **Active Daily Strategies**: {active_strat_names}
-            - **Measurement Window**: `{paper_date_span}` *(Forward daily runs only — historical testing is isolated in Backtesting)*
-            - **Derivation**:
-              `Starting Capital ($100,000.00)` + `Realised P&L (${acc['realised_pnl']:+,.2f})` + `Unrealised P&L (${acc['unrealised_pnl']:+,.2f})` = **`Current Equity (${acc['total_equity']:,.2f})`** *(Net of `${total_fees_paid:,.2f}` in transaction costs)*
-            """
-        )
-
-        k1, k2, k3, k4, k5 = st.columns(5)
-        k1.metric(
-            "Total Equity",
-            f"${acc['total_equity']:,.2f}",
-            f"Start: ${acc['starting_capital']:,.0f} ({acc['total_return_pct']:+.2f}%)",
-            help="Cash Balance + Market Value of Open Positions. Equals Starting Capital ($100k) + Realised P&L + Unrealised P&L.",
-        )
-        k2.metric(
-            "Daily P&L (Latest Session)",
-            f"${daily_pnl_usd:+,.2f}",
-            f"{daily_ret_pct:+.2f}% today",
-            help="Single-session change in Total Equity from the prior trading session close to the latest session close.",
-        )
-        k3.metric(
-            "Weekly P&L (Last 5 Sessions)",
-            f"${weekly_pnl_usd:+,.2f}",
-            f"{weekly_ret_pct:+.2f}% (5d)",
-            help="Rolling 5-session (1 trading week) change in Total Equity across actual forward paper runs.",
-        )
-        k4.metric(
-            "Total P&L (Since Reset)",
-            f"${net_dollar_pnl:+,.2f}",
-            f"Realised ${acc['realised_pnl']:+,.0f} | Unrealised ${acc['unrealised_pnl']:+,.0f}",
-            help="Cumulative net P&L since the $100,000 baseline reset (Realised P&L from closed trades + Unrealised P&L on open positions, net of fees).",
-        )
-        k5.metric(
-            "Available Cash",
-            f"${acc['cash_balance']:,.2f}",
-            f"{acc['open_positions_count']} open | DD -{acc['current_drawdown_pct']:.2f}%",
-            help="Uninvested cash available for new swing entries. Drawdown measures the drop from the portfolio's highest equity peak.",
-        )
-
-        st.markdown("#### Strategy-Level P&L Breakdown (Paper Account)")
-        strat_pnl_rows = _summarize_pnl_by_strategy(ledger, positions, strats)
-        if strat_pnl_rows:
-            st.dataframe(strat_pnl_rows, width="stretch")
-        else:
-            st.info("No paper trades executed in the current window.")
-
-        st.markdown("#### Open Positions")
-        if positions:
-            clean_pos = [
-                {
-                    "Ticker": p["ticker"],
-                    "Strategy": f"{p['strategy_id']} v{p['strategy_version']}",
-                    "Entry Date": p["opened_date"],
-                    "Holding Days": p["holding_days"],
-                    "Quantity": p["quantity"],
-                    "Avg Entry Price": f"${p['avg_entry_price']:.2f}",
-                    "Current Price": f"${p['current_price']:.2f}",
-                    "Stop-Loss": f"${p['stop_loss_price']:.2f}" if p.get("stop_loss_price") else "-",
-                    "Take-Profit": f"${p['take_profit_price']:.2f}" if p.get("take_profit_price") else "-",
-                    "Market Value": f"${p['market_value']:,.2f}",
-                    "Unrealised P&L": f"${p['unrealised_pnl']:+,.2f} ({p['unrealised_return_pct']:+.2f}%)",
-                }
-                for p in positions
-            ]
-            st.dataframe(clean_pos, width="stretch")
-        else:
-            st.write("No open positions currently held (100% cash).")
-
-    # =========================================================================
-    # TAB 2: STRATEGIES & LIVE READINESS SCORECARD
-    # =========================================================================
-    with tabs[2]:
-        _render_tab_header(
-            st,
-            "Strategies & Readiness: Side-by-side scorecard comparing 9-gate historical backtests with forward paper-trading proof to tell you when a strategy is ready for real trading.",
-            "How to evaluate readiness",
-            "**How to know when a strategy is ready for real money:**\n\n"
-            "1. **Backtest Gates (`9 / 9 Passed`)**: Proves the strategy survived multi-year historical data, walk-forward windows, and $2\\times$ cost stress tests.\n"
-            "2. **Forward Paper Trades (`>= 20 Closed Trades`)**: Proves the strategy works in live day-by-day market conditions.\n"
-            "3. **Forward Profit Factor (`>= 1.30`) & Positive P&L**: Proves winning paper trades outweigh losing paper trades by at least $1.30 to $1.00 after fees.\n"
-            "When all criteria are met, **Live Trading Readiness** turns **`READY FOR LIVE REVIEW`**.",
-        )
-
-        st.markdown("#### Strategy Evaluation & Live-Trading Readiness Scorecard (vs. SPY Benchmark)")
-        rb_col1, rb_col2, rb_col3 = st.columns([2.4, 1.3, 1.3])
-        with rb_col1:
-            st.caption(
-                "**Golden Base Safeguard**: Every `v1 ★ Base` model is pinned as an immutable Golden Baseline that beats `SPY` "
-                "in both Full Period (`+70.7%` to `+77.5%` vs SPY `+61.9%`) and Out-of-Sample (`+11.5%` to `+23.0%` vs SPY `+9.7%`). "
-                "Future weekly iterations (`v2+`) are only promoted if they beat the incumbent champion—and you can revert to `v1` anytime."
-            )
-        with rb_col2:
-            if st.button(
-                "Revert All to Golden Base (v1)",
-                width="stretch",
-                help="Immediately restores all Golden Base v1 models to PAPER_TRADING and retires any experimental v2+ versions.",
-            ):
-                app.orchestrator.registry.revert_to_golden_baseline()
-                st.rerun()
-        with rb_col3:
-            if st.button(
-                "Enforce Best Champion Versions",
-                width="stretch",
-                help="Ensures the highest-performing evaluated version (by Return & Sharpe) of each strategy family is active.",
-            ):
-                for sid in {s["strategy_id"] for s in strats}:
-                    app.orchestrator.registry.rollback_to_best_champion(sid)
-                st.rerun()
-
-        display_scorecard = [
-            {k: v for k, v in r.items() if not k.startswith("_")}
-            for r in readiness_rows
-        ]
-        st.dataframe(display_scorecard, width="stretch", hide_index=True)
-
-        st.markdown("#### Expand Any Strategy for Its Institutional SPY Benchmark Audit & Revert Controls")
-        for r in readiness_rows:
-            s = r["_raw_strategy"]
-            m = s.get("backtest_summary") or {}
-            val = s.get("validation_summary") or {}
-            oos = val.get("oos_metrics") or {}
-            wf = val.get("walk_forward") or {}
-            checks = r["_checks"]
-            header_label = (
-                f"{r['Strategy']} — {r['Name']}  ·  Status: {r['Status']}  ·  "
-                f"Gates: {r['Gates']}  ·  Readiness: {r['Live Trading Readiness']}"
-            )
-            with st.expander(header_label, expanded=False):
-                c_left, c_mid, c_right = st.columns([1.3, 1.4, 1.3])
-                with c_left:
-                    st.markdown("**1. Institutional Promotion Gates**")
-                    if checks:
-                        for gate_name, passed in checks.items():
-                            icon = "PASS" if passed else "FAIL"
-                            clean_gate = gate_name.replace("_", " ").title()
-                            st.write(f"- **[{icon}]** {clean_gate}")
-                    else:
-                        st.write(s.get("promotion_decision_reason", "No gate breakdown recorded."))
-                with c_mid:
-                    st.markdown("**2. Benchmark Dominance vs. S&P 500 (`SPY`)**")
-                    st.write(
-                        f"- **Full Return vs SPY**: `{m.get('total_return_pct', 0.0):+.2f}%` vs `{m.get('benchmark_return_pct', 0.0):+.2f}%` "
-                        f"(**Excess: `{m.get('excess_return_vs_spy_pct', 0.0):+.2f}%`**)"
-                    )
-                    st.write(
-                        f"- **Out-of-Sample vs SPY**: `{oos.get('total_return_pct', 0.0):+.2f}%` vs `{oos.get('benchmark_return_pct', 0.0):+.2f}%` "
-                        f"(**OOS Excess: `{float(oos.get('total_return_pct', 0.0)) - float(oos.get('benchmark_return_pct', 0.0)):+.2f}%`**)"
-                    )
-                    st.write(
-                        f"- **Jensen's Alpha & Beta**: `α = {m.get('alpha_annualised_pct', 0.0):+.2f}%/yr` · "
-                        f"`β = {m.get('beta_vs_spy', 0.0):.2f}` · `Info Ratio = {m.get('information_ratio', 0.0):.2f}`"
-                    )
-                    st.write(
-                        f"- **Upside / Downside Capture**: `{m.get('upside_capture_pct', 0.0):.1f}%` up / "
-                        f"`{m.get('downside_capture_pct', 0.0):.1f}%` down (**Ratio: `{m.get('capture_ratio', 0.0):.2f}x`**)"
-                    )
-                    st.write(
-                        f"- **Drawdown Depth & Duration**: MaxDD `-{m.get('max_drawdown_pct', 0.0):.2f}%` · "
-                        f"Ulcer Index `{m.get('ulcer_index', 0.0):.2f}` · Martin Ratio `{m.get('martin_ratio', 0.0):.2f}` · "
-                        f"Max Time Under Water `{m.get('max_time_under_water_days', 0)}d`"
-                    )
-                    st.write(
-                        f"- **Payoff & Statistical Confidence**: Omega `{m.get('omega_ratio', 1.0):.2f}` · "
-                        f"ROIC `{m.get('roic_annualised_pct', 0.0):.1f}%/yr` · "
-                        f"DSR `{m.get('deflated_sharpe_pct', 0.0):.1f}%` · "
-                        f"WF Consistency `{float(wf.get('consistency_ratio', 0.0))*100:.0f}%` (WFE `{wf.get('walk_forward_efficiency_ratio', 0.0):.2f}`)"
-                    )
-                with c_right:
-                    st.markdown("**3. Forward Paper Track Record & Version Control**")
-                    g1_ok = r["Gates"].startswith("9 / 9")
-                    g2_ok = r["_paper_closed"] >= 20
-                    g3_ok = r["_paper_pf"] >= 1.3 and r["_paper_closed"] > 0
-                    g4_ok = r["_paper_net_pnl"] > 0
-                    st.write(f"- **[{'PASS' if g1_ok else 'WAIT'}]** Passed all historical & SPY gates (`{r['Gates']}`)")
-                    st.write(f"- **[{'PASS' if g2_ok else 'WAIT'}]** 20+ forward paper trades (`{r['_paper_closed']} / 20`)")
-                    st.write(f"- **[{'PASS' if g3_ok else 'WAIT'}]** Forward Paper PF $\\ge 1.30$ (`{r['_paper_pf']:.2f}`)")
-                    st.write(f"- **[{'PASS' if g4_ok else 'WAIT'}]** Positive Forward Paper P&L (`${r['_paper_net_pnl']:+,.2f}`)")
-                    if st.button(
-                        f"Revert {s['strategy_id']} to Golden Base (v1)",
-                        key=f"revert_v1_{s['strategy_id']}_{s['version']}",
-                        width="stretch",
-                    ):
-                        app.orchestrator.registry.revert_to_golden_baseline(s["strategy_id"])
-                        st.rerun()
-                st.caption(f"**Hypothesis**: {s['hypothesis']}")
-
-    # =========================================================================
-    # TAB 3: LIVE TRADING COPILOT (AIR-GAPPED REAL ACCOUNT SHADOW LEDGER)
-    # =========================================================================
-    with tabs[3]:
-        _render_tab_header(
-            st,
-            "Live Copilot (Real Account): Step-by-step daily BUY and SELL instructions sized to your real account balance—with zero access to your brokerage account.",
+            "Live Copilot (Real Account): Today's trading-day-aware BUY/SELL checklist and real-account shadow portfolio—with zero access to your brokerage account.",
             "How Live Copilot works",
             "**100% Air-Gapped Shadow Portfolio:**\n\n"
-            "- **Zero Broker Access**: This engine never connects to your real broker. You execute trades in your own brokerage app.\n"
-            "- **Never Assumes Your Positions**: Recommendations stay pending until you click **✓ Bought** or **✓ Sold** (where you can enter the exact price and share count you got).\n"
-            "- **Adapts to Your Real Holdings**: Stop-loss, take-profit, holding-day countdowns, and 1% risk sizing all adapt to your actual confirmed positions and cash balance.\n"
-            "- **Full Mistake Recovery**: Made a typo? Use **Undo Last Trade**, **Restore Skipped Signals**, or **Add / Edit a Position** anytime.",
+            "- **Trading-Day Aware**: Automatically checks today's calendar date (`NYSE`/`NASDAQ` calendar). On weekends or market holidays, it clearly states the market is closed and suppresses stale trade suggestions.\n"
+            "- **Never Assumes Your Positions**: Recommendations stay pending until you click **✓ Bought** or **✓ Sold**.\n"
+            "- **Adapts to Your Real Holdings**: Stop-loss ratchets (`+1.25R` Breakeven, `+1.0R` Chandelier), holding-day countdowns, and 1% risk sizing adapt to your actual confirmed positions and cash balance.\n"
+            "- **Full Mistake Recovery**: Use **Undo Last Trade**, **Restore Skipped Signals**, or **Add / Edit a Position** anytime.",
         )
 
         # Display flash notification banner if a Copilot action just completed
@@ -815,12 +579,13 @@ def main() -> None:
         copilot_data = state.get("copilot") or {}
         plan = copilot_data.get("action_plan") or app.orchestrator.live_copilot.get_daily_action_plan()
         real_acc = plan["account_summary"]
-        sell_actions = plan["sell_actions"]
-        buy_actions = plan["buy_actions"]
+        raw_sell_actions = plan["sell_actions"]
+        raw_buy_actions = plan["buy_actions"]
         hold_updates = plan["hold_updates"]
         dismissed_count = int(plan.get("dismissed_count") or 0)
         real_positions = copilot_data.get("positions") or []
         real_history = copilot_data.get("trade_history") or []
+        latest_bar_date = str(plan.get("session_date") or today_iso)
 
         # Synchronize st.session_state["copilot_cash_input"] whenever database cash_balance changes
         db_cash_val = round(float(real_acc["cash_balance"]), 2)
@@ -840,7 +605,7 @@ def main() -> None:
         rc2.metric(
             "Available Cash",
             f"${real_acc['cash_balance']:,.2f}",
-            help="Uninvested cash used to size today's BUY signals (1.0% max risk per trade).",
+            help="Uninvested cash used to size BUY signals (1.0% max risk per trade).",
         )
         rc3.metric(
             "Open Holdings",
@@ -927,11 +692,13 @@ def main() -> None:
 
         st.markdown("---")
         chk_hdr_c1, chk_hdr_c2, chk_hdr_c3 = st.columns([3.0, 1.1, 1.1])
-        chk_hdr_c1.markdown(f"#### 1. Today's Action Checklist (Session `{plan['session_date']}`)")
+        chk_hdr_c1.markdown(
+            f"#### 1. Today's Action Checklist — `{today_iso}` ({today_weekday_name})"
+        )
         if dismissed_count > 0:
-            if chk_hdr_c2.button(f"Restore Skipped ({dismissed_count})", key="btn_restore_skipped", width="stretch", help="Bring back signals you clicked Skip or Hold on today."):
-                restored_n = app.orchestrator.live_copilot.restore_dismissed_signals(plan["session_date"])
-                st.session_state["_copilot_flash_msg"] = f"Restored {restored_n} skipped signal(s) for {plan['session_date']}."
+            if chk_hdr_c2.button(f"Restore Skipped ({dismissed_count})", key="btn_restore_skipped", width="stretch", help="Bring back signals you clicked Skip or Hold on."):
+                restored_n = app.orchestrator.live_copilot.restore_dismissed_signals(latest_bar_date)
+                st.session_state["_copilot_flash_msg"] = f"Restored {restored_n} skipped signal(s)."
                 st.rerun()
         if real_history:
             last_t = real_history[0]
@@ -940,142 +707,166 @@ def main() -> None:
                 st.session_state["_copilot_flash_msg"] = f"Undid {last_t['side']} {last_t['quantity']} {last_t['ticker']} @ ${float(last_t['fill_price']):.2f}."
                 st.rerun()
 
-        # A. SELL Actions (Exits on confirmed positions)
-        if sell_actions:
-            st.markdown("##### SELL — Exit Signals on Your Holdings")
-            for idx, sa in enumerate(sell_actions):
-                sc_info, sc_qty, sc_px, sc_btn1, sc_btn2 = st.columns([2.6, 0.8, 0.9, 0.9, 0.7])
-                s_qty_sig = f"{sa['ticker']}_{sa['quantity_to_sell']}_{sa['reference_exit_price']}"
-                s_qty = sc_qty.number_input(
-                    "Shares",
-                    min_value=1,
-                    max_value=int(sa["quantity_to_sell"]),
-                    value=int(sa["quantity_to_sell"]),
-                    key=f"sell_qty_{s_qty_sig}_{idx}",
-                )
-                s_price = sc_px.number_input(
-                    "Exit Price ($)",
-                    min_value=0.01,
-                    value=float(sa["reference_exit_price"]),
-                    step=0.10,
-                    key=f"sell_px_{s_qty_sig}_{idx}",
-                )
-                live_est_pnl = round((float(s_price) - float(sa["avg_entry_price"])) * int(s_qty), 2)
-                with sc_info:
-                    st.warning(
-                        f"**SELL `{s_qty}` `{sa['ticker']}`** (`Est. P&L: ${live_est_pnl:+,.2f}`)\n\n"
-                        f"Your Entry `${sa['avg_entry_price']:.2f}` → Exit `${float(s_price):.2f}` · *{sa['reason']}*"
-                    )
-                with sc_btn1:
-                    st.write("")
-                    if st.button(f"✓ Sold {sa['ticker']}", key=f"btn_sell_{s_qty_sig}_{idx}", width="stretch"):
-                        app.orchestrator.live_copilot.confirm_sell_execution(
-                            ticker=sa["ticker"],
-                            quantity=int(s_qty),
-                            fill_price=float(s_price),
-                            fees_usd=0.0,
-                            notes=sa["reason"],
-                        )
-                        st.session_state["_copilot_flash_msg"] = (
-                            f"Confirmed SELL {int(s_qty)} {sa['ticker']} @ ${float(s_price):.2f} "
-                            f"(Realised P&L: ${live_est_pnl:+,.2f})."
-                        )
-                        st.rerun()
-                with sc_btn2:
-                    st.write("")
-                    if st.button("Hold", key=f"btn_skip_sell_{s_qty_sig}_{idx}", width="stretch", help="Hide this sell signal for today and keep holding."):
-                        app.orchestrator.live_copilot.dismiss_signal(
-                            signal_date=sa["signal_date"],
-                            strategy_id=sa["strategy_id"],
-                            ticker=sa["ticker"],
-                            action="SELL",
-                        )
-                        st.session_state["_copilot_flash_msg"] = f"Marked {sa['ticker']} as Hold for today (click 'Restore Skipped' to undo)."
-                        st.rerun()
+        # Trading-Day Gate: If today is a weekend or US market holiday, state so and suppress suggestions by default
+        show_signals_today = is_today_trading_day
+        if not is_today_trading_day:
+            st.info(
+                f"**No Trade Suggestions Today (`{today_iso}` — {market_status_reason})**\n\n"
+                f"US equity markets (`NYSE` & `NASDAQ`) are closed today, so no new `BUY` or `SELL` orders should be placed today. "
+                f"The next trading session is **`{next_trading_day_iso}`** (latest completed market data bar: `{latest_bar_date}`)."
+            )
+            show_signals_today = st.checkbox(
+                f"Preview watchlist setups from latest market close (`{latest_bar_date}`) for `{next_trading_day_iso}` preparation",
+                value=False,
+                key="copilot_preview_non_trading_day",
+            )
+        elif latest_bar_date < today_iso:
+            st.caption(
+                f"🟢 **Today (`{today_iso}`) is an active US Trading Day.** "
+                f"Signals below are evaluated from the most recent completed market close (`{latest_bar_date}`). "
+                f"*Tip: Type **`run`** in the Antigravity IDE after market close to ingest the latest bars and live news catalysts.*"
+            )
 
-        # B. BUY Actions (New entries sized to user's real cash & equity)
-        if buy_actions:
-            st.markdown("##### BUY — New Setups Sized to Your Account (1% Max Risk)")
-            for idx, ba in enumerate(buy_actions):
-                bc_info, bc_qty, bc_px, bc_btn1, bc_btn2 = st.columns([2.6, 0.8, 0.9, 0.9, 0.7])
-                b_sig = f"{ba['ticker']}_{ba['recommended_shares']}_{ba['reference_entry_price']}"
-                b_qty = bc_qty.number_input(
-                    "Shares",
-                    min_value=1,
-                    value=int(ba["recommended_shares"]),
-                    step=1,
-                    key=f"buy_qty_{b_sig}_{idx}",
-                )
-                b_price = bc_px.number_input(
-                    "Fill Price ($)",
-                    min_value=0.01,
-                    value=float(ba["reference_entry_price"]),
-                    step=0.10,
-                    key=f"buy_px_{b_sig}_{idx}",
-                )
-                ref_px = float(ba["reference_entry_price"])
-                px_shift = float(b_price) - ref_px
-                adj_stop = round(max(0.01, float(ba["stop_loss_price"]) + px_shift), 2) if ba.get("stop_loss_price") else 0.0
-                adj_tp = round(max(float(b_price) + 0.01, float(ba["take_profit_price"]) + px_shift), 2) if ba.get("take_profit_price") else 0.0
-                live_cost = round(int(b_qty) * float(b_price), 2)
-                live_weight = round((live_cost / max(1.0, float(real_acc["total_equity"]))) * 100.0, 1)
-                live_risk = round(max(0.0, (float(b_price) - adj_stop) * int(b_qty)), 0)
-                with bc_info:
-                    st.markdown(
-                        f"**BUY `{int(b_qty)}` `{ba['ticker']}` @ `${float(b_price):.2f}`** "
-                        f"(`~${live_cost:,.0f}` · `{live_weight:.1f}%` of account)  \n"
-                        f"Set Broker Bracket: **Stop-Loss `${adj_stop:.2f}`** (`-${live_risk:,.0f}` max risk) · "
-                        f"**Take-Profit `${adj_tp:.2f}`** · *Max Hold `{ba['holding_horizon_days']}`*  \n"
-                        f"<span style='color:#94a3b8;font-size:0.82rem;'>{ba['strategy_id']} v{ba['strategy_version']} — {ba['reason']}</span>",
-                        unsafe_allow_html=True,
-                    )
-                with bc_btn1:
-                    st.write("")
-                    if st.button(
-                        f"✓ Bought {ba['ticker']}",
-                        key=f"btn_buy_{b_sig}_{idx}",
-                        width="stretch",
-                    ):
-                        app.orchestrator.live_copilot.confirm_buy_execution(
-                            ticker=ba["ticker"],
-                            strategy_id=ba["strategy_id"],
-                            strategy_version=int(ba["strategy_version"]),
-                            quantity=int(b_qty),
-                            fill_price=float(b_price),
-                            fees_usd=0.0,
-                            stop_loss_price=ba["stop_loss_price"],
-                            take_profit_price=ba["take_profit_price"],
-                            reference_entry_price=ref_px,
-                            sector=ba["sector"],
-                            notes=ba["reason"],
-                        )
-                        st.session_state["_copilot_flash_msg"] = (
-                            f"Confirmed BUY {int(b_qty)} {ba['ticker']} @ ${float(b_price):.2f} "
-                            f"(Stop ${adj_stop:.2f} · Target ${adj_tp:.2f})."
-                        )
-                        st.rerun()
-                with bc_btn2:
-                    st.write("")
-                    if st.button(
-                        "Skip",
-                        key=f"btn_skip_{b_sig}_{idx}",
-                        width="stretch",
-                    ):
-                        app.orchestrator.live_copilot.dismiss_signal(
-                            signal_date=ba["signal_date"],
-                            strategy_id=ba["strategy_id"],
-                            ticker=ba["ticker"],
-                            action="BUY",
-                        )
-                        st.session_state["_copilot_flash_msg"] = f"Skipped {ba['ticker']} for today (click 'Restore Skipped' to undo)."
-                        st.rerun()
-        elif not sell_actions:
-            st.info("No new BUY or SELL actions required today. All open holdings remain within their target brackets.")
+        sell_actions = raw_sell_actions if show_signals_today else []
+        buy_actions = raw_buy_actions if show_signals_today else []
 
-        vetoed_sigs = plan.get("vetoed_signals") or []
-        if vetoed_sigs:
-            with st.expander(f"Signals Filtered Out by Your Risk Caps Today ({len(vetoed_sigs)})", expanded=False):
-                st.dataframe(vetoed_sigs, width="stretch")
+        if show_signals_today:
+            # A. SELL Actions (Exits on confirmed positions)
+            if sell_actions:
+                st.markdown("##### SELL — Exit Signals on Your Holdings")
+                for idx, sa in enumerate(sell_actions):
+                    sc_info, sc_qty, sc_px, sc_btn1, sc_btn2 = st.columns([2.6, 0.8, 0.9, 0.9, 0.7])
+                    s_qty_sig = f"{sa['ticker']}_{sa['quantity_to_sell']}_{sa['reference_exit_price']}"
+                    s_qty = sc_qty.number_input(
+                        "Shares",
+                        min_value=1,
+                        max_value=int(sa["quantity_to_sell"]),
+                        value=int(sa["quantity_to_sell"]),
+                        key=f"sell_qty_{s_qty_sig}_{idx}",
+                    )
+                    s_price = sc_px.number_input(
+                        "Exit Price ($)",
+                        min_value=0.01,
+                        value=float(sa["reference_exit_price"]),
+                        step=0.10,
+                        key=f"sell_px_{s_qty_sig}_{idx}",
+                    )
+                    live_est_pnl = round((float(s_price) - float(sa["avg_entry_price"])) * int(s_qty), 2)
+                    with sc_info:
+                        st.warning(
+                            f"**SELL `{s_qty}` `{sa['ticker']}`** (`Est. P&L: ${live_est_pnl:+,.2f}`)\n\n"
+                            f"Your Entry `${sa['avg_entry_price']:.2f}` → Exit `${float(s_price):.2f}` · *{sa['reason']}*"
+                        )
+                    with sc_btn1:
+                        st.write("")
+                        if st.button(f"✓ Sold {sa['ticker']}", key=f"btn_sell_{s_qty_sig}_{idx}", width="stretch"):
+                            app.orchestrator.live_copilot.confirm_sell_execution(
+                                ticker=sa["ticker"],
+                                quantity=int(s_qty),
+                                fill_price=float(s_price),
+                                fees_usd=0.0,
+                                notes=sa["reason"],
+                            )
+                            st.session_state["_copilot_flash_msg"] = (
+                                f"Confirmed SELL {int(s_qty)} {sa['ticker']} @ ${float(s_price):.2f} "
+                                f"(Realised P&L: ${live_est_pnl:+,.2f})."
+                            )
+                            st.rerun()
+                    with sc_btn2:
+                        st.write("")
+                        if st.button("Hold", key=f"btn_skip_sell_{s_qty_sig}_{idx}", width="stretch", help="Hide this sell signal for today and keep holding."):
+                            app.orchestrator.live_copilot.dismiss_signal(
+                                signal_date=sa["signal_date"],
+                                strategy_id=sa["strategy_id"],
+                                ticker=sa["ticker"],
+                                action="SELL",
+                            )
+                            st.session_state["_copilot_flash_msg"] = f"Marked {sa['ticker']} as Hold for today (click 'Restore Skipped' to undo)."
+                            st.rerun()
+
+            # B. BUY Actions (New entries sized to user's real cash & equity)
+            if buy_actions:
+                st.markdown("##### BUY — New Setups Sized to Your Account (1% Max Risk)")
+                for idx, ba in enumerate(buy_actions):
+                    bc_info, bc_qty, bc_px, bc_btn1, bc_btn2 = st.columns([2.6, 0.8, 0.9, 0.9, 0.7])
+                    b_sig = f"{ba['ticker']}_{ba['recommended_shares']}_{ba['reference_entry_price']}"
+                    b_qty = bc_qty.number_input(
+                        "Shares",
+                        min_value=1,
+                        value=int(ba["recommended_shares"]),
+                        step=1,
+                        key=f"buy_qty_{b_sig}_{idx}",
+                    )
+                    b_price = bc_px.number_input(
+                        "Fill Price ($)",
+                        min_value=0.01,
+                        value=float(ba["reference_entry_price"]),
+                        step=0.10,
+                        key=f"buy_px_{b_sig}_{idx}",
+                    )
+                    ref_px = float(ba["reference_entry_price"])
+                    px_shift = float(b_price) - ref_px
+                    adj_stop = round(max(0.01, float(ba["stop_loss_price"]) + px_shift), 2) if ba.get("stop_loss_price") else 0.0
+                    adj_tp = round(max(float(b_price) + 0.01, float(ba["take_profit_price"]) + px_shift), 2) if ba.get("take_profit_price") else 0.0
+                    live_cost = round(int(b_qty) * float(b_price), 2)
+                    live_weight = round((live_cost / max(1.0, float(real_acc["total_equity"]))) * 100.0, 1)
+                    live_risk = round(max(0.0, (float(b_price) - adj_stop) * int(b_qty)), 0)
+                    with bc_info:
+                        st.markdown(
+                            f"**BUY `{int(b_qty)}` `{ba['ticker']}` @ `${float(b_price):.2f}`** "
+                            f"(`~${live_cost:,.0f}` · `{live_weight:.1f}%` of account)  \n"
+                            f"Set Broker Bracket: **Stop-Loss `${adj_stop:.2f}`** (`-${live_risk:,.0f}` max risk) · "
+                            f"**Take-Profit `${adj_tp:.2f}`** · *Max Hold `{ba['holding_horizon_days']}`*  \n"
+                            f"<span style='color:#94a3b8;font-size:0.82rem;'>{ba['strategy_id']} v{ba['strategy_version']} — {ba['reason']}</span>",
+                            unsafe_allow_html=True,
+                        )
+                    with bc_btn1:
+                        st.write("")
+                        if st.button(
+                            f"✓ Bought {ba['ticker']}",
+                            key=f"btn_buy_{b_sig}_{idx}",
+                            width="stretch",
+                        ):
+                            app.orchestrator.live_copilot.confirm_buy_execution(
+                                ticker=ba["ticker"],
+                                strategy_id=ba["strategy_id"],
+                                strategy_version=int(ba["strategy_version"]),
+                                quantity=int(b_qty),
+                                fill_price=float(b_price),
+                                fees_usd=0.0,
+                                stop_loss_price=ba["stop_loss_price"],
+                                take_profit_price=ba["take_profit_price"],
+                                reference_entry_price=ref_px,
+                                sector=ba["sector"],
+                                notes=ba["reason"],
+                            )
+                            st.session_state["_copilot_flash_msg"] = (
+                                f"Confirmed BUY {int(b_qty)} {ba['ticker']} @ ${float(b_price):.2f} "
+                                f"(Stop ${adj_stop:.2f} · Target ${adj_tp:.2f})."
+                            )
+                            st.rerun()
+                    with bc_btn2:
+                        st.write("")
+                        if st.button(
+                            "Skip",
+                            key=f"btn_skip_{b_sig}_{idx}",
+                            width="stretch",
+                        ):
+                            app.orchestrator.live_copilot.dismiss_signal(
+                                signal_date=ba["signal_date"],
+                                strategy_id=ba["strategy_id"],
+                                ticker=ba["ticker"],
+                                action="BUY",
+                            )
+                            st.session_state["_copilot_flash_msg"] = f"Skipped {ba['ticker']} for today (click 'Restore Skipped' to undo)."
+                            st.rerun()
+            elif not sell_actions:
+                st.info("No new BUY or SELL actions required today. All open holdings remain within their target brackets.")
+
+            vetoed_sigs = plan.get("vetoed_signals") or []
+            if vetoed_sigs:
+                with st.expander(f"Signals Filtered Out by Your Risk Caps ({len(vetoed_sigs)})", expanded=False):
+                    st.dataframe(vetoed_sigs, width="stretch")
 
         st.markdown("---")
         # 2. My Confirmed Real Positions with 1-Click Partial/Full Close & Smart Pre-Filled Editor
@@ -1151,7 +942,6 @@ def main() -> None:
                 e_ticker = sel_tkr_opt
 
             existing_p = pos_by_tkr.get(e_ticker)
-            # State-aware signature ensures widgets immediately refresh whenever existing_p is created, edited, or closed
             pos_sig = (
                 f"{e_ticker}_{existing_p['quantity']}_{existing_p['avg_entry_price']}_"
                 f"{existing_p.get('stop_loss_price')}_{existing_p.get('take_profit_price')}_{existing_p.get('opened_date')}"
@@ -1166,7 +956,7 @@ def main() -> None:
             )
             default_sl = float(existing_p["stop_loss_price"]) if (existing_p and existing_p.get("stop_loss_price")) else 0.0
             default_tp = float(existing_p["take_profit_price"]) if (existing_p and existing_p.get("take_profit_price")) else 0.0
-            default_dt = str(existing_p["opened_date"]) if existing_p else str(plan["session_date"])
+            default_dt = str(existing_p["opened_date"]) if existing_p else latest_bar_date
 
             e_qty = ec2.number_input("Shares (0=Remove)", min_value=0, value=default_qty, step=1, key=f"edit_qty_{pos_sig}")
             e_entry = ec3.number_input("Avg Entry ($)", min_value=0.01, value=default_px, step=0.50, key=f"edit_px_{pos_sig}")
@@ -1193,7 +983,7 @@ def main() -> None:
                     avg_entry_price=float(e_entry),
                     stop_loss_price=float(e_stop) if e_stop > 0 else None,
                     take_profit_price=float(e_tp) if e_tp > 0 else None,
-                    opened_date=e_date.strip() or str(plan["session_date"]),
+                    opened_date=e_date.strip() or latest_bar_date,
                     deduct_from_cash=deduct_chk,
                 )
                 st.session_state["_copilot_flash_msg"] = (
@@ -1209,96 +999,93 @@ def main() -> None:
                 st.dataframe(real_history, width="stretch")
 
     # =========================================================================
-    # TAB 4: MARKET RESEARCH
+    # TAB 1: PAPER ACCOUNT & LEDGER (UNIFIED FORWARD $100K PORTFOLIO + LEDGER)
     # =========================================================================
-    with tabs[4]:
+    with tabs[1]:
         _render_tab_header(
             st,
-            "Market Research: Daily ranking of liquid US stocks by trend strength vs. SPY, volume activity, and earnings catalysts.",
-            "How this tab works",
-            "**What this tab shows:** The daily watchlist generated by the `MarketResearchAgent`.\n\n"
-            "- **20d RS vs SPY**: How much the stock beat (or trailed) the S&P 500 over the past 20 trading days.\n"
-            "- **Volume Ratio (20d)**: Today's trading volume divided by its 20-day average (`>1.2x` indicates institutional participation).\n"
-            "- **Composite Score**: Overall multi-factor rank (`0–100`) combining trend, relative strength, volume, and earnings catalysts.\n"
-            "- **Post-Session Proposals**: Observations written after market close suggesting future strategy experiments.",
-        )
-        st.markdown("#### Ranked US Equity Candidates")
-        reports_summary = [
-            {
-                "Rank": idx + 1,
-                "Ticker": r["ticker"],
-                "Company": r["company_name"],
-                "Price": f"${r['current_price']:.2f}",
-                "Sector": r["market_and_sector_context"]["sector"],
-                "20d RS vs SPY": f"{r['relative_strength_vs_spy_20d']:+.2f}%",
-                "Volume Ratio (20d)": f"{r['volume_analysis']['volume_ratio_20']:.2f}x",
-                "Strategy Archetype": r["suggested_strategy_family"],
-                "Composite Score": r["composite_rank_score"],
-                "Evidence Score*": f"{r['research_confidence_score'] * 100:.0f}%",
-                "Bullish Thesis": r["bullish_thesis"],
-                "Key Risk / Bearish Case": r["bearish_thesis"],
-            }
-            for idx, r in enumerate(state["research_reports"])
-        ]
-        st.dataframe(reports_summary, width="stretch")
-        st.caption(
-            "*Evidence Score reflects data completeness and indicator alignment; it is not a guarantee of future profit."
+            "Paper Account & Ledger: Forward-only $100,000 simulated portfolio (Daily, Weekly & Total P&L), open positions, and day-filtered execution ledger.",
+            "How Paper Account & Ledger works",
+            "**Forward-Only `$100,000` Track Record:**\n\n"
+            "- **Strict Forward Isolation**: Only actual daily runs (`21:30 UTC` or `run` in IDE) affect this account. All historical backtests are isolated in Tab 3.\n"
+            "- **Daily, Weekly & Total P&L**: Tracks single-session P&L, rolling 5-session P&L, and cumulative Realised + Unrealised P&L net of brokerage commissions and slippage.\n"
+            "- **Day-Filtered Execution Ledger**: Filter every simulated `BUY` and `SELL` fill by Trading Day, Order Side, or Strategy.",
         )
 
-        with st.expander("View Post-Session Experiment Proposals (`PerformanceAnalystAgent`)", expanded=False):
-            st.dataframe(state["proposals"], width="stretch")
-
-    # =========================================================================
-    # TAB 5: BACKTESTING
-    # =========================================================================
-    with tabs[5]:
-        _render_tab_header(
-            st,
-            "Backtesting: Multi-year historical simulations showing how each strategy performed across past market cycles.",
-            "How this tab works",
-            "**What this tab shows:** Historical simulations (`2023–2025`) used to test strategies before they are allowed to trade.\n\n"
-            "- **Zero Look-Ahead Bias**: Signals triggered at Day `T` market close are filled at Day `T+1` market open.\n"
-            "- **Realistic Friction**: Every simulated trade deducts brokerage commission, bid-ask spread, and slippage.\n"
-            "- **Click any experiment bar below** to expand its P&L math, win/loss statistics, and individual historical trades.",
+        st.markdown("#### 1. Paper Portfolio Profit & Loss Attribution (Forward Runs Only)")
+        st.markdown(
+            f"""
+            - **Active Daily Strategies**: {active_strat_names}
+            - **Measurement Window**: `{paper_date_span}` *(Forward daily runs only — historical testing is isolated in Tab 3)*
+            - **Derivation**:
+              `Starting Capital ($100,000.00)` + `Realised P&L (${acc['realised_pnl']:+,.2f})` + `Unrealised P&L (${acc['unrealised_pnl']:+,.2f})` = **`Current Equity (${acc['total_equity']:,.2f})`** *(Net of `${total_fees_paid:,.2f}` in transaction costs)*
+            """
         )
-        st.markdown("#### Historical Backtest Experiments (Click to Expand Details)")
-        for exp in state["experiments"][:6]:
-            m = exp["metrics"]
-            net_profit = float(m.get("final_equity", 100000.0)) - 100000.0
-            title = (
-                f"{exp['strategy_id']} v{exp['version']} ({exp['experiment_type']})  ·  "
-                f"Span: {exp['start_date']} → {exp['end_date']}  ·  "
-                f"Net P&L: ${net_profit:+,.2f} ({m.get('total_return_pct', 0.0):+.2f}% vs SPY {m.get('benchmark_return_pct', 0.0):+.2f}%)"
-            )
-            with st.expander(title, expanded=False):
-                st.markdown(
-                    f"""
-                    **Backtest P&L Derivation**
-                    - **Strategy**: `{exp['strategy_id']} v{exp['version']}`
-                    - **Date Span**: `{exp['start_date']}` to `{exp['end_date']}`
-                    - **Capital Progression**: `$100,000.00` $\\rightarrow$ `${m.get('final_equity', 100000.0):,.2f}` (`{m.get('trade_count', 0)}` trades, average hold `{m.get('avg_holding_period_days', 0.0):.1f}` days)
-                    - **Trade Distribution**: Win Rate `{m.get('win_rate_pct', 0.0):.1f}%` | Avg Win `${m.get('avg_winning_trade_usd', 0.0):+,.2f}` (`{m.get('avg_winning_trade_pct', 0.0):+.2f}%`) | Avg Loss `${m.get('avg_losing_trade_usd', 0.0):+,.2f}` (`{m.get('avg_losing_trade_pct', 0.0):+.2f}%`) | Expectancy `${m.get('expectancy_usd', 0.0):+,.2f}/trade`
-                    - **Risk & Drawdown Metrics**: Sharpe `{m.get('sharpe_ratio', 0.0):.2f}` | Deflated Sharpe (DSR) `{m.get('deflated_sharpe_pct', 0.0):.1f}%` | Sortino `{m.get('sortino_ratio', 0.0):.2f}` | Profit Factor `{m.get('profit_factor', 0.0):.2f}` | Omega `{m.get('omega_ratio', 1.0):.2f}` | Max Drawdown `-{m.get('max_drawdown_pct', 0.0):.2f}%` | Ulcer Index `{m.get('ulcer_index', 0.0):.2f}` | Martin Ratio `{m.get('martin_ratio', 0.0):.2f}` | Max Time Under Water `{m.get('max_time_under_water_days', 0)}d`
-                    - **Benchmark Dominance vs SPY**: Excess Return `{m.get('excess_return_vs_spy_pct', 0.0):+.2f}%` | Jensen's Alpha `α = {m.get('alpha_annualised_pct', 0.0):+.2f}%/yr` | Beta `β = {m.get('beta_vs_spy', 0.0):.2f}` | Info Ratio `{m.get('information_ratio', 0.0):.2f}` | Upside/Downside Capture `{m.get('upside_capture_pct', 0.0):.1f}%` / `{m.get('downside_capture_pct', 0.0):.1f}%` (`{m.get('capture_ratio', 0.0):.2f}x`) | ROIC `{m.get('roic_annualised_pct', 0.0):.1f}%/yr`
-                    """
-                )
-                st.dataframe(exp["trades"][:25], width="stretch")
 
-    # =========================================================================
-    # TAB 6: PAPER TRADING LEDGER
-    # =========================================================================
-    with tabs[6]:
-        _render_tab_header(
-            st,
-            "Paper Ledger: Clear, day-filtered log of every forward simulated buy/sell fill, execution cost, and resulting cash balance.",
-            "How this tab works",
-            "**What this tab shows:** The forward accounting ledger for the simulated `$100,000` portfolio.\n\n"
-            "- **Filter by Day, Side, or Strategy**: Inspect exact trades executed on any specific trading session.\n"
-            "- **`BUY` rows**: Deduct purchase cost plus commission/slippage from cash (`Realised P&L` is `$0.00` on entry).\n"
-            "- **`SELL` rows**: Return sale proceeds to cash and lock in the net `Realised P&L` for that trade.\n"
-            "- **Signal Rationale**: Explains the exact indicator trigger or exit rule (e.g., Take-Profit, Stop-Loss, Max Hold) for each fill.",
+        k1, k2, k3, k4, k5 = st.columns(5)
+        k1.metric(
+            "Total Equity",
+            f"${acc['total_equity']:,.2f}",
+            f"Start: ${acc['starting_capital']:,.0f} ({acc['total_return_pct']:+.2f}%)",
+            help="Cash Balance + Market Value of Open Positions. Equals Starting Capital ($100k) + Realised P&L + Unrealised P&L.",
         )
-        st.markdown(f"#### Forward Trade Execution Ledger (`{paper_date_span}`)")
+        k2.metric(
+            "Daily P&L (Latest Session)",
+            f"${daily_pnl_usd:+,.2f}",
+            f"{daily_ret_pct:+.2f}% today",
+            help="Single-session change in Total Equity from the prior trading session close to the latest session close.",
+        )
+        k3.metric(
+            "Weekly P&L (Last 5 Sessions)",
+            f"${weekly_pnl_usd:+,.2f}",
+            f"{weekly_ret_pct:+.2f}% (5d)",
+            help="Rolling 5-session (1 trading week) change in Total Equity across actual forward paper runs.",
+        )
+        k4.metric(
+            "Total P&L (Since Reset)",
+            f"${net_dollar_pnl:+,.2f}",
+            f"Realised ${acc['realised_pnl']:+,.0f} | Unrealised ${acc['unrealised_pnl']:+,.0f}",
+            help="Cumulative net P&L since the $100,000 baseline reset (Realised P&L from closed trades + Unrealised P&L on open positions, net of fees).",
+        )
+        k5.metric(
+            "Available Cash",
+            f"${acc['cash_balance']:,.2f}",
+            f"{acc['open_positions_count']} open | DD -{acc['current_drawdown_pct']:.2f}%",
+            help="Uninvested cash available for new swing entries. Drawdown measures the drop from the portfolio's highest equity peak.",
+        )
+
+        p_col1, p_col2 = st.columns([1.1, 1.1])
+        with p_col1:
+            st.markdown("#### 2. Open Paper Positions")
+            if positions:
+                clean_pos = [
+                    {
+                        "Ticker": p["ticker"],
+                        "Strategy": f"{p['strategy_id']} v{p['strategy_version']}",
+                        "Entry Date": p["opened_date"],
+                        "Hold": f"{p['holding_days']}d",
+                        "Qty": p["quantity"],
+                        "Entry": f"${p['avg_entry_price']:.2f}",
+                        "Now": f"${p['current_price']:.2f}",
+                        "Stop / Target": f"${p['stop_loss_price']:.2f} / ${p['take_profit_price']:.2f}" if p.get("stop_loss_price") else "-",
+                        "Unrealised P&L": f"${p['unrealised_pnl']:+,.2f} ({p['unrealised_return_pct']:+.2f}%)",
+                    }
+                    for p in positions
+                ]
+                st.dataframe(clean_pos, width="stretch", hide_index=True)
+            else:
+                st.info("No open paper positions currently held (100% cash at `$100,000.00`).")
+
+        with p_col2:
+            st.markdown("#### 3. Strategy-Level Paper Attribution")
+            strat_pnl_rows = _summarize_pnl_by_strategy(ledger, positions, strats)
+            if strat_pnl_rows:
+                st.dataframe(strat_pnl_rows, width="stretch", hide_index=True)
+            else:
+                st.info("No forward paper trades executed yet since reset.")
+
+        st.markdown("---")
+        st.markdown(f"#### 4. Day-Filtered Paper Execution Ledger (`{paper_date_span}`)")
         if ledger:
             unique_days = sorted({str(l["fill_date"]) for l in ledger if l.get("fill_date")}, reverse=True)
             unique_strats = sorted({f"{l['strategy_id']} v{l['strategy_version']}" for l in ledger})
@@ -1383,16 +1170,302 @@ def main() -> None:
             )
 
     # =========================================================================
-    # TAB 7: RISK & ANALYTICS
+    # TAB 2: STRATEGIES, RULES & BACKTESTS (EVERYTHING ABOUT EACH STRATEGY IN ONE PLACE)
     # =========================================================================
-    with tabs[7]:
+    with tabs[2]:
         _render_tab_header(
             st,
-            "Risk & Analytics: Real-time sector exposure vs. the 30% cap and multi-window walk-forward stability.",
+            "Strategies, Rules & Backtests: Everything about how each strategy is conceived, its exact entry/exit rulebook, 9-gate SPY benchmark audit, historical trade logs, and 1-click Golden Base (v1) revert.",
+            "How Strategies are Conceived & Validated",
+            "**Everything About Each Strategy in One Unified Place:**\n\n"
+            "1. **How Strategies Are Conceived**: Built on 5 institutional swing anomalies (`Momentum Trend`, `Post-Earnings Drift`, `Volatility Breakout`, `Mean Reversion`, `Sector Rotation Leaders`). Weekly AI discovery (`StrategyDiscoveryAgent`) and IDE `run` cycles propose parameter refinements (`v2+`).\n"
+            "2. **9-Gate + SPY Dominance Exam**: Every strategy must pass 9 quantitative gates and beat the S&P 500 (`SPY`) in both Full Period (`2023–2025`) and Out-of-Sample (`OOS`) before trading.\n"
+            "3. **Golden Base (`v1`) Safety Net**: `v1 ★ Base` strategies are permanently pinned. Future versions (`v2+`) are only promoted if they beat the incumbent champion—and you can revert to `v1` in one click.",
+        )
+
+        st.markdown("#### 1. Strategy Scorecard & SPY Benchmark Readiness")
+        rb_col1, rb_col2, rb_col3 = st.columns([2.4, 1.3, 1.3])
+        with rb_col1:
+            st.caption(
+                "**Golden Base Safeguard**: All 5 `v1 ★ Base` models beat `SPY` "
+                "in Full Period (`+70.7%` to `+77.5%` vs SPY `+61.9%`) and Out-of-Sample (`+11.5%` to `+23.0%` vs SPY `+9.7%`). "
+                "Expand any strategy below to see **how it was conceived, its exact entry/exit rules, its 9-gate audit, and its historical backtest trades**."
+            )
+        with rb_col2:
+            if st.button(
+                "Revert All to Golden Base (v1)",
+                width="stretch",
+                help="Immediately restores all Golden Base v1 models to PAPER_TRADING and retires any experimental v2+ versions.",
+            ):
+                app.orchestrator.registry.revert_to_golden_baseline()
+                st.rerun()
+        with rb_col3:
+            if st.button(
+                "Enforce Best Champion Versions",
+                width="stretch",
+                help="Ensures the highest-performing evaluated version (by Return & Sharpe) of each strategy family is active.",
+            ):
+                for sid in {s["strategy_id"] for s in strats}:
+                    app.orchestrator.registry.rollback_to_best_champion(sid)
+                st.rerun()
+
+        display_scorecard = [
+            {k: v for k, v in r.items() if not k.startswith("_")}
+            for r in readiness_rows
+        ]
+        st.dataframe(display_scorecard, width="stretch", hide_index=True)
+
+        # Index latest experiment per strategy version so we can show historical trades directly inside each strategy card
+        exp_by_strat_ver: Dict[str, Dict[str, Any]] = {}
+        for exp in state["experiments"]:
+            k_sv = f"{exp['strategy_id']}:{exp['version']}"
+            if k_sv not in exp_by_strat_ver:
+                exp_by_strat_ver[k_sv] = exp
+
+        st.markdown("#### 2. Complete Strategy Encyclopaedia — Origin, Exact Rules, 9-Gate Audit & Historical Backtest Trades")
+        for r in readiness_rows:
+            s = r["_raw_strategy"]
+            k_sv = f"{s['strategy_id']}:{s['version']}"
+            m = s.get("backtest_summary") or {}
+            val = s.get("validation_summary") or {}
+            oos = val.get("oos_metrics") or {}
+            wf = val.get("walk_forward") or {}
+            checks = r["_checks"]
+            fam = str(s.get("strategy_family", "MOMENTUM_TREND"))
+            genesis = STRATEGY_GENESIS_BY_FAMILY.get(fam, STRATEGY_GENESIS_BY_FAMILY["MOMENTUM_TREND"])
+            exp_match = exp_by_strat_ver.get(k_sv)
+
+            header_label = (
+                f"{r['Strategy']} — {r['Name']} ({fam})  ·  Status: {r['Status']}  ·  "
+                f"Full: {m.get('total_return_pct', 0.0):+.2f}% (vs SPY {m.get('benchmark_return_pct', 0.0):+.2f}%)  ·  "
+                f"OOS: {oos.get('total_return_pct', 0.0):+.2f}%"
+            )
+            with st.expander(header_label, expanded=False):
+                # Row A: How it is conceived + Exact Entry/Exit/Risk Rules
+                g_col1, g_col2 = st.columns([1.3, 1.7])
+                with g_col1:
+                    st.markdown("**A. How This Strategy Is Conceived & Economic Edge**")
+                    st.write(f"- **Quantitative Origin**: {genesis['origin']}")
+                    st.write(f"- **Why It Generates Alpha**: {genesis['edge']}")
+                    st.write(f"- **Target Market Regime**: {genesis['regime']}")
+                    st.write(f"- **Version Hypothesis (`v{s['version']}`)**: {s['hypothesis']}")
+                    st.write(f"- **Holding Horizon**: `{s['holding_period_min_days']}` to `{s['holding_period_max_days']}` trading days")
+                    st.write(f"- **Tradable Universe ({len(s['universe'])} stocks)**: `{', '.join(s['universe'])}`")
+                with g_col2:
+                    st.markdown("**B. Exact Machine-Readable Rulebook (`entry_rules`, `exit_rules`, `risk_params`)**")
+                    rule_c1, rule_c2, rule_c3 = st.columns(3)
+                    with rule_c1:
+                        st.caption("**Entry Rules (`BUY` Trigger)**")
+                        for rk, rv in (s.get("entry_rules") or {}).items():
+                            st.write(f"- `{rk}`: **{rv}**")
+                    with rule_c2:
+                        st.caption("**Exit & Stop-Ratchet Rules (`SELL`)**")
+                        for rk, rv in (s.get("exit_rules") or {}).items():
+                            st.write(f"- `{rk}`: **{rv}**")
+                    with rule_c3:
+                        st.caption("**Position Sizing & Risk Caps**")
+                        for rk, rv in (s.get("risk_params") or {}).items():
+                            st.write(f"- `{rk}`: **{rv}**")
+
+                st.markdown("---")
+                # Row B: 9-Gate Audit + SPY Benchmark Dominance + Version Control
+                c_left, c_mid, c_right = st.columns([1.2, 1.5, 1.3])
+                with c_left:
+                    st.markdown("**C. 9-Gate Validation Audit**")
+                    if checks:
+                        for gate_name, passed in checks.items():
+                            icon = "PASS" if passed else "FAIL"
+                            clean_gate = gate_name.replace("_", " ").title()
+                            st.write(f"- **[{icon}]** {clean_gate}")
+                    else:
+                        st.write(s.get("promotion_decision_reason", "No gate breakdown recorded."))
+                with c_mid:
+                    st.markdown("**D. Benchmark Dominance vs. S&P 500 (`SPY`)**")
+                    st.write(
+                        f"- **Full Return (`2023–2025`)**: `{m.get('total_return_pct', 0.0):+.2f}%` vs SPY `{m.get('benchmark_return_pct', 0.0):+.2f}%` "
+                        f"(**Excess: `{m.get('excess_return_vs_spy_pct', 0.0):+.2f}%`** · `$100k → ${m.get('final_equity', 100000.0):,.0f}`)"
+                    )
+                    st.write(
+                        f"- **Out-of-Sample (`OOS`)**: `{oos.get('total_return_pct', 0.0):+.2f}%` vs SPY `{oos.get('benchmark_return_pct', 0.0):+.2f}%` "
+                        f"(**OOS Excess: `{float(oos.get('total_return_pct', 0.0)) - float(oos.get('benchmark_return_pct', 0.0)):+.2f}%`**)"
+                    )
+                    st.write(
+                        f"- **Jensen's Alpha & Beta**: `α = {m.get('alpha_annualised_pct', 0.0):+.2f}%/yr` · "
+                        f"`β = {m.get('beta_vs_spy', 0.0):.2f}` · `Info Ratio = {m.get('information_ratio', 0.0):.2f}`"
+                    )
+                    st.write(
+                        f"- **Upside / Downside Capture**: `{m.get('upside_capture_pct', 0.0):.1f}%` up / "
+                        f"`{m.get('downside_capture_pct', 0.0):.1f}%` down (**Ratio: `{m.get('capture_ratio', 0.0):.2f}x`**)"
+                    )
+                    st.write(
+                        f"- **Drawdown & Ulcer**: MaxDD `-{m.get('max_drawdown_pct', 0.0):.2f}%` · "
+                        f"Ulcer Index `{m.get('ulcer_index', 0.0):.2f}` · Martin `{m.get('martin_ratio', 0.0):.2f}` · "
+                        f"Under Water `{m.get('max_time_under_water_days', 0)}d`"
+                    )
+                    st.write(
+                        f"- **Trade Statistics**: `{m.get('trade_count', 0)}` trades · Win Rate `{m.get('win_rate_pct', 0.0):.1f}%` · "
+                        f"Expectancy `${m.get('expectancy_usd', 0.0):+,.2f}/trade` · Omega `{m.get('omega_ratio', 1.0):.2f}` · "
+                        f"ROIC `{m.get('roic_annualised_pct', 0.0):.1f}%/yr` · WF `{float(wf.get('consistency_ratio', 0.0))*100:.0f}%`"
+                    )
+                with c_right:
+                    st.markdown("**E. Forward Paper Track Record & Version Control**")
+                    g1_ok = r["Gates"].startswith("9 / 9")
+                    g2_ok = r["_paper_closed"] >= 20
+                    g3_ok = r["_paper_pf"] >= 1.3 and r["_paper_closed"] > 0
+                    g4_ok = r["_paper_net_pnl"] > 0
+                    st.write(f"- **[{'PASS' if g1_ok else 'WAIT'}]** Passed all 9 historical & SPY gates (`{r['Gates']}`)")
+                    st.write(f"- **[{'PASS' if g2_ok else 'WAIT'}]** 20+ forward paper trades (`{r['_paper_closed']} / 20`)")
+                    st.write(f"- **[{'PASS' if g3_ok else 'WAIT'}]** Forward Paper PF $\\ge 1.30$ (`{r['_paper_pf']:.2f}`)")
+                    st.write(f"- **[{'PASS' if g4_ok else 'WAIT'}]** Positive Forward Paper P&L (`${r['_paper_net_pnl']:+,.2f}`)")
+                    if st.button(
+                        f"Revert {s['strategy_id']} to Golden Base (v1)",
+                        key=f"revert_v1_{s['strategy_id']}_{s['version']}",
+                        width="stretch",
+                    ):
+                        app.orchestrator.registry.revert_to_golden_baseline(s["strategy_id"])
+                        st.rerun()
+
+                if exp_match and exp_match.get("trades"):
+                    st.markdown(f"**F. Historical Backtest Trades for `{s['strategy_id']} v{s['version']}` (Showing Latest 25 of `{len(exp_match['trades'])}` Trades)**")
+                    st.dataframe(exp_match["trades"][:25], width="stretch", hide_index=True)
+
+    # =========================================================================
+    # TAB 3: AI RESEARCH & IDE BRIDGE (DAILY WATCHLIST + DIRECT AI PROMPT/JSON FEED)
+    # =========================================================================
+    with tabs[3]:
+        _render_tab_header(
+            st,
+            "AI Research & IDE Bridge: Daily multi-factor stock rankings, IDE AI reminder checklist, and a direct Prompt-to-Engine JSON bridge to feed AI outputs straight into the trading engine.",
+            "How the IDE AI Bridge works",
+            "**Two Ways to Incorporate AI into Your Daily/Weekly Loop ($0 API Cost):**\n\n"
+            "1. **Automatic 1-Word Trigger in Antigravity IDE (Recommended)**: Simply type **`run`** in the Antigravity IDE chat. The IDE agent automatically runs `ide-context`, searches live web news (`search_web`), tests 2–3 strategy upgrades (`ide-apply`), and pushes to GitHub.\n"
+            "2. **Direct Prompt-to-Engine JSON Feed (Right Here in the UI)**: Copy the auto-generated **Ready-to-Paste AI Prompt** below into any LLM (or IDE chat), paste its JSON output into the box on the right, and click **`Apply AI Output to Engine`**. It immediately enriches stock catalysts, runs the 9-gate strategy tournament, and updates your Live Copilot plan!",
+        )
+
+        if st.session_state.get("_ide_bridge_flash"):
+            st.success(st.session_state.pop("_ide_bridge_flash"))
+
+        # Section 1: IDE AI Reminder & Direct Prompt-to-Engine Feed
+        st.markdown("#### 1. IDE AI Alpha Booster & Direct Prompt-to-Engine Feed")
+        ai_c1, ai_c2 = st.columns([1.25, 1.35])
+        top_reps = state["research_reports"][:5]
+        compact_prompt_context = [
+            {
+                "ticker": r["ticker"],
+                "price": r["current_price"],
+                "sector": r["market_and_sector_context"]["sector"],
+                "rs_20d_vs_spy_pct": r["relative_strength_vs_spy_20d"],
+                "volume_ratio_20": r["volume_analysis"]["volume_ratio_20"],
+                "suggested_family": r["suggested_strategy_family"],
+            }
+            for r in top_reps
+        ]
+        ready_prompt_text = (
+            f"You are the Chief Quantitative Swing Strategist. Today is {today_iso} (latest market close: {latest_bar_date}).\n"
+            f"Top ranked US equity candidates: {json.dumps(compact_prompt_context)}\n\n"
+            "Search live news/earnings catalysts for the top tickers and propose 1-2 regime-tuned strategy parameter upgrades "
+            "to maximize Out-of-Sample Net P&L and SPY Excess Return. Return ONLY valid JSON matching this exact schema:\n"
+            "{\n"
+            '  "research_updates": [\n'
+            '    {"ticker": "NVDA", "bullish_thesis": "...", "bearish_thesis": "...", "catalyst_assessment": "...", "sentiment_score": 0.80, "research_confidence_score": 0.90}\n'
+            "  ],\n"
+            '  "analyst_proposal": {\n'
+            '    "target_strategy_id": "strat_momentum_trend", "market_regime": "BULL_LOW_VOL", "diagnosis_summary": "...", "proposed_hypothesis": "..."\n'
+            "  },\n"
+            '  "candidate_strategies": [\n'
+            '    {"target_strategy_id": "strat_momentum_trend", "hypothesis": "...", "entry_rules_patch": {"rs_20d_min": 0.025}, "exit_rules_patch": {"take_profit_atr_mult": 4.2}}\n'
+            "  ]\n"
+            "}"
+        )
+
+        with ai_c1:
+            st.markdown("##### Option A: Type `run` in Antigravity IDE (1-Word Automation)")
+            st.info(
+                f"**Last IDE AI Run**: `{last_ide_run_ts}`\n\n"
+                "- **In Antigravity IDE Chat**: Just type **`run`**.\n"
+                "- The IDE agent automatically executes `python3 main.py ide-context`, performs live web searches (`search_web`), "
+                "evaluates candidate strategies via `python3 main.py ide-apply`, and pushes the updated database."
+            )
+            with st.expander("Copy Ready-to-Use AI Prompt (For Any LLM or Manual Chat)", expanded=False):
+                st.code(ready_prompt_text, language="json")
+
+        with ai_c2:
+            st.markdown("##### Option B: Paste AI JSON Output Directly into Engine")
+            default_sample_json = json.dumps(
+                {
+                    "research_updates": [
+                        {
+                            "ticker": top_reps[0]["ticker"] if top_reps else "NVDA",
+                            "bullish_thesis": "Strong institutional relative strength vs SPY with expanding volume.",
+                            "bearish_thesis": "Watch sector multiple compression if treasury yields spike.",
+                            "catalyst_assessment": "Positive institutional accumulation following earnings guidance.",
+                            "sentiment_score": 0.78,
+                            "research_confidence_score": 0.88,
+                        }
+                    ],
+                    "candidate_strategies": [],
+                },
+                indent=2,
+            )
+            ai_json_input = st.text_area(
+                "Paste JSON from IDE / LLM (`research_updates`, `analyst_proposal`, `candidate_strategies`)",
+                value=default_sample_json,
+                height=155,
+                key="ide_bridge_json_textarea",
+            )
+            if st.button("Apply AI Output to Engine (Enrich Research & Run 9-Gate Tournament)", width="stretch"):
+                try:
+                    parsed_payload = json.loads(ai_json_input)
+                    res_apply = app.orchestrator.apply_ide_ai_cycle(payload=parsed_payload)
+                    enriched_n = len(res_apply.get("research_tickers_enriched") or [])
+                    tourn_list = res_apply.get("tournament_results") or []
+                    prom_n = sum(1 for t in tourn_list if t.get("promoted"))
+                    st.session_state["_ide_bridge_flash"] = (
+                        f"Applied AI output for session `{res_apply['session_date']}`: "
+                        f"enriched `{enriched_n}` research report(s) and tested `{len(tourn_list)}` candidate strategy version(s) "
+                        f"(`{prom_n}` promoted, Champion protection active)."
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Invalid AI JSON payload: {exc}")
+
+        st.markdown("---")
+        st.markdown("#### 2. Ranked US Equity Candidates (`MarketResearchAgent` + IDE AI Catalyst Enrichment)")
+        reports_summary = [
+            {
+                "Rank": idx + 1,
+                "Ticker": r["ticker"],
+                "Company": r["company_name"],
+                "Price": f"${r['current_price']:.2f}",
+                "Sector": r["market_and_sector_context"]["sector"],
+                "20d RS vs SPY": f"{r['relative_strength_vs_spy_20d']:+.2f}%",
+                "Volume Ratio (20d)": f"{r['volume_analysis']['volume_ratio_20']:.2f}x",
+                "Strategy Archetype": r["suggested_strategy_family"],
+                "Composite Score": r["composite_rank_score"],
+                "Evidence Score*": f"{r['research_confidence_score'] * 100:.0f}%",
+                "Catalyst Assessment": r.get("catalyst_assessment", ""),
+                "Bullish Thesis": r["bullish_thesis"],
+                "Key Risk / Bearish Case": r["bearish_thesis"],
+            }
+            for idx, r in enumerate(state["research_reports"])
+        ]
+        st.dataframe(reports_summary, width="stretch", hide_index=True)
+
+        with st.expander("View Post-Session Experiment Proposals (`PerformanceAnalystAgent`)", expanded=False):
+            st.dataframe(state["proposals"], width="stretch")
+
+    # =========================================================================
+    # TAB 4: RISK, WALK-FORWARD & LOGS
+    # =========================================================================
+    with tabs[4]:
+        _render_tab_header(
+            st,
+            "Risk, Walk-Forward & Logs: Real-time sector exposure vs. the 30% cap, 4-window Walk-Forward folds, risk vetoes, and automation logs.",
             "How this tab works",
-            "**What this tab shows:** Portfolio diversification and statistical robustness.\n\n"
-            "- **Sector Concentration**: Tracks how much of the portfolio is invested in each industry against the `30.0%` hard cap.\n"
-            "- **Walk-Forward Validation Folds**: Splits historical data into 4 sequential time windows (`Fold 1` to `Fold 4`) to verify that a strategy stays profitable across changing market conditions rather than relying on one lucky period.",
+            "**Portfolio Risk & Governance Audit:**\n\n"
+            "- **Sector Concentration**: Verifies that no single GICS sector exceeds `30.0%` of portfolio equity.\n"
+            "- **Walk-Forward Validation Folds**: Splits historical data into 4 rolling time windows to verify consistent out-of-sample profitability.\n"
+            "- **Risk Vetoes & Job Logs**: Tracks every trade blocked by the Risk Manager and every scheduled or IDE AI workflow execution.",
         )
         c1, c2 = st.columns(2)
         with c1:
@@ -1402,11 +1475,11 @@ def main() -> None:
                     {"Sector": sec, "Portfolio Exposure": f"{pct:.2f}%", "Hard Limit": "30.00%"}
                     for sec, pct in acc["sector_exposures_pct"].items()
                 ]
-                st.dataframe(sec_rows, width="stretch")
+                st.dataframe(sec_rows, width="stretch", hide_index=True)
             else:
-                st.write("0% sector exposure (100% cash).")
+                st.info("0% paper sector exposure (100% cash).")
         with c2:
-            st.markdown("#### Walk-Forward Validation Folds")
+            st.markdown("#### Walk-Forward Validation Folds (4 Rolling Windows)")
             if strats:
                 strat_labels = [f"{s['strategy_id']} v{s['version']} ({s['name']})" for s in strats]
                 sel_idx = st.selectbox(
@@ -1418,28 +1491,83 @@ def main() -> None:
                 chosen_s = strats[sel_idx]
                 if chosen_s.get("validation_summary"):
                     wf_windows = (chosen_s["validation_summary"].get("walk_forward") or {}).get("windows", [])
-                    st.dataframe(wf_windows, width="stretch")
+                    st.dataframe(wf_windows, width="stretch", hide_index=True)
 
-    # =========================================================================
-    # TAB 8: SYSTEM LOGS
-    # =========================================================================
-    with tabs[8]:
-        _render_tab_header(
-            st,
-            "System Logs: Audit trail of automated daily/weekly runs and any trades blocked by the Risk Manager.",
-            "How this tab works",
-            "**What this tab shows:** Operational health and risk governance logs.\n\n"
-            "- **Risk Vetoes & Alerts**: Whenever a strategy proposes a trade that would breach a safety limit (such as the `30%` sector cap or `5%` portfolio heat limit), the Risk Manager blocks the order and logs the exact reason here.\n"
-            "- **Workflow Execution Log**: Confirms when each daily or weekly automation job ran and its completion status.",
-        )
-        st.markdown("#### Risk Vetoes & Alerts")
-        if state["risk_alerts"]:
-            st.dataframe(state["risk_alerts"], width="stretch")
-        else:
-            st.write("No risk alerts triggered.")
-
-        with st.expander("View Workflow Execution Log", expanded=True):
+        st.markdown("---")
+        l_col1, l_col2 = st.columns(2)
+        with l_col1:
+            st.markdown("#### Portfolio Risk Vetoes & Alerts")
+            if state["risk_alerts"]:
+                st.dataframe(state["risk_alerts"], width="stretch")
+            else:
+                st.write("No risk alerts triggered.")
+        with l_col2:
+            st.markdown("#### Autonomous & IDE AI Workflow Execution Log")
             st.dataframe(state["jobs"], width="stretch")
+
+    # =========================================================================
+    # TAB 5: PLATFORM GUIDE (MENTAL MODEL, WALKTHROUGH & DEEP DIVES)
+    # =========================================================================
+    with tabs[5]:
+        st.markdown("#### What This System Does & How It Maximizes Risk-Adjusted P&L")
+        st.write(
+            "This platform manages both a **Real-Account Live Trading Copilot** (Tab 1) and a forward **$100,000 Paper Portfolio** (Tab 2) "
+            "over **3 to 15 trading-day** swing horizons. **Deterministic mathematical code** computes indicators, enforces 7 risk guardrails, "
+            "and executes backtests, while **AI agents** (and your 1-word **`run`** command in the Antigravity IDE) enrich stock catalysts and "
+            "test regime-adapted strategy upgrades."
+        )
+
+        st.markdown(MENTAL_MODEL_HTML, unsafe_allow_html=True)
+
+        st.markdown("##### Interactive Walkthrough — Click Any Topic Below")
+        if "walkthrough_step" not in st.session_state:
+            st.session_state["walkthrough_step"] = "step_daily_vs_weekly"
+
+        b1, b2, b3, b4, b5 = st.columns(5)
+        if b1.button("1. Daily vs Weekly Loop", width="stretch"):
+            st.session_state["walkthrough_step"] = "step_daily_vs_weekly"
+        if b2.button("2. The 5 Golden Base Models", width="stretch"):
+            st.session_state["walkthrough_step"] = "step_multi_strategy"
+        if b3.button("3. Risk & Profit Ratchets", width="stretch"):
+            st.session_state["walkthrough_step"] = "step_risk"
+        if b4.button("4. SPY Dominance & Revert", width="stretch"):
+            st.session_state["walkthrough_step"] = "step_readiness"
+        if b5.button("5. Using IDE AI (`run`)", width="stretch"):
+            st.session_state["walkthrough_step"] = "step_user_role"
+
+        step_info = {
+            "step_daily_vs_weekly": (
+                "**1. Daily Run vs. Weekly Run — How They Work Together**\n\n"
+                "- **Daily Run (Mon–Fri 21:30 UTC)**: Ingests the latest US market bars, evaluates exits and stop-loss ratchets on open holdings, and generates `1.0%`-risk-sized entry signals across the active `PAPER_TRADING` strategies.\n"
+                "- **Weekly Run (Saturday 10:00 SGT)**: Reviews closed trade attribution, drafts candidate strategy versions (`v+1`), and tests them in the 9-gate Out-of-Sample & Walk-Forward tournament."
+            ),
+            "step_multi_strategy": (
+                "**2. Five Uncorrelated Golden Base (`v1 ★ Base`) Strategy Families**\n\n"
+                "- **`strat_volatility_breakout` (`+75.83%` Full, `+22.96%` OOS)**: 20-day high breakouts from tight consolidations on expanding volume.\n"
+                "- **`strat_sector_rotation_leaders` (`+77.45%` Full, `+18.88%` OOS)**: Top relative-strength leaders inside the #1 and #2 ranked GICS sectors.\n"
+                "- **`strat_pead_drift` (`+73.80%` Full, `+17.38%` OOS)**: Post-earnings announcement drift following quarterly EPS & revenue beats.\n"
+                "- **`strat_momentum_trend` (`+73.37%` Full, `+16.32%` OOS)**: Aligned uptrends (`Close > SMA20 > SMA50`) beating `SPY` over 20 days.\n"
+                "- **`strat_mean_reversion_bb` (`+70.68%` Full, `+11.52%` OOS)**: Pullbacks to value zones (`SMA20` / Lower Bollinger Band) in structural uptrends (`Close > SMA200`)."
+            ),
+            "step_risk": (
+                "**3. ATR Position Sizing, Profit Ratchets & 7 Risk Guardrails**\n\n"
+                "- **1.0% Risk Per Trade**: Share count is sized from `ATR(14)` so a stop-loss exit risks at most `1.0%` of equity (auto-scaling down to `0.65%` if portfolio drawdown exceeds `7.5%`).\n"
+                "- **Profit-Activated Stop Ratchet**: Once a position reaches `+1.0R` unrealized profit, the Chandelier trailing stop activates; at `+1.25R`, the stop locks in breakeven plus transaction friction.\n"
+                "- **Hard Portfolio Caps**: Max `5.0%` total open portfolio heat, max `15.0%` single stock, max `30.0%` single sector, max `0.80` return correlation, and a `15.0%` drawdown circuit breaker."
+            ),
+            "step_readiness": (
+                "**4. S&P 500 (`SPY`) Benchmark Dominance & Golden Base Revert**\n\n"
+                "- Every active strategy must pass 9 validation gates **and** beat `SPY` (`+61.90%` Full, `+9.67%` OOS) with positive Jensen's Alpha ($\\alpha > 0$) and Ulcer Index $\\le 6.0$.\n"
+                "- **Incumbent Protection & 1-Click Revert**: A new candidate (`v2+`) never replaces an active strategy unless it beats or matches the champion's Return, Sharpe, and Calmar—and you can click **`Revert All to Golden Base (v1)`** in Tab 3 anytime."
+            ),
+            "step_user_role": (
+                "**5. Your Optimal Workflow to Maximize Paper & Real Profit**\n\n"
+                "1. **Type `run` in Antigravity IDE** (or paste JSON in Tab 4) on trading days to enrich top candidates with live web news catalysts and test AI parameter upgrades.\n"
+                "2. **Check Tab 1 (`Live Copilot`)**: If today is a US trading day, review any `SELL` exits, `HOLD` stop-loss ratchets, or `BUY` setups sized to your real account.\n"
+                "3. **Confirm Only What You Execute**: Click `✓ Bought` or `✓ Sold` after placing orders in your brokerage app."
+            ),
+        }
+        st.info(step_info[st.session_state["walkthrough_step"]])
 
 
 if __name__ == "__main__":

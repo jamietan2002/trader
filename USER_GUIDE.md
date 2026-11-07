@@ -49,19 +49,22 @@ Every base strategy (`v1`) has been validated across multi-year history (`2023�
 
 ---
 
-## 3. Navigating the Dashboard & Using Live Copilot
+## 3. Navigating the Dashboard (6 Top-of-Mind Tabs)
 
-1. **`Overview & P&L` (Forward Paper Account)**:
-   - Displays **Total Equity**, **Daily P&L**, **Weekly P&L (5 sessions)**, and **Total P&L (Realised + Unrealised)** starting from a clean `$100,000.00` baseline. Only actual forward daily runs affect this account; all historical testing is isolated in `Backtesting`.
-2. **`Strategies & Readiness`**:
-   - Compares every strategy version against `SPY` (**Full & OOS Excess Return**, **Jensen's Alpha $\alpha$**, **Beta $\beta$**, **Upside/Downside Capture**, **Ulcer Index**, **Martin Ratio**, **Omega Ratio**, and **Deflated Sharpe Ratio**).
-   - Includes **1-Click `Revert All to Golden Base (v1)`** and **`Enforce Best Champion Versions`** buttons so you can always revert if a future experimental version (`v2+`) underperforms.
-3. **`Live Copilot (Real Account)`**:
+1. **`1. Live Copilot (Real Account)`** *(Default Landing Tab)*:
+   - **Trading-Day-Aware Checklist**: Automatically checks today's `NYSE`/`NASDAQ` calendar date. If today is a weekend or market holiday, it clearly states that US markets are closed, shows the next trading session date, and suppresses stale trade suggestions (with an optional preview toggle).
    - **Set Cash, Deposit, or Withdraw**: Update your uninvested broker cash, reset your 0% starting capital baseline, or log cash deposits/withdrawals (`Deposit / Withdraw`) without distorting your P&L %.
-   - **Follow the Daily Action Plan**: View exact `SELL`, `HOLD (with Stop-Ratchet price)`, and `BUY` instructions sized so a stop-loss risks at most **1.0% of your real equity**. Changing the fill price or share count dynamically updates the bracket's Stop-Loss, Take-Profit, and dollar risk in real time.
-   - **Confirm, Edit, or Undo Anytime**: Click **`✓ Bought`** or **`✓ Sold`** (supports partial exits and scale-ins), log or edit any holding (including custom tickers outside the core universe and custom entry dates), or use **`Restore Skipped`** and **`Undo Last Trade`** to recover from any mistaken click.
-4. **`Paper Ledger`**:
-   - Filter forward paper executions by **Trading Day**, **Order Side (`BUY`/`SELL`)**, or **Strategy**, with an automatic daily execution summary bar.
+   - **Dynamic Bracket Sizing & 1-Click Undo**: Changing the fill price or share count dynamically shifts Stop-Loss, Take-Profit, and dollar risk (`1.0%` max risk per trade). Supports partial exits, custom tickers, custom entry dates, **`Restore Skipped`**, and **`Undo Last Trade`**.
+2. **`2. Paper Account & Ledger`** *(Unified Forward `$100,000` Track Record)*:
+   - Displays **Total Equity**, **Daily P&L**, **Weekly P&L (5 sessions)**, and **Total P&L (Realised + Unrealised)** starting from a clean `$100,000.00` baseline, alongside open paper positions, strategy attribution, and the **Day/Side/Strategy-Filtered Execution Ledger**.
+3. **`3. Strategies, Rules & Backtests`** *(Complete Strategy Encyclopaedia)*:
+   - Consolidates everything about each strategy into one place: **how it is conceived & its economic edge**, its **exact machine-readable `entry_rules`, `exit_rules`, and `risk_params`**, its **9-gate `SPY` benchmark audit** (**Full & OOS Excess Return**, **Jensen's Alpha $\alpha$**, **Beta $\beta$**, **Upside/Downside Capture**, **Ulcer Index**, **Martin Ratio**, **Omega Ratio**, **DSR**), its **historical backtest trade log**, and **1-Click `Revert All to Golden Base (v1)`**.
+4. **`4. AI Research & IDE Bridge`** *(Watchlist + Direct Prompt-to-Engine Feed)*:
+   - Features an **IDE AI Reminder Checklist**, a **Copyable Ready-to-Paste AI Prompt**, and a **Direct JSON Feed Textarea** (`Apply AI Output to Engine`) so you can either type **`run`** in the Antigravity IDE or paste LLM JSON directly in the browser to enrich stock catalysts and run the 9-gate strategy tournament.
+5. **`5. Risk, Walk-Forward & Logs`**:
+   - Displays real-time sector concentration against the `30%` cap, 4-window Walk-Forward validation folds, risk vetoes, and job execution logs.
+6. **`6. Platform Guide`**:
+   - Interactive mental-model diagram and walkthrough of the Daily and Weekly loops.
 
 ---
 

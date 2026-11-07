@@ -145,3 +145,24 @@ class USTradingCalendar:
             curr += timedelta(days=1)
         return days
 
+    @classmethod
+    def next_trading_day(cls, from_date: str | date, include_same_day: bool = False) -> str:
+        if isinstance(from_date, str):
+            from_date = date.fromisoformat(from_date)
+        curr = from_date if include_same_day else (from_date + timedelta(days=1))
+        while not cls.is_trading_day(curr):
+            curr += timedelta(days=1)
+        return curr.isoformat()
+
+    @classmethod
+    def non_trading_reason(cls, d: str | date) -> str:
+        if isinstance(d, str):
+            d = date.fromisoformat(d)
+        if cls.is_trading_day(d):
+            return "Open Trading Session"
+        if d.weekday() == 5:
+            return "Weekend (Saturday — US Markets Closed)"
+        if d.weekday() == 6:
+            return "Weekend (Sunday — US Markets Closed)"
+        return "NYSE / NASDAQ Market Holiday (US Markets Closed)"
+

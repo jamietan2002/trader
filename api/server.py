@@ -264,6 +264,17 @@ def create_http_handler(app: PlatformApplication) -> type[BaseHTTPRequestHandler
                     start_c = float(payload["starting_cash"]) if payload.get("starting_cash") is not None else None
                     res = app.orchestrator.live_copilot.reset_copilot_account(starting_cash=start_c)
                     self._send_json(200, res)
+                elif path == "/api/ide/apply":
+                    res = app.orchestrator.apply_ide_ai_cycle(
+                        payload=payload, session_date=payload.get("session_date")
+                    )
+                    self._send_json(200, res)
+                elif path == "/api/ide/context":
+                    res = app.orchestrator.export_ide_ai_context(
+                        trading_date=payload.get("trading_date"),
+                        run_daily_first=bool(payload.get("run_daily_first", False)),
+                    )
+                    self._send_json(200, res)
                 else:
                     self._send_json(404, {"error": f"Endpoint {path} not found"})
             except Exception as exc:
