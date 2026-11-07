@@ -590,7 +590,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
       <div class="kpi-grid" id="copilot-kpis"></div>
       <div class="card">
-        <div class="card-header"><span class="card-title">1. Today's Step-by-Step Action Checklist (Next Market Open)</span></div>
+        <div class="card-header">
+          <span class="card-title">1. Today's Step-by-Step Action Checklist (Next Market Open)</span>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-secondary" id="cop-restore-skipped-btn" style="display:none;" onclick="restoreSkippedCopilotSignals()">Restore Skipped Signals</button>
+            <button class="btn btn-secondary" onclick="undoLastCopilotTrade()">Undo Last Trade</button>
+          </div>
+        </div>
         <div id="copilot-sell-box" style="margin-bottom:14px;"></div>
         <div id="copilot-buy-box"></div>
       </div>
@@ -606,13 +612,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <label>My Real Uninvested Cash ($)</label>
               <input type="number" id="cop-cash-input" value="25000" step="500" />
             </div>
-            <button class="btn btn-secondary" onclick="saveCopilotCash()">Update Cash Balance</button>
+            <button class="btn btn-secondary" onclick="saveCopilotCash(false)">Update Cash</button>
+            <button class="btn btn-secondary" onclick="saveCopilotCash(true)" title="Sets Cash + Open Holdings as your 0% return baseline">Set as Baseline</button>
           </div>
           <hr style="border:none;border-top:1px solid var(--border);margin:12px 0;" />
           <div class="form-row">
-            <div class="form-group"><label>Ticker</label><input type="text" id="cop-edit-ticker" value="AAPL" style="width:90px;" /></div>
-            <div class="form-group"><label>Shares (0=Delete)</label><input type="number" id="cop-edit-qty" value="10" style="width:110px;" /></div>
-            <div class="form-group"><label>Avg Entry ($)</label><input type="number" id="cop-edit-px" value="180.00" step="0.5" style="width:110px;" /></div>
+            <div class="form-group"><label>Ticker</label><input type="text" id="cop-edit-ticker" value="AAPL" style="width:80px;" /></div>
+            <div class="form-group"><label>Shares (0=Del)</label><input type="number" id="cop-edit-qty" value="10" style="width:90px;" /></div>
+            <div class="form-group"><label>Avg Entry ($)</label><input type="number" id="cop-edit-px" value="180.00" step="0.5" style="width:95px;" /></div>
+            <div class="form-group"><label>Entry Date</label><input type="text" id="cop-edit-dt" placeholder="YYYY-MM-DD" style="width:105px;" /></div>
             <button class="btn" onclick="saveCopilotPosition()">Save Position</button>
           </div>
         </div>
@@ -684,6 +692,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       const cashIn = document.getElementById('cop-cash-input');
       if (cashIn && acc.cash_balance !== undefined) cashIn.value = acc.cash_balance;
+      const dtIn = document.getElementById('cop-edit-dt');
+      if (dtIn && !dtIn.value && plan.session_date) dtIn.value = plan.session_date;
+      const restoreBtn = document.getElementById('cop-restore-skipped-btn');
+      if (restoreBtn) {
+        const dCount = Number(plan.dismissed_count || 0);
+        restoreBtn.style.display = dCount > 0 ? 'inline-block' : 'none';
+        restoreBtn.textContent = `Restore Skipped (${dCount})`;
+      }
 
       document.getElementById('copilot-kpis').innerHTML = `
         <div class="kpi-card"><div class="kpi-label">My Real Equity</div><div class="kpi-value">${fmtUsd(acc.total_equity)}</div><div class="kpi-sub">Base: ${fmtUsd(acc.starting_cash)} (${fmtPct(acc.total_return_pct)})</div></div>
@@ -762,9 +778,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ` : '<div style="font-size:0.84rem;color:var(--muted);">0 confirmed real positions. Click "Confirm Bought" above or add a holding on the right.</div>';
     }
 
-    async function saveCopilotCash() {
+    async function saveCopilotCash(updateBaseline = false) {
       const cash = Number(document.getElementById('cop-cash-input').value || 0);
-      await fetch('/api/copilot/cash', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({cash_balance: cash, update_starting_baseline: true})});
+      await fetch('/api/copilot/cash', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({cash_balance: cash, update_starting_baseline: updateBaseline})});
       await loadDashboardState();
     }
 
@@ -772,7 +788,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const ticker = document.getElementById('cop-edit-ticker').value;
       const qty = Number(document.getElementById('cop-edit-qty').value || 0);
       const px = Number(document.getElementById('cop-edit-px').value || 100);
-      await fetch('/api/copilot/edit-position', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ticker, quantity: qty, avg_entry_price: px})});
+      const dtEl = document.getElementById('cop-edit-dt');
+      const opened_date = dtEl && dtEl.value ? dtEl.value.trim() : null;
+      await fetch('/api/copilot/edit-position', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ticker, quantity: qty, avg_entry_price: px, opened_date})});
       await loadDashboardState();
     }
 
@@ -784,7 +802,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       await fetch('/api/copilot/confirm-buy', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ticker, strategy_id, strategy_version, quantity, fill_price, stop_loss_price, take_profit_price, sector, fees_usd: 1.0})
+        body: JSON.stringify({ticker, strategy_id, strategy_version, quantity, fill_price, reference_entry_price: def_px, stop_loss_price, take_profit_price, sector, fees_usd: 0.0})
       });
       await loadDashboardState();
     }
@@ -797,7 +815,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       await fetch('/api/copilot/confirm-sell', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ticker, quantity, fill_price, fees_usd: 1.0})
+        body: JSON.stringify({ticker, quantity, fill_price, fees_usd: 0.0})
       });
       await loadDashboardState();
     }
@@ -807,6 +825,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({signal_date, strategy_id, ticker, action})
+      });
+      await loadDashboardState();
+    }
+
+    async function restoreSkippedCopilotSignals() {
+      const plan = (STATE.copilot && STATE.copilot.action_plan) || {};
+      await fetch('/api/copilot/restore-skipped', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({signal_date: plan.session_date || null})
+      });
+      await loadDashboardState();
+    }
+
+    async function undoLastCopilotTrade() {
+      await fetch('/api/copilot/undo', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({})
       });
       await loadDashboardState();
     }

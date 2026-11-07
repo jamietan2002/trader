@@ -4,6 +4,23 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-07] — Live Trading Copilot Persistence Hardening, `st.session_state` Widget Sync & Real-World Edge-Case Support
+
+### Summary
+- **Streamlit `st.session_state` & Widget Synchronization (`dashboard/streamlit_app.py`)**: Fixed widget state persistence where `st.session_state["copilot_cash_input"]` and position editor inputs (`edit_qty_*`, `edit_px_*`, `edit_sl_*`, `edit_tp_*`, `edit_dt_*`) could retain stale pre-trade values across `st.rerun()` after confirming a `BUY`/`SELL` or closing/editing a holding. Synchronized `copilot_cash_input` via `_synced_copilot_db_cash` and keyed position/action inputs by live database state signatures (`pos_sig`, `b_sig`, `s_qty_sig`, `h_sig`), with instant confirmation banners (`_copilot_flash_msg` + `st.toast`).
+- **Real-World User Trading Context Edge Cases (`LiveTradingCopilotEngine` in `core/execution/paper_broker.py`, `api/server.py`, `dashboard/ui_template.py`)**:
+  - **Dynamic Fill-Price Bracket Shifting**: When a user enters an actual broker `Fill Price ($)` that differs from `reference_entry_price` in `confirm_buy_execution()`, `stop_loss_price` and `take_profit_price` automatically shift by `fill_price - reference_entry_price` (and preview live in the UI) so the exact dollar/ATR risk bracket is preserved.
+  - **Shortfall Auto-Funding & Cash Deposit/Withdrawal (`adjust_cash_deposit_withdrawal`)**: If a confirmed `BUY` or manual position cost exceeds `cash_balance`, the shortfall is automatically credited to `starting_cash` (preventing artificial P&L losses from unlogged broker cash). Added explicit `+ Deposit` / `- Withdraw` controls (`/api/copilot/deposit-withdraw`) that adjust both `cash_balance` and `starting_cash` simultaneously.
+  - **Net-Delta Cash Adjustment, Custom Tickers & Entry Date Preservation (`edit_or_add_position`, `sync_market_prices`)**: Editing an existing position with `deduct_from_cash=True` now adjusts cash by only the net cost delta `(new_qty * new_entry) - (old_qty * old_entry)` (or refunds cost on deletion), preserves `opened_date`, accurately computes `holding_days` from `opened_date`, and supports custom tickers outside the core universe.
+  - **Mistake Recovery (`undo_last_trade`, `restore_dismissed_signals`, `reset_copilot_account`) & `SECTOR_ROTATION` Parity**: Added 1-click **Undo Last Trade** (`/api/copilot/undo`), **Restore Skipped Signals** (`/api/copilot/restore-skipped`), **Partial / Full Inline Exit**, and **Reset Real Account Ledger** (`/api/copilot/reset`), and passed `sector_rs_rank` into `StrategySignalEngine.evaluate_entry()` inside `get_daily_action_plan()`.
+
+### Modules Added / Modified
+- `core/execution/paper_broker.py`, `api/server.py`
+- `dashboard/streamlit_app.py`, `dashboard/ui_template.py`
+- `tests/test_platform.py`, `USER_GUIDE.md`, `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-07] — Institutional SPY Benchmark Readiness Suite, 5 Golden Base (`v1`) Models & One-Click Baseline Revert
 
 ### Summary

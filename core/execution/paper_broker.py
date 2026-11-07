@@ -1148,16 +1148,20 @@ class LiveTradingCopilotEngine:
         if not rows:
             return
         now_iso = utc_now_iso()
+        spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker, end_date=as_of_date)
         for r in rows:
             ticker = r["ticker"]
-            bars = self.market_data.get_bars(ticker, end_date=as_of_date)
-            if not bars:
-                continue
-            latest_bar = bars[-1]
-            curr_price = float(latest_bar.adj_close)
-            high_since = max(float(r["highest_price_since_entry"]), float(latest_bar.adj_high), curr_price)
             opened_dt = str(r["opened_date"])
-            hold_days = sum(1 for b in bars if b.bar_date > opened_dt)
+            bars = self.market_data.get_bars(ticker, end_date=as_of_date)
+            if bars:
+                latest_bar = bars[-1]
+                curr_price = float(latest_bar.adj_close)
+                high_since = max(float(r["highest_price_since_entry"]), float(latest_bar.adj_high), curr_price)
+                hold_days = sum(1 for b in bars if b.bar_date > opened_dt)
+            else:
+                curr_price = float(r["current_price"])
+                high_since = max(float(r["highest_price_since_entry"]), curr_price)
+                hold_days = sum(1 for b in spy_bars if b.bar_date > opened_dt) if spy_bars else int(r["holding_days"])
             self.db.execute(
                 """
                 UPDATE shadow_positions
@@ -1252,6 +1256,25 @@ class LiveTradingCopilotEngine:
         )
         return self.get_account_summary()
 
+    def adjust_cash_deposit_withdrawal(self, delta_cash: float) -> Dict[str, Any]:
+        """Deposit (>0) or withdraw (<0) cash, shifting both cash_balance and starting_cash so P&L is preserved."""
+        acc = self.ensure_initialized()
+        cur_cash = float(acc["cash_balance"])
+        cur_start = float(acc["starting_cash"])
+        new_cash = round(cur_cash + delta_cash, 2)
+        if new_cash < 0:
+            raise ValueError(f"Cannot withdraw ${abs(delta_cash):,.2f}: only ${cur_cash:,.2f} uninvested cash available.")
+        new_start = max(1.0, round(cur_start + delta_cash, 2))
+        self.db.execute(
+            """
+            UPDATE shadow_accounts
+            SET cash_balance = ?, starting_cash = ?, updated_at = ?
+            WHERE account_id = ?
+            """,
+            (new_cash, new_start, utc_now_iso(), self.account_id),
+        )
+        return self.get_account_summary()
+
     def set_enabled_strategies(self, strategy_keys: List[str]) -> None:
         """Save user's preferred active strategy IDs (e.g. ['strat_momentum_trend:1', 'strat_volatility_breakout:2'])."""
         self.db.execute(
@@ -1270,6 +1293,28 @@ class LiveTradingCopilotEngine:
             (self.account_id, signal_date, strategy_id, ticker.upper(), action.upper(), utc_now_iso()),
         )
 
+    def restore_dismissed_signals(self, signal_date: Optional[str] = None) -> int:
+        """Restore any skipped/held signals for the given session date (or all dates if None)."""
+        if signal_date:
+            rows = self.db.fetch_all(
+                "SELECT 1 FROM shadow_dismissed_signals WHERE account_id = ? AND signal_date = ?",
+                (self.account_id, signal_date),
+            )
+            self.db.execute(
+                "DELETE FROM shadow_dismissed_signals WHERE account_id = ? AND signal_date = ?",
+                (self.account_id, signal_date),
+            )
+        else:
+            rows = self.db.fetch_all(
+                "SELECT 1 FROM shadow_dismissed_signals WHERE account_id = ?",
+                (self.account_id,),
+            )
+            self.db.execute(
+                "DELETE FROM shadow_dismissed_signals WHERE account_id = ?",
+                (self.account_id,),
+            )
+        return len(rows)
+
     def confirm_buy_execution(
         self,
         ticker: str,
@@ -1280,6 +1325,7 @@ class LiveTradingCopilotEngine:
         fees_usd: float = 0.0,
         stop_loss_price: Optional[float] = None,
         take_profit_price: Optional[float] = None,
+        reference_entry_price: Optional[float] = None,
         fill_date: Optional[str] = None,
         sector: str = "Technology",
         notes: str = "",
@@ -1293,8 +1339,26 @@ class LiveTradingCopilotEngine:
         now_iso = utc_now_iso()
 
         acc = self.ensure_initialized()
+        cur_cash = float(acc["cash_balance"])
+        cur_start = float(acc["starting_cash"])
         cost = round(quantity * fill_price + fees_usd, 2)
-        new_cash = max(0.0, round(float(acc["cash_balance"]) - cost, 2))
+        if cost > cur_cash:
+            # User bought using external broker cash beyond previously logged cash_balance:
+            # auto-credit the shortfall to starting_cash so P&L is never artificially negative!
+            shortfall = round(cost - cur_cash, 2)
+            new_cash = 0.0
+            new_start = round(cur_start + shortfall, 2)
+        else:
+            new_cash = round(cur_cash - cost, 2)
+            new_start = cur_start
+
+        # Shift Stop-Loss and Take-Profit proportionally if user's actual fill_price differs from reference_entry_price
+        if reference_entry_price is not None and reference_entry_price > 0 and abs(fill_price - reference_entry_price) > 1e-4:
+            price_shift = fill_price - reference_entry_price
+            if stop_loss_price is not None:
+                stop_loss_price = round(max(0.01, stop_loss_price + price_shift), 2)
+            if take_profit_price is not None:
+                take_profit_price = round(max(fill_price + 0.01, take_profit_price + price_shift), 2)
 
         # Ensure stop-loss is strictly below fill_price and take-profit is strictly above fill_price
         if stop_loss_price is not None and stop_loss_price >= fill_price:
@@ -1311,16 +1375,17 @@ class LiveTradingCopilotEngine:
             old_p = float(existing["avg_entry_price"])
             new_q = old_q + quantity
             new_avg = round(((old_q * old_p) + (quantity * fill_price)) / new_q, 4)
+            high_p = max(float(existing["highest_price_since_entry"]), fill_price)
             self.db.execute(
                 """
                 UPDATE shadow_positions
-                SET quantity = ?, avg_entry_price = ?, current_price = ?,
+                SET quantity = ?, avg_entry_price = ?, current_price = ?, highest_price_since_entry = ?,
                     stop_loss_price = COALESCE(?, stop_loss_price),
                     take_profit_price = COALESCE(?, take_profit_price),
                     updated_at = ?
                 WHERE account_id = ? AND ticker = ?
                 """,
-                (new_q, new_avg, fill_price, stop_loss_price, take_profit_price, now_iso, self.account_id, ticker_u),
+                (new_q, new_avg, fill_price, high_p, stop_loss_price, take_profit_price, now_iso, self.account_id, ticker_u),
             )
         else:
             meta = self.market_data.get_universe_metadata(include_delisted=True).get(ticker_u)
@@ -1352,8 +1417,8 @@ class LiveTradingCopilotEngine:
             )
 
         self.db.execute(
-            "UPDATE shadow_accounts SET cash_balance = ?, updated_at = ? WHERE account_id = ?",
-            (new_cash, now_iso, self.account_id),
+            "UPDATE shadow_accounts SET cash_balance = ?, starting_cash = ?, updated_at = ? WHERE account_id = ?",
+            (new_cash, new_start, now_iso, self.account_id),
         )
         self.db.execute(
             """
@@ -1465,45 +1530,80 @@ class LiveTradingCopilotEngine:
     ) -> Dict[str, Any]:
         """Manually add, edit, or delete (quantity=0) a position in the user's real shadow ledger."""
         ticker_u = ticker.strip().upper()
+        if not ticker_u:
+            raise ValueError("Ticker cannot be empty.")
         now_iso = utc_now_iso()
+        existing = self.db.fetch_one(
+            "SELECT * FROM shadow_positions WHERE account_id = ? AND ticker = ?",
+            (self.account_id, ticker_u),
+        )
+        old_cost = (int(existing["quantity"]) * float(existing["avg_entry_price"])) if existing is not None else 0.0
+
         if quantity <= 0:
             self.db.execute(
                 "DELETE FROM shadow_positions WHERE account_id = ? AND ticker = ?",
                 (self.account_id, ticker_u),
             )
+            if deduct_from_cash and old_cost > 0:
+                acc = self.ensure_initialized()
+                new_cash = round(float(acc["cash_balance"]) + old_cost, 2)
+                self.db.execute(
+                    "UPDATE shadow_accounts SET cash_balance = ?, updated_at = ? WHERE account_id = ?",
+                    (new_cash, now_iso, self.account_id),
+                )
             return self.get_account_summary()
 
         bars = self.market_data.get_bars(ticker_u)
+        spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker)
         latest_close = float(bars[-1].adj_close) if bars else avg_entry_price
-        dt_str = opened_date or (bars[-1].bar_date if bars else now_iso[:10])
+        default_dt = (
+            str(existing["opened_date"])
+            if existing is not None
+            else (bars[-1].bar_date if bars else (spy_bars[-1].bar_date if spy_bars else now_iso[:10]))
+        )
+        dt_str = opened_date or default_dt
         meta = self.market_data.get_universe_metadata(include_delisted=True).get(ticker_u)
-        sec = meta.sector if meta else "Technology"
+        sec = meta.sector if meta else (str(existing["sector"]) if existing is not None else "Technology")
+
+        ref_bars = bars if bars else spy_bars
+        hold_days = sum(1 for b in ref_bars if b.bar_date > dt_str) if ref_bars else 0
 
         # Auto-compute default ATR stop/target if omitted
-        if (stop_loss_price is None or take_profit_price is None) and len(bars) >= 20:
-            inds = compute_indicator_series(bars)
-            ind_last = inds.get(bars[-1].bar_date)
-            atr = float(ind_last.atr_14) if (ind_last and ind_last.atr_14) else avg_entry_price * 0.025
+        if stop_loss_price is None or take_profit_price is None:
+            if len(bars) >= 20:
+                inds = compute_indicator_series(bars)
+                ind_last = inds.get(bars[-1].bar_date)
+                atr = float(ind_last.atr_14) if (ind_last and ind_last.atr_14) else avg_entry_price * 0.025
+            else:
+                atr = avg_entry_price * 0.025
             if stop_loss_price is None:
-                stop_loss_price = round(avg_entry_price - 2.0 * atr, 2)
+                stop_loss_price = round(max(0.01, avg_entry_price - 2.0 * atr), 2)
             if take_profit_price is None:
                 take_profit_price = round(avg_entry_price + 3.5 * atr, 2)
 
+        high_since = max(
+            round(avg_entry_price, 4),
+            round(latest_close, 4),
+            float(existing["highest_price_since_entry"]) if existing is not None else 0.0,
+        )
         self.db.execute(
             """
             INSERT INTO shadow_positions (
                 account_id, ticker, strategy_id, strategy_version, sector,
                 quantity, avg_entry_price, current_price, highest_price_since_entry,
                 stop_loss_price, take_profit_price, opened_date, holding_days, notes, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'Manual position edit/entry', ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Manual position edit/entry', ?)
             ON CONFLICT(account_id, ticker) DO UPDATE SET
                 strategy_id=excluded.strategy_id,
                 strategy_version=excluded.strategy_version,
                 quantity=excluded.quantity,
                 avg_entry_price=excluded.avg_entry_price,
                 current_price=excluded.current_price,
+                highest_price_since_entry=excluded.highest_price_since_entry,
                 stop_loss_price=excluded.stop_loss_price,
                 take_profit_price=excluded.take_profit_price,
+                opened_date=excluded.opened_date,
+                holding_days=excluded.holding_days,
                 updated_at=excluded.updated_at
             """,
             (
@@ -1515,20 +1615,149 @@ class LiveTradingCopilotEngine:
                 int(quantity),
                 round(avg_entry_price, 4),
                 round(latest_close, 4),
-                max(round(avg_entry_price, 4), round(latest_close, 4)),
+                high_since,
                 round(stop_loss_price, 2) if stop_loss_price else None,
                 round(take_profit_price, 2) if take_profit_price else None,
                 dt_str,
+                int(hold_days),
                 now_iso,
             ),
         )
         if deduct_from_cash:
             acc = self.ensure_initialized()
-            new_cash = max(0.0, round(float(acc["cash_balance"]) - (quantity * avg_entry_price), 2))
+            cur_cash = float(acc["cash_balance"])
+            cur_start = float(acc["starting_cash"])
+            new_cost = round(quantity * avg_entry_price, 2)
+            cost_delta = round(new_cost - old_cost, 2)
+            if cost_delta > cur_cash:
+                shortfall = round(cost_delta - cur_cash, 2)
+                new_cash = 0.0
+                new_start = round(cur_start + shortfall, 2)
+            else:
+                new_cash = max(0.0, round(cur_cash - cost_delta, 2))
+                new_start = cur_start
+            self.db.execute(
+                "UPDATE shadow_accounts SET cash_balance = ?, starting_cash = ?, updated_at = ? WHERE account_id = ?",
+                (new_cash, new_start, now_iso, self.account_id),
+            )
+        return self.get_account_summary()
+
+    def undo_last_trade(self) -> Dict[str, Any]:
+        """Reverse the most recently confirmed BUY or SELL fill in the user's real shadow ledger."""
+        last_trade = self.db.fetch_one(
+            "SELECT * FROM shadow_trade_history WHERE account_id = ? ORDER BY created_at DESC LIMIT 1",
+            (self.account_id,),
+        )
+        if last_trade is None:
+            return self.get_account_summary()
+
+        trade_id = str(last_trade["trade_id"])
+        ticker_u = str(last_trade["ticker"]).upper()
+        side = str(last_trade["side"]).upper()
+        qty = int(last_trade["quantity"])
+        fill_price = float(last_trade["fill_price"])
+        fees_usd = float(last_trade["fees_usd"])
+        realised_delta = float(last_trade["realised_pnl"])
+        strat_id = str(last_trade["strategy_id"])
+        strat_ver = int(last_trade["strategy_version"])
+        fill_date = str(last_trade["fill_date"])
+        now_iso = utc_now_iso()
+
+        acc = self.ensure_initialized()
+        cur_cash = float(acc["cash_balance"])
+        cur_realised = float(acc["realised_pnl"])
+        existing = self.db.fetch_one(
+            "SELECT * FROM shadow_positions WHERE account_id = ? AND ticker = ?",
+            (self.account_id, ticker_u),
+        )
+
+        if side == "BUY":
+            cost_refund = round(qty * fill_price + fees_usd, 2)
+            new_cash = round(cur_cash + cost_refund, 2)
+            if existing is not None:
+                rem_qty = int(existing["quantity"]) - qty
+                if rem_qty <= 0:
+                    self.db.execute(
+                        "DELETE FROM shadow_positions WHERE account_id = ? AND ticker = ?",
+                        (self.account_id, ticker_u),
+                    )
+                else:
+                    old_total = int(existing["quantity"]) * float(existing["avg_entry_price"])
+                    restored_avg = max(0.01, round((old_total - (qty * fill_price)) / rem_qty, 4))
+                    self.db.execute(
+                        "UPDATE shadow_positions SET quantity = ?, avg_entry_price = ?, updated_at = ? WHERE account_id = ? AND ticker = ?",
+                        (rem_qty, restored_avg, now_iso, self.account_id, ticker_u),
+                    )
             self.db.execute(
                 "UPDATE shadow_accounts SET cash_balance = ?, updated_at = ? WHERE account_id = ?",
                 (new_cash, now_iso, self.account_id),
             )
+        elif side == "SELL":
+            proceeds = round(qty * fill_price - fees_usd, 2)
+            new_cash = max(0.0, round(cur_cash - proceeds, 2))
+            new_realised = round(cur_realised - realised_delta, 2)
+            # Reconstruct original avg_entry_price from realised_delta = (fill_price - avg_entry) * qty - fees_usd
+            inferred_entry = round(fill_price - ((realised_delta + fees_usd) / max(1, qty)), 4)
+            if existing is not None:
+                new_q = int(existing["quantity"]) + qty
+                self.db.execute(
+                    "UPDATE shadow_positions SET quantity = ?, updated_at = ? WHERE account_id = ? AND ticker = ?",
+                    (new_q, now_iso, self.account_id, ticker_u),
+                )
+            else:
+                meta = self.market_data.get_universe_metadata(include_delisted=True).get(ticker_u)
+                sec = meta.sector if meta else "Technology"
+                self.db.execute(
+                    """
+                    INSERT INTO shadow_positions (
+                        account_id, ticker, strategy_id, strategy_version, sector,
+                        quantity, avg_entry_price, current_price, highest_price_since_entry,
+                        stop_loss_price, take_profit_price, opened_date, holding_days, notes, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'Restored via Undo Last Trade', ?)
+                    """,
+                    (
+                        self.account_id,
+                        ticker_u,
+                        strat_id,
+                        strat_ver,
+                        sec,
+                        qty,
+                        inferred_entry,
+                        fill_price,
+                        max(inferred_entry, fill_price),
+                        round(inferred_entry * 0.95, 2),
+                        round(inferred_entry * 1.08, 2),
+                        fill_date,
+                        now_iso,
+                    ),
+                )
+            self.db.execute(
+                "UPDATE shadow_accounts SET cash_balance = ?, realised_pnl = ?, updated_at = ? WHERE account_id = ?",
+                (new_cash, new_realised, now_iso, self.account_id),
+            )
+
+        self.db.execute(
+            "DELETE FROM shadow_trade_history WHERE account_id = ? AND trade_id = ?",
+            (self.account_id, trade_id),
+        )
+        return self.get_account_summary()
+
+    def reset_copilot_account(self, starting_cash: Optional[float] = None) -> Dict[str, Any]:
+        """Clear all shadow positions, trade history, and dismissed signals, resetting cash to starting_cash."""
+        acc = self.ensure_initialized()
+        base_cash = round(float(starting_cash if starting_cash is not None else acc["starting_cash"]), 2)
+        now_iso = utc_now_iso()
+        self.db.execute("DELETE FROM shadow_positions WHERE account_id = ?", (self.account_id,))
+        self.db.execute("DELETE FROM shadow_trade_history WHERE account_id = ?", (self.account_id,))
+        self.db.execute("DELETE FROM shadow_dismissed_signals WHERE account_id = ?", (self.account_id,))
+        self.db.execute(
+            """
+            UPDATE shadow_accounts
+            SET starting_cash = ?, cash_balance = ?, realised_pnl = 0.0, updated_at = ?
+            WHERE account_id = ?
+            """,
+            (base_cash, base_cash, now_iso, self.account_id),
+        )
         return self.get_account_summary()
 
     def get_daily_action_plan(self, as_of_date: Optional[str] = None) -> Dict[str, Any]:
@@ -1645,6 +1874,27 @@ class LiveTradingCopilotEngine:
         vetoed_signals: List[Dict[str, Any]] = []
         universe_meta = self.market_data.get_universe_metadata(include_delisted=True)
 
+        # Compute sector momentum rank map for SECTOR_ROTATION strategies
+        all_universe_tickers = sorted({t for s in deduped_strats for t in s.universe if t != self.settings.benchmark_ticker})
+        bars_by_tkr: Dict[str, List[DailyBar]] = {}
+        inds_by_tkr: Dict[str, Dict[str, Any]] = {}
+        sector_rs_buckets: Dict[str, List[float]] = {}
+        for tkr in all_universe_tickers:
+            b_list = self.market_data.get_bars(tkr, end_date=session_date)
+            if len(b_list) < 25:
+                continue
+            bars_by_tkr[tkr] = b_list
+            ind_map = compute_indicator_series(b_list, spy_bars=spy_bars)
+            inds_by_tkr[tkr] = ind_map
+            ind_dt = ind_map.get(b_list[-1].bar_date)
+            if ind_dt and ind_dt.rs_vs_spy_20d is not None:
+                m_meta = universe_meta.get(tkr)
+                sec_name = m_meta.sector if m_meta else "Technology"
+                sector_rs_buckets.setdefault(sec_name, []).append(float(ind_dt.rs_vs_spy_20d))
+        sector_avg = {sec: (sum(vals) / len(vals)) for sec, vals in sector_rs_buckets.items() if vals}
+        sorted_secs = sorted(sector_avg.items(), key=lambda kv: kv[1], reverse=True)
+        sector_rank_map = {sec: idx + 1 for idx, (sec, _) in enumerate(sorted_secs)}
+
         # Simulate remaining cash/exposure as recommendations are queued so total recommendations respect user's caps
         sim_cash = float(summary["cash_balance"])
         sim_open_map = dict(open_by_ticker)
@@ -1659,11 +1909,11 @@ class LiveTradingCopilotEngine:
                     continue
                 if (strat.strategy_id, ticker, "BUY") in dismissed_set:
                     continue
-                bars = self.market_data.get_bars(ticker, end_date=session_date)
-                if len(bars) < 25:
+                bars = bars_by_tkr.get(ticker)
+                if not bars or len(bars) < 25:
                     continue
                 latest_bar = bars[-1]
-                inds = compute_indicator_series(bars, spy_bars=spy_bars)
+                inds = inds_by_tkr.get(ticker) or {}
                 ind_latest = inds.get(latest_bar.bar_date)
                 if ind_latest is None:
                     continue
@@ -1671,11 +1921,15 @@ class LiveTradingCopilotEngine:
                 recent_ev = self.market_data.get_point_in_time_earnings(
                     ticker, latest_bar.bar_date, lookback_days=pead_lookback
                 )
+                m_meta = universe_meta.get(ticker)
+                sec_name = m_meta.sector if m_meta else "Technology"
+                sec_rank = sector_rank_map.get(sec_name, 1)
                 sig = StrategySignalEngine.evaluate_entry(
                     config=strat,
                     ind=ind_latest,
                     spy_ind=spy_inds.get(latest_bar.bar_date),
                     recent_earnings=recent_ev,
+                    sector_rs_rank=sec_rank,
                 )
                 if sig is not None:
                     bucket.append((strat, ticker, latest_bar, sig))
@@ -1773,6 +2027,7 @@ class LiveTradingCopilotEngine:
             "buy_actions": buy_actions,
             "hold_updates": hold_updates,
             "vetoed_signals": vetoed_signals,
+            "dismissed_count": len(dismissed_set),
         }
 
     def export_state(self) -> Dict[str, Any]:

@@ -736,19 +736,29 @@ class TestSwingTradingPlatform(unittest.TestCase):
         self.assertEqual(after_buy["open_positions_count"], 1)
         self.assertAlmostEqual(after_buy["cash_balance"], 20_000.0 - 1_201.0, places=2)
 
-        # Editing position share count and stop-loss works cleanly
-        copilot.edit_or_add_position(
+        # Editing position share count with deduct_from_cash=True only deducts the delta (5 * 120 = $600)
+        after_edit = copilot.edit_or_add_position(
             ticker="NVDA",
             quantity=15,
             avg_entry_price=120.0,
             stop_loss_price=114.0,
             take_profit_price=138.0,
+            deduct_from_cash=True,
         )
         self.assertEqual(copilot.get_open_positions()[0]["quantity"], 15)
+        self.assertEqual(copilot.get_open_positions()[0]["opened_date"], "2025-05-05")
+        self.assertAlmostEqual(after_edit["cash_balance"], 20_000.0 - 1_201.0 - 600.0, places=2)
 
         # Verify get_daily_action_plan with an open position populates hold_updates or sell_actions cleanly
         plan_with_open = copilot.get_daily_action_plan(as_of_date="2025-05-09")
         self.assertTrue(len(plan_with_open["hold_updates"]) + len(plan_with_open["sell_actions"]) >= 1)
+
+        # Verify dismiss_signal and restore_dismissed_signals
+        copilot.dismiss_signal("2025-05-09", "strat_momentum_trend", "AAPL", "BUY")
+        self.assertEqual(copilot.get_daily_action_plan(as_of_date="2025-05-09")["dismissed_count"], 1)
+        restored_cnt = copilot.restore_dismissed_signals("2025-05-09")
+        self.assertEqual(restored_cnt, 1)
+        self.assertEqual(copilot.get_daily_action_plan(as_of_date="2025-05-09")["dismissed_count"], 0)
 
         # Confirming a SELL execution closes the position and locks in realised P&L
         after_sell = copilot.confirm_sell_execution(
@@ -760,6 +770,37 @@ class TestSwingTradingPlatform(unittest.TestCase):
         )
         self.assertEqual(after_sell["open_positions_count"], 0)
         self.assertAlmostEqual(after_sell["realised_pnl"], (130.0 - 120.0) * 15 - 1.0, places=2)
+
+        # Verify undo_last_trade reverses the SELL and restores the 15-share NVDA position
+        after_undo = copilot.undo_last_trade()
+        self.assertEqual(after_undo["open_positions_count"], 1)
+        self.assertEqual(copilot.get_open_positions()[0]["quantity"], 15)
+        self.assertAlmostEqual(after_undo["realised_pnl"], 0.0, places=2)
+
+        # Re-sell NVDA and test deposit/withdrawal & shortfall auto-funding
+        copilot.confirm_sell_execution(ticker="NVDA", quantity=15, fill_price=130.0, fees_usd=1.0, fill_date="2025-05-09")
+        dep_summary = copilot.adjust_cash_deposit_withdrawal(5_000.0)
+        self.assertAlmostEqual(dep_summary["starting_cash"], 25_000.0, places=2)
+
+        # Buying more than available cash auto-funds shortfall into starting_cash without distorting P&L
+        copilot.update_cash_balance(1_000.0, update_starting_baseline=True)
+        shortfall_buy = copilot.confirm_buy_execution(
+            ticker="MSFT",
+            strategy_id="strat_momentum_trend",
+            strategy_version=1,
+            quantity=10,
+            fill_price=150.0,
+            reference_entry_price=148.0,
+            stop_loss_price=140.0,
+            take_profit_price=165.0,
+            fill_date="2025-05-09",
+        )
+        self.assertAlmostEqual(shortfall_buy["cash_balance"], 0.0, places=2)
+        self.assertAlmostEqual(shortfall_buy["starting_cash"], 1_500.0, places=2)
+        msft_pos = [p for p in copilot.get_open_positions() if p["ticker"] == "MSFT"][0]
+        # Stop and target shifted by +$2.00 (fill 150 vs ref 148)
+        self.assertAlmostEqual(float(msft_pos["stop_loss_price"]), 142.0, places=2)
+        self.assertAlmostEqual(float(msft_pos["take_profit_price"]), 167.0, places=2)
 
         # 8. Verify IDE-Native AI Bridge (`export_ide_ai_context` & `apply_ide_ai_cycle`)
         ide_ctx = orch.export_ide_ai_context(trading_date="2025-05-09", run_daily_first=False)

@@ -198,6 +198,10 @@ def create_http_handler(app: PlatformApplication) -> type[BaseHTTPRequestHandler
                     update_base = bool(payload.get("update_starting_baseline", False))
                     res = app.orchestrator.live_copilot.update_cash_balance(cash, update_base)
                     self._send_json(200, res)
+                elif path == "/api/copilot/deposit-withdraw":
+                    delta_cash = float(payload.get("delta_cash", 0.0))
+                    res = app.orchestrator.live_copilot.adjust_cash_deposit_withdrawal(delta_cash)
+                    self._send_json(200, res)
                 elif path == "/api/copilot/strategies":
                     keys = list(payload.get("enabled_strategies") or [])
                     app.orchestrator.live_copilot.set_enabled_strategies(keys)
@@ -212,6 +216,7 @@ def create_http_handler(app: PlatformApplication) -> type[BaseHTTPRequestHandler
                         fees_usd=float(payload.get("fees_usd", 0.0)),
                         stop_loss_price=float(payload["stop_loss_price"]) if payload.get("stop_loss_price") else None,
                         take_profit_price=float(payload["take_profit_price"]) if payload.get("take_profit_price") else None,
+                        reference_entry_price=float(payload["reference_entry_price"]) if payload.get("reference_entry_price") else None,
                         sector=str(payload.get("sector", "Technology")),
                         notes=str(payload.get("notes", "")),
                     )
@@ -234,6 +239,7 @@ def create_http_handler(app: PlatformApplication) -> type[BaseHTTPRequestHandler
                         take_profit_price=float(payload["take_profit_price"]) if payload.get("take_profit_price") else None,
                         strategy_id=str(payload.get("strategy_id", "strat_momentum_trend")),
                         strategy_version=int(payload.get("strategy_version", 1)),
+                        opened_date=str(payload["opened_date"]) if payload.get("opened_date") else None,
                         deduct_from_cash=bool(payload.get("deduct_from_cash", False)),
                     )
                     self._send_json(200, res)
@@ -245,6 +251,19 @@ def create_http_handler(app: PlatformApplication) -> type[BaseHTTPRequestHandler
                         action=str(payload.get("action", "BUY")),
                     )
                     self._send_json(200, {"status": "dismissed"})
+                elif path == "/api/copilot/restore-skipped":
+                    sig_date = payload.get("signal_date")
+                    restored = app.orchestrator.live_copilot.restore_dismissed_signals(
+                        signal_date=str(sig_date) if sig_date else None
+                    )
+                    self._send_json(200, {"restored_count": restored})
+                elif path == "/api/copilot/undo":
+                    res = app.orchestrator.live_copilot.undo_last_trade()
+                    self._send_json(200, res)
+                elif path == "/api/copilot/reset":
+                    start_c = float(payload["starting_cash"]) if payload.get("starting_cash") is not None else None
+                    res = app.orchestrator.live_copilot.reset_copilot_account(starting_cash=start_c)
+                    self._send_json(200, res)
                 else:
                     self._send_json(404, {"error": f"Endpoint {path} not found"})
             except Exception as exc:

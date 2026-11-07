@@ -57,9 +57,9 @@ Every base strategy (`v1`) has been validated across multi-year history (`2023�
    - Compares every strategy version against `SPY` (**Full & OOS Excess Return**, **Jensen's Alpha $\alpha$**, **Beta $\beta$**, **Upside/Downside Capture**, **Ulcer Index**, **Martin Ratio**, **Omega Ratio**, and **Deflated Sharpe Ratio**).
    - Includes **1-Click `Revert All to Golden Base (v1)`** and **`Enforce Best Champion Versions`** buttons so you can always revert if a future experimental version (`v2+`) underperforms.
 3. **`Live Copilot (Real Account)`**:
-   - **Set Your Cash**: Enter your real uninvested broker cash in the single-row cash bar.
-   - **Follow the Daily Action Plan**: View exact `SELL`, `HOLD (with Stop-Ratchet price)`, and `BUY` instructions sized so a stop-loss risks at most **1.0% of your real equity**.
-   - **Confirm Only What You Execute**: The system never assumes you took a trade. Click **`Confirm Bought`** or **`Confirm Sold`** (adjusting fill price/shares if needed), **`Skip`**, or **`Close`** inline on any open holding.
+   - **Set Cash, Deposit, or Withdraw**: Update your uninvested broker cash, reset your 0% starting capital baseline, or log cash deposits/withdrawals (`Deposit / Withdraw`) without distorting your P&L %.
+   - **Follow the Daily Action Plan**: View exact `SELL`, `HOLD (with Stop-Ratchet price)`, and `BUY` instructions sized so a stop-loss risks at most **1.0% of your real equity**. Changing the fill price or share count dynamically updates the bracket's Stop-Loss, Take-Profit, and dollar risk in real time.
+   - **Confirm, Edit, or Undo Anytime**: Click **`✓ Bought`** or **`✓ Sold`** (supports partial exits and scale-ins), log or edit any holding (including custom tickers outside the core universe and custom entry dates), or use **`Restore Skipped`** and **`Undo Last Trade`** to recover from any mistaken click.
 4. **`Paper Ledger`**:
    - Filter forward paper executions by **Trading Day**, **Order Side (`BUY`/`SELL`)**, or **Strategy**, with an automatic daily execution summary bar.
 
