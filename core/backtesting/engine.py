@@ -389,12 +389,28 @@ class BacktestEngine:
             # ------------------------------------------------------------------
             if not kill_switch_engaged and day_idx < len(sim_dates) - 1:
                 spy_ind = spy_indicators.get(current_date)
+                # Compute causal point-in-time sector relative-strength ranks on `current_date`
+                sector_rs_lists: Dict[str, List[float]] = {}
+                for t_sym in tickers:
+                    t_ind = indicators_by_ticker.get(t_sym, {}).get(current_date)
+                    t_meta = universe_meta.get(t_sym)
+                    if t_ind is not None and t_ind.rs_vs_spy_20d is not None and t_meta is not None:
+                        sector_rs_lists.setdefault(t_meta.sector, []).append(float(t_ind.rs_vs_spy_20d))
+                sorted_sectors = sorted(
+                    sector_rs_lists.keys(),
+                    key=lambda s: sum(sector_rs_lists[s]) / len(sector_rs_lists[s]),
+                    reverse=True,
+                )
+                sector_rank_map = {sec_name: idx + 1 for idx, sec_name in enumerate(sorted_sectors)}
+
                 for ticker in tickers:
                     if ticker in open_positions or ticker in pending_exit_signals:
                         continue
                     ind = indicators_by_ticker.get(ticker, {}).get(current_date)
                     if ind is None:
                         continue
+                    t_meta = universe_meta.get(ticker)
+                    sec_rank = sector_rank_map.get(t_meta.sector) if t_meta else None
                     recent_ev = self.market_data.get_point_in_time_earnings(
                         ticker, current_date, lookback_days=10
                     )
@@ -403,6 +419,7 @@ class BacktestEngine:
                         ind=ind,
                         spy_ind=spy_ind,
                         recent_earnings=recent_ev,
+                        sector_rs_rank=sec_rank,
                     )
                     if sig is not None:
                         pending_entry_signals.append(sig)
@@ -437,11 +454,32 @@ class BacktestEngine:
     def run_in_sample_validation_oos_pipeline(
         self,
         strategy: StrategyConfig,
-        in_sample_range: tuple[str, str] = ("2023-03-01", "2024-02-29"),
-        validation_range: tuple[str, str] = ("2024-03-01", "2024-09-30"),
-        oos_range: tuple[str, str] = ("2024-10-01", "2025-06-30"),
+        in_sample_range: Optional[tuple[str, str]] = None,
+        validation_range: Optional[tuple[str, str]] = None,
+        oos_range: Optional[tuple[str, str]] = None,
     ) -> Dict[str, Any]:
-        """Execute strict three-split evaluation (In-Sample -> Validation -> Untouched Out-of-Sample)."""
+        """Execute strict three-split evaluation (In-Sample -> Validation -> Untouched Out-of-Sample).
+
+        Automatically adapts split boundaries when live market data extends beyond 2025-06-30,
+        while preserving the canonical 2023-2025 splits on seeded datasets.
+        """
+        if in_sample_range is None or validation_range is None or oos_range is None:
+            spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker)
+            latest_dt = spy_bars[-1].bar_date if spy_bars else "2025-06-30"
+            if latest_dt <= "2025-06-30" or len(spy_bars) < 200:
+                in_sample_range = in_sample_range or ("2023-03-01", "2024-02-29")
+                validation_range = validation_range or ("2024-03-01", "2024-09-30")
+                oos_range = oos_range or ("2024-10-01", "2025-06-30")
+            else:
+                # Dynamic 50% In-Sample / 25% Validation / 25% Out-of-Sample split after 40-bar warmup
+                usable_dates = [b.bar_date for b in spy_bars[40:]]
+                n = len(usable_dates)
+                i_is_end = max(1, int(n * 0.50) - 1)
+                i_val_end = max(i_is_end + 1, int(n * 0.75) - 1)
+                in_sample_range = in_sample_range or (usable_dates[0], usable_dates[i_is_end])
+                validation_range = validation_range or (usable_dates[i_is_end + 1], usable_dates[i_val_end])
+                oos_range = oos_range or (usable_dates[i_val_end + 1], usable_dates[-1])
+
         is_res = self.run_backtest(strategy, in_sample_range[0], in_sample_range[1], "IN_SAMPLE")
         val_res = self.run_backtest(strategy, validation_range[0], validation_range[1], "VALIDATION")
         oos_res = self.run_backtest(strategy, oos_range[0], oos_range[1], "OUT_OF_SAMPLE")

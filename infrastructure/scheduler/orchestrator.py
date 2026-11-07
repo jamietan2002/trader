@@ -284,15 +284,24 @@ class AutonomousWorkflowOrchestrator:
 
         # 3. Post-Close: Reconciliation, Risk Audit, and Performance Analyst Review
         def _post_close_fn() -> Dict[str, Any]:
+            from core.indicators.technical import compute_indicator_series
+            spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker, end_date=trading_date)
+            spy_inds = compute_indicator_series(spy_bars) if spy_bars else {}
+            spy_ind = spy_inds.get(trading_date) or (list(spy_inds.values())[-1] if spy_inds else None)
+            detected_regime = self.backtest_engine._classify_regime(spy_ind)
+            if detected_regime == "UNKNOWN":
+                detected_regime = "BULL_LOW_VOL"
+
             risk_audit = self.risk_agent.audit_portfolio_health(eval_date=trading_date)
             perf_review = self.analyst_agent.review_session_performance(
                 session_date=trading_date,
-                current_regime="BULL_LOW_VOL",
+                current_regime=detected_regime,
             )
             now_op = datetime.now(self.settings.operator_tz).strftime("%Y-%m-%d %H:%M:%S %Z")
             return {
                 "trading_date": trading_date,
                 "operator_report_timestamp": now_op,
+                "market_regime": detected_regime,
                 "risk_audit": risk_audit,
                 "performance_review": perf_review,
             }
@@ -323,7 +332,9 @@ class AutonomousWorkflowOrchestrator:
         """
         def _weekly_fn() -> Dict[str, Any]:
             latest_reports = self.research_agent.get_latest_reports(limit=10)
-            proposals = self.analyst_agent.list_proposals(limit=5)
+            proposals = self.analyst_agent.list_proposals(limit=5, status="PROPOSED")
+            if not proposals:
+                proposals = self.analyst_agent.list_proposals(limit=5)
             latest_proposal = proposals[0] if (proposals and not preferred_family) else None
 
             candidate_strat = self.discovery_agent.propose_strategy_from_research(
@@ -348,6 +359,12 @@ class AutonomousWorkflowOrchestrator:
                 dataset_version=f"ds_weekly_{week_ending_date}",
                 auto_transition=True,
             )
+
+            if latest_proposal and latest_proposal.get("proposal_id"):
+                self.analyst_agent.mark_proposal_status(
+                    str(latest_proposal["proposal_id"]),
+                    "PROMOTED" if eval_report.promoted else "REJECTED",
+                )
 
             self.registry.record_experiment(
                 experiment_id=full_bt["experiment_id"],

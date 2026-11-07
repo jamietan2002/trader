@@ -263,6 +263,12 @@ class PaperTradingEngine:
         idempotency_key: Optional[str] = None,
         max_volume_participation_pct: float = 0.05,
         notes: str = "",
+        avg_daily_dollar_volume_20d: Optional[float] = None,
+        upcoming_earnings_days: Optional[int] = None,
+        candidate_returns_20d: Optional[Sequence[float]] = None,
+        open_positions_returns_20d: Optional[Dict[str, Sequence[float]]] = None,
+        strategy_risk_pct: Optional[float] = None,
+        strategy_max_exp_pct: Optional[float] = None,
     ) -> OrderSubmissionResult:
         """Submit and simulate an order with duplicate prevention, risk checks, and ledger accounting."""
         self.settings.validate_trading_mode()
@@ -359,7 +365,13 @@ class PaperTradingEngine:
                 peak_equity=summary["peak_equity"],
                 available_cash=summary["cash_balance"],
                 open_positions=open_pos_map,
+                avg_daily_dollar_volume_20d=avg_daily_dollar_volume_20d,
+                upcoming_earnings_days=upcoming_earnings_days,
+                candidate_returns_20d=candidate_returns_20d,
+                open_positions_returns_20d=open_positions_returns_20d,
                 kill_switch_engaged=summary["kill_switch_engaged"],
+                strategy_risk_pct=strategy_risk_pct,
+                strategy_max_exp_pct=strategy_max_exp_pct,
             )
             if not decision.approved:
                 if decision.rule_triggered == "MAX_DRAWDOWN_SUSPENSION":
@@ -430,6 +442,18 @@ class PaperTradingEngine:
                     stop_loss_price, take_profit_price, highest_price_since_entry,
                     opened_date, holding_days, sector, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                ON CONFLICT(account_id, ticker) DO UPDATE SET
+                    avg_entry_price = ROUND(
+                        ((paper_positions.quantity * paper_positions.avg_entry_price) + (excluded.quantity * excluded.avg_entry_price))
+                        / (paper_positions.quantity + excluded.quantity),
+                        4
+                    ),
+                    quantity = paper_positions.quantity + excluded.quantity,
+                    current_price = excluded.current_price,
+                    stop_loss_price = COALESCE(excluded.stop_loss_price, paper_positions.stop_loss_price),
+                    take_profit_price = COALESCE(excluded.take_profit_price, paper_positions.take_profit_price),
+                    highest_price_since_entry = MAX(paper_positions.highest_price_since_entry, excluded.highest_price_since_entry),
+                    updated_at = excluded.updated_at
                 """,
                 (
                     self.account_id,
@@ -801,7 +825,8 @@ class PaperTradingEngine:
 
         # Precompute bars & causal indicators up to prior close once per ticker
         all_tickers = sorted({t for s in deduped_strategies for t in s.universe if t != self.settings.benchmark_ticker})
-        ticker_context: Dict[str, Tuple[DailyBar, DailyBar, Any, List[ Any ]]] = {}
+        ticker_context: Dict[str, Tuple[DailyBar, DailyBar, Any, List[Any]]] = {}
+        sector_rs_lists: Dict[str, List[float]] = {}
         for ticker in all_tickers:
             bars = self.market_data.get_bars(ticker, end_date=trading_date)
             if len(bars) < 25 or bars[-1].bar_date != trading_date:
@@ -816,6 +841,16 @@ class PaperTradingEngine:
                 ticker, prev_bar.bar_date, lookback_days=10
             )
             ticker_context[ticker] = (today_bar, prev_bar, ind_prev, recent_ev)
+            t_meta = universe_meta.get(ticker)
+            if t_meta is not None and ind_prev.rs_vs_spy_20d is not None:
+                sector_rs_lists.setdefault(t_meta.sector, []).append(float(ind_prev.rs_vs_spy_20d))
+
+        sorted_sectors = sorted(
+            sector_rs_lists.keys(),
+            key=lambda s: sum(sector_rs_lists[s]) / len(sector_rs_lists[s]),
+            reverse=True,
+        )
+        sector_rank_map = {sec_name: idx + 1 for idx, sec_name in enumerate(sorted_sectors)}
 
         # Collect signals per strategy and sort by conviction_score descending
         signals_by_strategy: Dict[str, List[Tuple[StrategyConfig, str, DailyBar, DailyBar, Any]]] = {}
@@ -826,11 +861,14 @@ class PaperTradingEngine:
                 if ctx is None:
                     continue
                 today_bar, prev_bar, ind_prev, recent_ev = ctx
+                t_meta = universe_meta.get(ticker)
+                sec_rank = sector_rank_map.get(t_meta.sector) if t_meta else None
                 sig = StrategySignalEngine.evaluate_entry(
                     config=strat,
                     ind=ind_prev,
                     spy_ind=spy_inds.get(prev_bar.bar_date),
                     recent_earnings=recent_ev,
+                    sector_rs_rank=sec_rank,
                 )
                 if sig is not None:
                     strat_sigs.append((strat, ticker, today_bar, prev_bar, sig))
@@ -854,11 +892,22 @@ class PaperTradingEngine:
 
         for strat, ticker, today_bar, prev_bar, sig in ordered_candidates:
             summary_now = self.get_account_summary()
+            open_gap = today_bar.adj_open - sig.close_at_signal
+            adj_stop = (
+                round(max(0.01, sig.stop_loss_price + open_gap), 2)
+                if sig.stop_loss_price is not None
+                else None
+            )
+            adj_tp = (
+                round(sig.take_profit_price + open_gap, 2)
+                if sig.take_profit_price is not None
+                else None
+            )
             rec_shares = self.risk_manager.calculate_atr_position_size(
                 portfolio_equity=summary_now["total_equity"],
                 available_cash=summary_now["cash_balance"],
                 entry_price=today_bar.adj_open,
-                stop_loss_price=sig.stop_loss_price,
+                stop_loss_price=adj_stop,
                 atr_14=sig.atr_at_signal,
                 strategy_risk_per_trade_pct=strat.risk_params.get("risk_per_trade_pct"),
                 strategy_max_exposure_pct=strat.risk_params.get("max_position_exposure_pct"),
@@ -868,6 +917,11 @@ class PaperTradingEngine:
 
             meta = universe_meta.get(ticker)
             sector = meta.sector if meta else "Technology"
+            ctx = ticker_context.get(ticker)
+            ind_prev_obj = ctx[2] if ctx else None
+            upcoming_ev = self.market_data.get_upcoming_earnings_within_days(ticker, trading_date, 3)
+            days_to_earn = 1 if upcoming_ev else None
+
             res = self.submit_and_execute_order(
                 strategy_id=strat.strategy_id,
                 strategy_version=strat.version,
@@ -878,10 +932,14 @@ class PaperTradingEngine:
                 signal_date=prev_bar.bar_date,
                 execution_bar=today_bar,
                 sector=sector,
-                stop_loss_target=sig.stop_loss_price,
-                take_profit_target=sig.take_profit_price,
+                stop_loss_target=adj_stop,
+                take_profit_target=adj_tp,
                 atr_14=sig.atr_at_signal,
                 notes=sig.reason,
+                avg_daily_dollar_volume_20d=ind_prev_obj.avg_dollar_volume_20d if ind_prev_obj else None,
+                upcoming_earnings_days=days_to_earn,
+                strategy_risk_pct=strat.risk_params.get("risk_per_trade_pct"),
+                strategy_max_exp_pct=strat.risk_params.get("max_position_exposure_pct"),
             )
             if res.status in ("FILLED", "PARTIALLY_FILLED"):
                 entries_executed.append(res.to_dict())
@@ -1207,6 +1265,12 @@ class LiveTradingCopilotEngine:
         acc = self.ensure_initialized()
         cost = round(quantity * fill_price + fees_usd, 2)
         new_cash = max(0.0, round(float(acc["cash_balance"]) - cost, 2))
+
+        # Ensure stop-loss is strictly below fill_price and take-profit is strictly above fill_price
+        if stop_loss_price is not None and stop_loss_price >= fill_price:
+            stop_loss_price = round(max(0.01, fill_price * 0.95), 2)
+        if take_profit_price is not None and take_profit_price <= fill_price:
+            take_profit_price = round(fill_price * 1.08, 2)
 
         existing = self.db.fetch_one(
             "SELECT * FROM shadow_positions WHERE account_id = ? AND ticker = ?",

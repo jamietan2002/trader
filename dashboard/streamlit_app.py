@@ -767,7 +767,7 @@ def main() -> None:
                         f"**Your Entry**: `${sa['avg_entry_price']:.2f}` → **Ref Price**: `${sa['reference_exit_price']:.2f}` "
                         f"(`Est. P&L: ${sa['estimated_realised_pnl']:+,.2f}`)"
                     )
-                    sc1, sc2, sc3, sc4 = st.columns([1.2, 1.2, 1.2, 1])
+                    sc1, sc2, sc3, sc4, sc5 = st.columns([1.1, 1.1, 1.0, 1.1, 0.9])
                     s_qty = sc1.number_input(
                         f"Shares Sold ({sa['ticker']})",
                         min_value=1,
@@ -798,6 +798,16 @@ def main() -> None:
                                 fill_price=float(s_price),
                                 fees_usd=float(s_fee),
                                 notes=sa["reason"],
+                            )
+                            st.rerun()
+                    with sc5:
+                        st.write("")
+                        if st.button("Hold Today", key=f"btn_skip_sell_{sa['ticker']}_{idx}", use_container_width=True):
+                            app.orchestrator.live_copilot.dismiss_signal(
+                                signal_date=sa["signal_date"],
+                                strategy_id=sa["strategy_id"],
+                                ticker=sa["ticker"],
+                                action="SELL",
                             )
                             st.rerun()
         else:
@@ -878,6 +888,12 @@ def main() -> None:
                             st.rerun()
         else:
             st.info("No new BUY signals currently pass your real-account cash and risk caps for this session.")
+
+        vetoed_sigs = plan.get("vetoed_signals") or []
+        if vetoed_sigs:
+            with st.expander(f"View Signals Filtered Out by Your Risk Caps Today ({len(vetoed_sigs)} blocked)", expanded=False):
+                st.caption("These strategy candidates triggered an entry rule today but were blocked by your real-account cash, sector cap, or 5% portfolio heat limit:")
+                st.dataframe(vetoed_sigs, use_container_width=True)
 
         # 2. My Confirmed Real Positions & Manual Position Editor
         st.markdown("#### 2. My Confirmed Real Positions & Hold Status")
@@ -1057,9 +1073,18 @@ def main() -> None:
                 st.write("0% sector exposure (100% cash).")
         with c2:
             st.markdown("#### Walk-Forward Validation Folds")
-            if strats and strats[0].get("validation_summary"):
-                wf_windows = (strats[0]["validation_summary"].get("walk_forward") or {}).get("windows", [])
-                st.dataframe(wf_windows, use_container_width=True)
+            if strats:
+                strat_labels = [f"{s['strategy_id']} v{s['version']} ({s['name']})" for s in strats]
+                sel_idx = st.selectbox(
+                    "Select Strategy to Inspect Walk-Forward Folds",
+                    options=list(range(len(strats))),
+                    format_func=lambda i: strat_labels[i],
+                    key="wf_strat_select",
+                )
+                chosen_s = strats[sel_idx]
+                if chosen_s.get("validation_summary"):
+                    wf_windows = (chosen_s["validation_summary"].get("walk_forward") or {}).get("windows", [])
+                    st.dataframe(wf_windows, use_container_width=True)
 
     # =========================================================================
     # TAB 8: SYSTEM LOGS

@@ -167,6 +167,18 @@ def get_settings(env_path: Path | None = None) -> Settings:
     root = Path(__file__).resolve().parents[2]
     load_dotenv_file(env_path or (root / ".env"))
 
+    gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    raw_llm_provider = os.environ.get("LLM_PROVIDER", "").strip()
+    if raw_llm_provider:
+        llm_provider = raw_llm_provider
+    elif gemini_key:
+        llm_provider = "gemini"
+    elif openai_key:
+        llm_provider = "openai"
+    else:
+        llm_provider = "deterministic_research"
+
     return Settings(
         project_root=root,
         trading_mode=os.environ.get("TRADING_MODE", "paper"),
@@ -180,7 +192,7 @@ def get_settings(env_path: Path | None = None) -> Settings:
         operator_timezone=os.environ.get("OPERATOR_TIMEZONE", "Asia/Singapore"),
         database_url=os.environ.get("DATABASE_URL", ""),
         market_data_provider=os.environ.get("MARKET_DATA_PROVIDER", "alpaca"),
-        llm_provider=os.environ.get("LLM_PROVIDER", "deterministic_research"),
+        llm_provider=llm_provider,
         llm_model=os.environ.get("LLM_MODEL", "gemini-2.5-pro"),
         alpaca_api_key=os.environ.get("ALPACA_API_KEY", ""),
         alpaca_secret_key=os.environ.get("ALPACA_SECRET_KEY", ""),
@@ -191,8 +203,8 @@ def get_settings(env_path: Path | None = None) -> Settings:
         sec_edgar_user_agent=os.environ.get(
             "SEC_EDGAR_USER_AGENT", "SwingTradingResearchPlatform research@example.com"
         ),
-        openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
-        gemini_api_key=os.environ.get("GEMINI_API_KEY", ""),
+        openai_api_key=openai_key,
+        gemini_api_key=gemini_key,
         api_host=os.environ.get("API_HOST", "127.0.0.1"),
         api_port=int(os.environ.get("API_PORT", "8080")),
     )

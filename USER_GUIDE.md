@@ -85,12 +85,12 @@ Once a strategy reaches `READY FOR LIVE REVIEW` (or whenever you choose to mirro
    - All BUY recommendations automatically scale their share count so that hitting a stop-loss risks **at most 1.0% of your real account equity** (e.g., `$150` max risk on `$15,000`).
 3. **Never Assumes Your Positions**:
    - Each day's **Step-by-Step Action Checklist** shows pending **SELL Orders** (on positions you actually hold that hit their Stop-Loss, Take-Profit, or Max Hold days) and **BUY Candidates**.
-   - Nothing is added to or removed from your real portfolio until you click **`Confirm Bought`** or **`Confirm Sold`** (where you can edit the exact share count and fill price you got at your broker) or **`Skip Trade`**.
-   - You can also manually **Add, Edit, or Close** any position at any time if you traded independently in your broker.
+   - Nothing is added to or removed from your real portfolio until you click **`Confirm Bought`** or **`Confirm Sold`** (where you can edit the exact share count and fill price you got at your broker), **`Skip Trade`**, or **`Hold Today`** (to skip a sell signal for the day).
+   - You can also inspect **Signals Filtered Out by Your Risk Caps Today** and manually **Add, Edit, or Close** any position at any time if you traded independently in your broker.
 
 ---
 
-### 4. What You Need to Know & When to Trade Real Money
+### 5. What You Need to Know & When to Trade Real Money
 
 1. **What is required from you day-to-day?**
    - **Nothing.** There are no buttons you need to press.

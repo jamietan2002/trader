@@ -156,27 +156,46 @@ def create_http_handler(app: PlatformApplication) -> type[BaseHTTPRequestHandler
                 if path == "/api/backtest":
                     self._send_json(200, app.run_backtest_endpoint(payload))
                 elif path == "/api/research/scan":
-                    as_of = str(payload.get("as_of_date", "2025-06-27"))
+                    spy_bars = app.orchestrator.market_data.get_bars(app.settings.benchmark_ticker)
+                    default_dt = spy_bars[-1].bar_date if spy_bars else "2025-06-27"
+                    as_of = str(payload.get("as_of_date") or default_dt)
+                    if as_of == "latest":
+                        as_of = default_dt
                     res = app.orchestrator.research_agent.run_market_scan(as_of_date=as_of)
                     self._send_json(200, res)
                 elif path == "/api/workflow/daily":
-                    dt = str(payload.get("trading_date", "2025-06-27"))
+                    spy_bars = app.orchestrator.market_data.get_bars(app.settings.benchmark_ticker)
+                    default_dt = spy_bars[-1].bar_date if spy_bars else "2025-06-27"
+                    dt = str(payload.get("trading_date") or default_dt)
+                    if dt == "latest":
+                        dt = default_dt
                     force = bool(payload.get("force", True))
                     res = app.orchestrator.run_daily_workflow(trading_date=dt, force=force)
                     self._send_json(200, res)
                 elif path == "/api/workflow/weekly":
-                    dt = str(payload.get("week_ending_date", "2025-06-27"))
+                    spy_bars = app.orchestrator.market_data.get_bars(app.settings.benchmark_ticker)
+                    default_dt = spy_bars[-1].bar_date if spy_bars else "2025-06-27"
+                    dt = str(payload.get("week_ending_date") or default_dt)
+                    if dt == "latest":
+                        dt = default_dt
                     fam = payload.get("preferred_family")
                     force = bool(payload.get("force", True))
                     res = app.orchestrator.run_weekly_workflow(
                         week_ending_date=dt, preferred_family=fam, force=force
                     )
                     self._send_json(200, res)
+                elif path == "/api/account/reset":
+                    res = app.orchestrator.paper_engine.reset_account_to_starting_capital()
+                    self._send_json(200, res)
                 elif path == "/api/copilot/cash":
                     cash = float(payload.get("cash_balance", 25000.0))
                     update_base = bool(payload.get("update_starting_baseline", False))
                     res = app.orchestrator.live_copilot.update_cash_balance(cash, update_base)
                     self._send_json(200, res)
+                elif path == "/api/copilot/strategies":
+                    keys = list(payload.get("enabled_strategies") or [])
+                    app.orchestrator.live_copilot.set_enabled_strategies(keys)
+                    self._send_json(200, app.orchestrator.live_copilot.get_account_summary())
                 elif path == "/api/copilot/confirm-buy":
                     res = app.orchestrator.live_copilot.confirm_buy_execution(
                         ticker=str(payload["ticker"]),

@@ -635,34 +635,45 @@ class StrategyRegistry:
         exit_rules_updates: Optional[Dict[str, Any]] = None,
         hypothesis_note: Optional[str] = None,
     ) -> StrategyConfig:
-        """Create an incremented version of an existing strategy without mutating prior versions."""
+        """Create an incremented version of an existing strategy without mutating prior versions.
+
+        Always evolves from the highest-versioned PAPER_TRADING (or non-REJECTED) version
+        so rejected experimental patches do not accumulate on top of one another.
+        """
         versions = self.list_strategies(strategy_id=base_strategy_id)
         if not versions:
             raise KeyError(f"Strategy {base_strategy_id} not found in registry")
-        latest = max(versions, key=lambda s: s.version)
-        new_entry = dict(latest.entry_rules)
+        next_ver_num = max(s.version for s in versions) + 1
+        active_versions = [s for s in versions if s.status == StrategyStatus.PAPER_TRADING.value]
+        non_rejected = [s for s in versions if s.status != StrategyStatus.REJECTED.value]
+        base_cfg = max(
+            active_versions or non_rejected or versions,
+            key=lambda s: s.version,
+        )
+        new_entry = dict(base_cfg.entry_rules)
         if entry_rules_updates:
             new_entry.update(entry_rules_updates)
-        new_exit = dict(latest.exit_rules)
+        new_exit = dict(base_cfg.exit_rules)
         if exit_rules_updates:
             new_exit.update(exit_rules_updates)
+        base_hyp = base_cfg.hypothesis.split(" | v")[0]
         new_cfg = StrategyConfig(
-            strategy_id=latest.strategy_id,
-            version=latest.version + 1,
-            name=latest.name,
-            strategy_family=latest.strategy_family,
+            strategy_id=base_cfg.strategy_id,
+            version=next_ver_num,
+            name=base_cfg.name,
+            strategy_family=base_cfg.strategy_family,
             status=StrategyStatus.DRAFT.value,
-            hypothesis=f"{latest.hypothesis} | v{latest.version + 1}: {hypothesis_note or 'Parameter refinement'}",
-            observable_phenomenon=latest.observable_phenomenon,
-            invalidation_conditions=latest.invalidation_conditions,
-            target_market_regimes=latest.target_market_regimes,
-            holding_period_min_days=latest.holding_period_min_days,
-            holding_period_max_days=latest.holding_period_max_days,
-            universe=latest.universe,
-            required_indicators=latest.required_indicators,
+            hypothesis=f"{base_hyp} | v{next_ver_num}: {hypothesis_note or 'Parameter refinement'}",
+            observable_phenomenon=base_cfg.observable_phenomenon,
+            invalidation_conditions=base_cfg.invalidation_conditions,
+            target_market_regimes=base_cfg.target_market_regimes,
+            holding_period_min_days=base_cfg.holding_period_min_days,
+            holding_period_max_days=base_cfg.holding_period_max_days,
+            universe=base_cfg.universe,
+            required_indicators=base_cfg.required_indicators,
             entry_rules=new_entry,
             exit_rules=new_exit,
-            risk_params=latest.risk_params,
+            risk_params=base_cfg.risk_params,
         )
         return self.register_strategy(new_cfg)
 

@@ -24,6 +24,7 @@ jobs:
       MARKET_DATA_PROVIDER: alpaca
       ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
       ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      LLM_PROVIDER: ${{ secrets.LLM_PROVIDER }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
@@ -93,6 +94,7 @@ jobs:
           git add data/swing_trader.db
           if ! git diff --staged --quiet; then
             git commit -m "chore(state): autonomous paper trading & strategy registry update [skip ci]"
+            git pull --rebase origin main || true
             git push
           else
             echo "No state changes to commit."

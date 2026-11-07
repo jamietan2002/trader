@@ -4,6 +4,23 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-07] — Engine Audit: Dynamic OOS Splits, Live Regime Detection, Proposal Rotation, Sector Ranks & LLM Auto-Detection
+
+### Summary
+- **Dynamic In-Sample / Validation / OOS Date Splits (`BacktestEngine.run_in_sample_validation_oos_pipeline` in `core/backtesting/engine.py`)**: Replaced hardcoded `2025-06-30` end-date splits with dynamic 50% / 25% / 25% chronological partitioning whenever live market data extends beyond `2025-06-30`, while preserving exact canonical splits on seeded historical test runs.
+- **Causal Sector Relative Strength Rank & Full Risk Guardrail Parity (`core/backtesting/engine.py`, `core/execution/paper_broker.py`)**: Computed point-in-time `sector_rs_rank` and passed it to `StrategySignalEngine.evaluate_entry` across backtesting and paper execution; aligned morning gap-open stop/target adjustments and forwarded 20-day liquidity, earnings blackout, and strategy risk caps in `PaperTradingEngine.submit_and_execute_order` (with `ON CONFLICT` scale-in safety on `paper_positions`).
+- **Non-Stacking Strategy Versioning & Proposal Lifecycle (`core/strategies/registry.py`, `agents/performance_analyst/agent.py`, `infrastructure/scheduler/orchestrator.py`)**: Updated `StrategyRegistry.create_new_version` to always evolve from the highest `PAPER_TRADING` (or non-rejected) base version so rejected experimental patches never stack; wired live `SPY` regime classification into `run_daily_workflow`; added LLM-driven + rotating parameter hypotheses and `PROPOSED -> PROMOTED/REJECTED` status tracking in `PerformanceAnalystAgent`; and deduplicated same-day scans in `MarketResearchAgent`.
+- **Automatic LLM Provider Detection & Dashboard Polish (`infrastructure/configuration/settings.py`, `api/server.py`, `dashboard/streamlit_app.py`, `dashboard/ui_template.py`)**: Auto-selects `LLM_PROVIDER=gemini` or `openai` whenever `GEMINI_API_KEY` or `OPENAI_API_KEY` is present in `.env` or GitHub Secrets; added inline editable Qty/Fill Price inputs and `Hold Today (Skip Sell)` + `Vetoed Signals` inspection to the Live Copilot tab, plus a multi-strategy Walk-Forward fold selector in Risk & Analytics.
+
+### Modules Added / Modified
+- `core/backtesting/engine.py`, `core/strategies/registry.py`, `core/execution/paper_broker.py`
+- `infrastructure/configuration/settings.py`, `infrastructure/scheduler/orchestrator.py`
+- `agents/performance_analyst/agent.py`, `agents/market_researcher/agent.py`
+- `api/server.py`, `dashboard/streamlit_app.py`, `dashboard/ui_template.py`
+- `.github/workflows/autonomous_trading.yml`, `USER_GUIDE.md`, `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-07] — Air-Gapped Live Trading Copilot (Real Account Shadow Engine) & Mandatory User Guide Sync
 
 ### Summary

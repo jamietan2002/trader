@@ -306,6 +306,7 @@ class MarketResearchAgent(BaseAgent):
         top_reports = candidate_reports[:top_n]
 
         now_iso = utc_now_iso()
+        self.db.execute("DELETE FROM research_reports WHERE as_of_date = ?", (as_of_date,))
         for rep in candidate_reports:
             self.db.execute(
                 """
@@ -347,9 +348,27 @@ class MarketResearchAgent(BaseAgent):
         }
 
     def get_latest_reports(self, limit: int = 15) -> List[Dict[str, Any]]:
-        rows = self.db.fetch_all(
-            "SELECT report_json FROM research_reports ORDER BY as_of_date DESC, composite_rank_score DESC LIMIT ?",
-            (limit,),
+        latest_row = self.db.fetch_one(
+            "SELECT MAX(as_of_date) AS latest_dt FROM research_reports"
         )
-        return [json.loads(r["report_json"]) for r in rows]
+        latest_dt = latest_row["latest_dt"] if latest_row else None
+        if latest_dt:
+            rows = self.db.fetch_all(
+                "SELECT report_json FROM research_reports WHERE as_of_date = ? ORDER BY composite_rank_score DESC LIMIT ?",
+                (latest_dt, limit),
+            )
+        else:
+            rows = self.db.fetch_all(
+                "SELECT report_json FROM research_reports ORDER BY as_of_date DESC, composite_rank_score DESC LIMIT ?",
+                (limit,),
+            )
+        seen_tickers: set[str] = set()
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            payload = json.loads(r["report_json"])
+            t = str(payload.get("ticker", ""))
+            if t not in seen_tickers:
+                seen_tickers.add(t)
+                out.append(payload)
+        return out
 

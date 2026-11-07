@@ -683,17 +683,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById('copilot-sell-box').innerHTML = sells.length ? `
         <div style="font-size:0.84rem;font-weight:600;color:var(--amber);margin-bottom:6px;">Step A — SELL Orders (Exits Triggered on Your Confirmed Holdings)</div>
         <table>
-          <thead><tr><th>Ticker</th><th>Qty to Sell</th><th>Your Entry</th><th>Ref Exit Price</th><th>Est. P&amp;L</th><th>Exit Reason</th><th>Action</th></tr></thead>
+          <thead><tr><th>Ticker</th><th>Qty Sold</th><th>Your Entry</th><th>Actual Exit ($)</th><th>Est. P&amp;L</th><th>Exit Reason</th><th>Action</th></tr></thead>
           <tbody>
-            ${sells.map(s => `
+            ${sells.map((s, idx) => `
               <tr>
                 <td><strong>${s.ticker}</strong></td>
-                <td>${s.quantity_to_sell}</td>
+                <td><input type="number" id="cop-sell-qty-${idx}" value="${s.quantity_to_sell}" min="1" max="${s.quantity_to_sell}" style="width:70px;background:var(--bg);color:var(--text);border:1px solid var(--border);padding:4px 6px;border-radius:4px;" /></td>
                 <td>${fmtUsd(s.avg_entry_price)}</td>
-                <td>${fmtUsd(s.reference_exit_price)}</td>
+                <td><input type="number" id="cop-sell-px-${idx}" value="${s.reference_exit_price}" step="0.10" style="width:90px;background:var(--bg);color:var(--text);border:1px solid var(--border);padding:4px 6px;border-radius:4px;" /></td>
                 <td class="${s.estimated_realised_pnl >= 0 ? 'pos' : 'neg'}">${fmtUsd(s.estimated_realised_pnl)}</td>
                 <td>${s.reason}</td>
-                <td><button class="btn" onclick="confirmCopilotSell('${s.ticker}', ${s.quantity_to_sell}, ${s.reference_exit_price})">Confirm Sold</button></td>
+                <td style="display:flex;gap:6px;">
+                  <button class="btn" onclick="confirmCopilotSell(${idx}, '${s.ticker}', ${s.quantity_to_sell}, ${s.reference_exit_price})">Confirm Sold</button>
+                  <button class="btn btn-secondary" onclick="skipCopilotSignal('${s.signal_date}', '${s.strategy_id}', '${s.ticker}', 'SELL')">Hold Today</button>
+                </td>
               </tr>
             `).join('')}
           </tbody>
@@ -703,21 +706,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById('copilot-buy-box').innerHTML = buys.length ? `
         <div style="font-size:0.84rem;font-weight:600;color:var(--accent);margin:10px 0 6px;">Step B — BUY Candidates (Sized to 1% Risk of Your Real Account)</div>
         <table>
-          <thead><tr><th>Ticker</th><th>Strategy</th><th>Rec. Shares</th><th>Ref Price</th><th>Est. Cost</th><th>Stop-Loss</th><th>Take-Profit</th><th>Max Risk</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Ticker</th><th>Strategy</th><th>Shares Bought</th><th>Fill Price ($)</th><th>Est. Cost</th><th>Stop-Loss</th><th>Take-Profit</th><th>Max Risk</th><th>Actions</th></tr></thead>
           <tbody>
-            ${buys.map(b => `
+            ${buys.map((b, idx) => `
               <tr>
                 <td><strong>${b.ticker}</strong></td>
                 <td>${b.strategy_id} v${b.strategy_version}</td>
-                <td><strong>${b.recommended_shares}</strong></td>
-                <td>${fmtUsd(b.reference_entry_price)}</td>
+                <td><input type="number" id="cop-buy-qty-${idx}" value="${b.recommended_shares}" min="1" style="width:70px;background:var(--bg);color:var(--text);border:1px solid var(--border);padding:4px 6px;border-radius:4px;" /></td>
+                <td><input type="number" id="cop-buy-px-${idx}" value="${b.reference_entry_price}" step="0.10" style="width:90px;background:var(--bg);color:var(--text);border:1px solid var(--border);padding:4px 6px;border-radius:4px;" /></td>
                 <td>${fmtUsd(b.estimated_cost_usd)} (${b.portfolio_weight_pct}%)</td>
                 <td class="neg">${fmtUsd(b.stop_loss_price)}</td>
                 <td class="pos">${fmtUsd(b.take_profit_price)}</td>
                 <td>-${fmtUsd(b.estimated_risk_usd)}</td>
                 <td style="display:flex;gap:6px;">
-                  <button class="btn" onclick="confirmCopilotBuy('${b.ticker}', '${b.strategy_id}', ${b.strategy_version}, ${b.recommended_shares}, ${b.reference_entry_price}, ${b.stop_loss_price || 0}, ${b.take_profit_price || 0}, '${b.sector}')">Confirm Bought</button>
-                  <button class="btn btn-secondary" onclick="skipCopilotSignal('${b.signal_date}', '${b.strategy_id}', '${b.ticker}')">Skip</button>
+                  <button class="btn" onclick="confirmCopilotBuy(${idx}, '${b.ticker}', '${b.strategy_id}', ${b.strategy_version}, ${b.recommended_shares}, ${b.reference_entry_price}, ${b.stop_loss_price || 0}, ${b.take_profit_price || 0}, '${b.sector}')">Confirm Bought</button>
+                  <button class="btn btn-secondary" onclick="skipCopilotSignal('${b.signal_date}', '${b.strategy_id}', '${b.ticker}', 'BUY')">Skip</button>
                 </td>
               </tr>
             `).join('')}
@@ -759,7 +762,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       await loadDashboardState();
     }
 
-    async function confirmCopilotBuy(ticker, strategy_id, strategy_version, quantity, fill_price, stop_loss_price, take_profit_price, sector) {
+    async function confirmCopilotBuy(idx, ticker, strategy_id, strategy_version, def_qty, def_px, stop_loss_price, take_profit_price, sector) {
+      const qEl = document.getElementById('cop-buy-qty-' + idx);
+      const pEl = document.getElementById('cop-buy-px-' + idx);
+      const quantity = qEl ? Number(qEl.value || def_qty) : def_qty;
+      const fill_price = pEl ? Number(pEl.value || def_px) : def_px;
       await fetch('/api/copilot/confirm-buy', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -768,7 +775,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       await loadDashboardState();
     }
 
-    async function confirmCopilotSell(ticker, quantity, fill_price) {
+    async function confirmCopilotSell(idx, ticker, def_qty, def_px) {
+      const qEl = document.getElementById('cop-sell-qty-' + idx);
+      const pEl = document.getElementById('cop-sell-px-' + idx);
+      const quantity = qEl ? Number(qEl.value || def_qty) : def_qty;
+      const fill_price = pEl ? Number(pEl.value || def_px) : def_px;
       await fetch('/api/copilot/confirm-sell', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -777,11 +788,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       await loadDashboardState();
     }
 
-    async function skipCopilotSignal(signal_date, strategy_id, ticker) {
+    async function skipCopilotSignal(signal_date, strategy_id, ticker, action = 'BUY') {
       await fetch('/api/copilot/dismiss', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({signal_date, strategy_id, ticker, action: 'BUY'})
+        body: JSON.stringify({signal_date, strategy_id, ticker, action})
       });
       await loadDashboardState();
     }
@@ -1159,17 +1170,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     async function runResearchScan() {
-      await fetch('/api/research/scan', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({as_of_date: '2025-06-27'})});
+      await fetch('/api/research/scan', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({as_of_date: 'latest'})});
       await loadDashboardState();
     }
 
     async function triggerDailyWorkflow() {
-      await fetch('/api/workflow/daily', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({trading_date: '2025-06-27', force: true})});
+      await fetch('/api/workflow/daily', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({trading_date: 'latest', force: true})});
       await loadDashboardState();
     }
 
     async function triggerWeeklyDiscovery() {
-      await fetch('/api/workflow/weekly', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({week_ending_date: '2025-06-27', force: true})});
+      await fetch('/api/workflow/weekly', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({week_ending_date: 'latest', force: true})});
       await loadDashboardState();
     }
 
