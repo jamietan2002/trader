@@ -555,6 +555,8 @@ class PaperTradingEngine:
         """Mirror approved paper orders to Alpaca's paper-api.alpaca.markets endpoint when credentials exist."""
         import urllib.request
         base_url = self.settings.alpaca_paper_base_url.rstrip("/")
+        if base_url.endswith("/v2"):
+            base_url = base_url[:-3]
         if "paper-api.alpaca.markets" not in base_url:
             raise LiveTradingProhibitedError(
                 f"Refusing to mirror order to non-paper Alpaca URL: {base_url}"

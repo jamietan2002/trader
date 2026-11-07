@@ -451,16 +451,23 @@ class AlpacaDataProvider(MarketDataProvider):
             return self.fallback.fetch_daily_bars(ticker, start_date, end_date)
         url = (
             f"https://data.alpaca.markets/v2/stocks/{ticker}/bars"
-            f"?timeframe=1Day&start={start_date}&end={end_date}&adjustment=all&limit=10000"
+            f"?timeframe=1Day&start={start_date}&end={end_date}&adjustment=all&feed=iex&limit=10000"
         )
         headers = {
             "APCA-API-KEY-ID": self.settings.alpaca_api_key,
             "APCA-API-SECRET-KEY": self.settings.alpaca_secret_key,
         }
-        data = self.client.get_json(url, headers=headers)
+        try:
+            data = self.client.get_json(url, headers=headers)
+        except Exception as exc:
+            logger.warning(f"Alpaca bar fetch for {ticker} failed ({exc}); using local_seeded fallback.")
+            return self.fallback.fetch_daily_bars(ticker, start_date, end_date)
+        raw_bars = data.get("bars", []) or []
+        if not raw_bars:
+            return self.fallback.fetch_daily_bars(ticker, start_date, end_date)
         now_iso = utc_now_iso()
         bars: List[DailyBar] = []
-        for b in data.get("bars", []) or []:
+        for b in raw_bars:
             bar_date = str(b["t"])[:10]
             o, h, l, c, v = float(b["o"]), float(b["h"]), float(b["l"]), float(b["c"]), float(b["v"])
             bars.append(

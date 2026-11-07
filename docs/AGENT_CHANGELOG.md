@@ -4,6 +4,19 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-07] — Alpaca Free-Tier IEX Feed & Paper URL Normalization
+
+### Summary
+- Updated `AlpacaDataProvider.fetch_daily_bars` (`core/market_data/providers.py`) to specify `feed=iex` so free-tier Alpaca accounts can fetch recent daily bars without SIP subscription errors, with graceful fallback to `local_seeded` for unindexed symbols (such as `FRC_DELIST`).
+- Normalized `alpaca_paper_base_url` in `PaperTradingEngine._mirror_order_to_alpaca_paper` (`core/execution/paper_broker.py`) to handle both `https://paper-api.alpaca.markets` and `https://paper-api.alpaca.markets/v2`.
+- Configured encrypted `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` in GitHub Actions Repository Secrets.
+
+### Modules Added / Modified
+- `core/market_data/providers.py`
+- `core/execution/paper_broker.py`
+
+---
+
 ## [2026-11-07] — Fix Streamlit Community Cloud `sys.path` Root Import
 
 ### Summary
