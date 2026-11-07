@@ -448,6 +448,10 @@ class TestSwingTradingPlatform(unittest.TestCase):
         self.assertEqual(acc2["open_positions_count"], 0)
         self.assertGreater(acc2["realised_pnl"], 0.0)
         self.assertGreater(acc2["cash_balance"], 100_000.0)
+        self.assertIn("total_pnl_usd", acc2)
+        self.assertIn("daily_pnl_usd", acc2)
+        self.assertIn("weekly_pnl_usd", acc2)
+        self.assertAlmostEqual(acc2["total_pnl_usd"], acc2["total_equity"] - acc2["starting_capital"], places=2)
 
         # Test Partial Fill when order size > max volume participation
         thin_bar = DailyBar(

@@ -4,6 +4,22 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-07] — Forward-Only Paper Account Reset, Daily/Weekly/Total P&L Metrics & Day-Filtered Paper Ledger
+
+### Summary
+- **Forward-Only Paper Account Isolation (`dashboard/streamlit_app.py`, `api/server.py`, `.github/workflows/autonomous_trading.yml`, `data/swing_trader.db`)**: Reset the simulated `$100,000.00` paper account to a clean baseline (`0` trades, `0` open positions, `$0.00` P&L) and removed historical 20–60 day paper replay loops from dashboard startup, server bootstrap, and GitHub Actions so the Paper Account is strictly affected by actual forward daily runs while all historical testing stays isolated in `Backtesting`.
+- **Daily, Weekly, and Total P&L Breakdown (`PaperTradingEngine.get_account_summary` in `core/execution/paper_broker.py`, `dashboard/streamlit_app.py`, `dashboard/ui_template.py`)**: Added `daily_pnl_usd` (`daily_return_pct`), `weekly_pnl_usd` (`weekly_return_pct` over rolling 5 sessions), and `total_pnl_usd` (`total_return_pct`, split into `Realised` and `Unrealised`) to `get_account_summary()` and surfaced them in the `Overview & P&L` KPI cards alongside an anytime `Reset Paper Account ($100k)` button in the sidebar.
+- **Day-Filtered Paper Trading Ledger (`dashboard/streamlit_app.py`, `dashboard/ui_template.py`)**: Upgraded the `Paper Ledger` tab with interactive **Trading Day**, **Order Side (`All` / `BUY` / `SELL`)**, and **Strategy** filters plus a **Daily / Filtered Execution Summary** bar (`Trades Executed`, `BUY Entries`, `SELL Exits`, `Traded Volume $`, `Fees + Slippage $`, `Locked-in Realised P&L $`).
+- **Paper Overview Chart Isolation (`dashboard/ui_template.py`)**: Prevented `renderOverview()` from falling back to a historical backtest equity curve when the paper portfolio has fewer than 2 snapshots.
+
+### Modules Added / Modified
+- `core/execution/paper_broker.py`, `api/server.py`
+- `dashboard/streamlit_app.py`, `dashboard/ui_template.py`
+- `.github/workflows/autonomous_trading.yml`, `data/swing_trader.db`
+- `tests/test_platform.py`, `USER_GUIDE.md`, `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-07] — IDE-Native AI Alpha Workflow (`run` Skill, `ide-context` / `ide-apply` Bridge & Incumbent Champion Protection)
 
 ### Summary

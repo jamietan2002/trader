@@ -311,7 +311,7 @@ def main() -> None:
     )
 
     app = PlatformApplication()
-    _code_version = "2026-11-07-v6"
+    _code_version = "2026-11-07-v7"
     import api.server as _srv_mod
     if (
         getattr(_srv_mod, "_STREAMLIT_SYNC_VERSION", None) != _code_version
@@ -353,11 +353,11 @@ def main() -> None:
                 app.settings, app.db, app.market_data, app.orchestrator.registry
             )
     if not app.orchestrator.registry.list_strategies():
-        with st.spinner("Initializing market dataset, baseline strategies, and 60-day paper portfolio..."):
+        with st.spinner("Initializing market dataset and baseline strategies (Backtesting only — Paper Account stays at $100k)..."):
             app.orchestrator.bootstrap_baseline_system()
             spy_bars = app.orchestrator.market_data.get_bars("SPY")
-            for b in spy_bars[-60:]:
-                app.orchestrator.run_daily_workflow(b.bar_date)
+            if spy_bars:
+                app.orchestrator.research_agent.run_market_scan(as_of_date=spy_bars[-1].bar_date)
 
     state = app.get_dashboard_state()
     acc = state["account"]
@@ -378,11 +378,15 @@ def main() -> None:
         sum(float(l.get("commission_usd", 0.0)) + float(l.get("slippage_usd", 0.0)) for l in ledger),
         2,
     )
-    net_dollar_pnl = round(float(acc["total_equity"]) - float(acc["starting_capital"]), 2)
+    net_dollar_pnl = round(float(acc.get("total_pnl_usd", float(acc["total_equity"]) - float(acc["starting_capital"]))), 2)
+    daily_pnl_usd = float(acc.get("daily_pnl_usd", 0.0))
+    daily_ret_pct = float(acc.get("daily_return_pct", 0.0))
+    weekly_pnl_usd = float(acc.get("weekly_pnl_usd", 0.0))
+    weekly_ret_pct = float(acc.get("weekly_return_pct", 0.0))
     readiness_rows = _build_strategy_readiness_rows(strats, ledger, positions)
     ready_live_count = sum(1 for r in readiness_rows if r["Live Trading Readiness"].startswith("READY FOR LIVE REVIEW"))
 
-    # Minimalist Autonomous Status Sidebar (No manual intervention required)
+    # Minimalist Autonomous Status Sidebar
     with st.sidebar:
         st.markdown("### Autonomous Status")
         st.caption(f"Mode: **{acc['trading_mode'].upper()}** ($100,000 Virtual)")
@@ -393,17 +397,15 @@ def main() -> None:
         st.markdown("#### Automated Schedule")
         st.caption("**Daily Execution**: Mon–Fri, 21:30 UTC (after US market close)")
         st.caption("**Weekly Upgrade**: Saturday, 10:00 SGT (walk-forward discovery)")
-        st.caption("**User Action Needed**: None (100% hands-off)")
-
-        if acc["kill_switch_engaged"]:
-            st.markdown("---")
-            if st.button(
-                "Reset Paper Account ($100k)",
-                width="stretch",
-                help="Clears the kill-switch lock and resets the simulated paper portfolio back to $100,000 cash.",
-            ):
-                app.orchestrator.paper_engine.reset_account_to_starting_capital()
-                st.rerun()
+        st.caption("**Forward Paper Policy**: Only actual daily runs affect the Paper Account; all historical tests run strictly in Backtesting.")
+        st.markdown("---")
+        if st.button(
+            "Reset Paper Account ($100k)",
+            width="stretch",
+            help="Clears all simulated paper trades, open positions, and snapshots, resetting the forward paper account to $100,000.00 cash.",
+        ):
+            app.orchestrator.paper_engine.reset_account_to_starting_capital()
+            st.rerun()
 
     st.title("Swing Trading AI")
     st.caption(
@@ -581,11 +583,11 @@ def main() -> None:
             "- **Strategy Attribution Table**: Shows every strategy that has traded in the paper account, its win rate, profit factor, date span, and exact P&L contribution.",
         )
 
-        st.markdown("#### Paper Portfolio Profit & Loss Attribution")
+        st.markdown("#### Paper Portfolio Profit & Loss Attribution (Forward Runs Only)")
         st.markdown(
             f"""
             - **Active Daily Strategies**: {active_strat_names}
-            - **Measurement Window**: `{paper_date_span}`
+            - **Measurement Window**: `{paper_date_span}` *(Forward daily runs only — historical testing is isolated in Backtesting)*
             - **Derivation**:
               `Starting Capital ($100,000.00)` + `Realised P&L (${acc['realised_pnl']:+,.2f})` + `Unrealised P&L (${acc['unrealised_pnl']:+,.2f})` = **`Current Equity (${acc['total_equity']:,.2f})`** *(Net of `${total_fees_paid:,.2f}` in transaction costs)*
             """
@@ -595,30 +597,31 @@ def main() -> None:
         k1.metric(
             "Total Equity",
             f"${acc['total_equity']:,.2f}",
-            f"{net_dollar_pnl:+,.2f} ({acc['total_return_pct']:+.2f}%)",
+            f"Start: ${acc['starting_capital']:,.0f} ({acc['total_return_pct']:+.2f}%)",
             help="Cash Balance + Market Value of Open Positions. Equals Starting Capital ($100k) + Realised P&L + Unrealised P&L.",
         )
         k2.metric(
-            "Starting Capital",
-            f"${acc['starting_capital']:,.2f}",
-            help="Initial virtual cash baseline in PAPER mode.",
+            "Daily P&L (Latest Session)",
+            f"${daily_pnl_usd:+,.2f}",
+            f"{daily_ret_pct:+.2f}% today",
+            help="Single-session change in Total Equity from the prior trading session close to the latest session close.",
         )
         k3.metric(
-            "Realised P&L (Closed)",
-            f"${acc['realised_pnl']:+,.2f}",
-            f"Net of ${total_fees_paid:,.2f} costs",
-            help="Locked-in net profit/loss from completed buy-and-sell trades after brokerage fees and slippage.",
+            "Weekly P&L (Last 5 Sessions)",
+            f"${weekly_pnl_usd:+,.2f}",
+            f"{weekly_ret_pct:+.2f}% (5d)",
+            help="Rolling 5-session (1 trading week) change in Total Equity across actual forward paper runs.",
         )
         k4.metric(
-            "Unrealised P&L (Open)",
-            f"${acc['unrealised_pnl']:+,.2f}",
-            f"{acc['open_positions_count']} positions",
-            help="Floating profit/loss on currently held positions marked to the latest closing price.",
+            "Total P&L (Since Reset)",
+            f"${net_dollar_pnl:+,.2f}",
+            f"Realised ${acc['realised_pnl']:+,.0f} | Unrealised ${acc['unrealised_pnl']:+,.0f}",
+            help="Cumulative net P&L since the $100,000 baseline reset (Realised P&L from closed trades + Unrealised P&L on open positions, net of fees).",
         )
         k5.metric(
             "Available Cash",
             f"${acc['cash_balance']:,.2f}",
-            f"Drawdown: -{acc['current_drawdown_pct']:.2f}%",
+            f"{acc['open_positions_count']} open | DD -{acc['current_drawdown_pct']:.2f}%",
             help="Uninvested cash available for new swing entries. Drawdown measures the drop from the portfolio's highest equity peak.",
         )
 
@@ -1080,34 +1083,97 @@ def main() -> None:
     with tabs[6]:
         _render_tab_header(
             st,
-            "Paper Ledger: Chronological log of every simulated buy/sell fill across all active strategies, transaction fees, and resulting cash balance.",
+            "Paper Ledger: Clear, day-filtered log of every forward simulated buy/sell fill, execution cost, and resulting cash balance.",
             "How this tab works",
-            "**What this tab shows:** The accounting ledger for the simulated `$100,000` portfolio.\n\n"
+            "**What this tab shows:** The forward accounting ledger for the simulated `$100,000` portfolio.\n\n"
+            "- **Filter by Day, Side, or Strategy**: Inspect exact trades executed on any specific trading session.\n"
             "- **`BUY` rows**: Deduct purchase cost plus commission/slippage from cash (`Realised P&L` is `$0.00` on entry).\n"
             "- **`SELL` rows**: Return sale proceeds to cash and lock in the net `Realised P&L` for that trade.\n"
             "- **Signal Rationale**: Explains the exact indicator trigger or exit rule (e.g., Take-Profit, Stop-Loss, Max Hold) for each fill.",
         )
-        st.markdown(f"#### Trade Execution Ledger (`{paper_date_span}`)")
+        st.markdown(f"#### Forward Trade Execution Ledger (`{paper_date_span}`)")
         if ledger:
+            unique_days = sorted({str(l["fill_date"]) for l in ledger if l.get("fill_date")}, reverse=True)
+            unique_strats = sorted({f"{l['strategy_id']} v{l['strategy_version']}" for l in ledger})
+
+            f_col1, f_col2, f_col3 = st.columns([2, 1.5, 2])
+            with f_col1:
+                selected_day = st.selectbox(
+                    "Filter by Trading Day",
+                    options=["All Trading Days"] + unique_days,
+                    index=0,
+                    key="paper_ledger_day_filter",
+                )
+            with f_col2:
+                selected_side = st.selectbox(
+                    "Filter by Order Side",
+                    options=["All Sides (BUY & SELL)", "BUY (Entries Only)", "SELL (Exits Only)"],
+                    index=0,
+                    key="paper_ledger_side_filter",
+                )
+            with f_col3:
+                selected_strat = st.selectbox(
+                    "Filter by Strategy",
+                    options=["All Strategies"] + unique_strats,
+                    index=0,
+                    key="paper_ledger_strat_filter",
+                )
+
+            filtered_ledger = [
+                l
+                for l in ledger
+                if (selected_day == "All Trading Days" or str(l.get("fill_date")) == selected_day)
+                and (
+                    selected_side == "All Sides (BUY & SELL)"
+                    or (selected_side.startswith("BUY") and l.get("side") == "BUY")
+                    or (selected_side.startswith("SELL") and l.get("side") == "SELL")
+                )
+                and (
+                    selected_strat == "All Strategies"
+                    or f"{l['strategy_id']} v{l['strategy_version']}" == selected_strat
+                )
+            ]
+
+            buy_count = sum(1 for l in filtered_ledger if l.get("side") == "BUY")
+            sell_count = sum(1 for l in filtered_ledger if l.get("side") == "SELL")
+            traded_vol = sum(float(l.get("gross_amount", 0.0)) for l in filtered_ledger)
+            day_costs = sum(
+                float(l.get("commission_usd", 0.0)) + float(l.get("slippage_usd", 0.0))
+                for l in filtered_ledger
+            )
+            day_realised = sum(
+                float(l.get("realised_pnl", 0.0)) for l in filtered_ledger if l.get("side") == "SELL"
+            )
+
+            s1, s2, s3, s4, s5 = st.columns(5)
+            s1.metric("Trades Executed", f"{len(filtered_ledger)} fills", f"{buy_count} BUY · {sell_count} SELL")
+            s2.metric("BUY Entries", f"{buy_count}", "New positions opened")
+            s3.metric("SELL Exits", f"{sell_count}", "Positions closed")
+            s4.metric("Traded Volume", f"${traded_vol:,.2f}", f"Costs: ${day_costs:.2f}")
+            s5.metric("Realised P&L (Filtered)", f"${day_realised:+,.2f}", "Locked-in on SELLs")
+
             clean_ledger = [
                 {
-                    "Date": l["fill_date"],
-                    "Strategy": f"{l['strategy_id']} v{l['strategy_version']}",
-                    "Side": l["side"],
+                    "Trading Day": l["fill_date"],
+                    "Action": "🟢 BUY (Entry)" if l["side"] == "BUY" else "🔴 SELL (Exit)",
                     "Ticker": l["ticker"],
                     "Quantity": l["quantity"],
                     "Fill Price": f"${l['fill_price']:.2f}",
                     "Gross Notional": f"${l['gross_amount']:,.2f}",
-                    "Costs (Comm + Slip)": f"${float(l['commission_usd']) + float(l['slippage_usd']):.2f}",
-                    "Realised P&L": f"${l['realised_pnl']:+,.2f}" if l["side"] == "SELL" else "$0.00 (Entry)",
+                    "Fees + Slip": f"${float(l['commission_usd']) + float(l['slippage_usd']):.2f}",
+                    "Realised P&L": f"${l['realised_pnl']:+,.2f}" if l["side"] == "SELL" else "— (Open Entry)",
                     "Cash After Fill": f"${l['cash_after']:,.2f}",
-                    "Signal Rationale": l["notes"],
+                    "Strategy": f"{l['strategy_id']} v{l['strategy_version']}",
+                    "Execution Rationale": l["notes"],
                 }
-                for l in ledger
+                for l in filtered_ledger
             ]
-            st.dataframe(clean_ledger, width="stretch")
+            st.dataframe(clean_ledger, width="stretch", hide_index=True)
         else:
-            st.write("No paper executions recorded yet.")
+            st.info(
+                "Paper Account is clean at $100,000.00 cash with 0 trades executed. "
+                "New trades will appear here automatically after each forward daily run (`21:30 UTC` or `run` in IDE)."
+            )
 
     # =========================================================================
     # TAB 7: RISK & ANALYTICS

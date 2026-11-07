@@ -505,7 +505,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
       <div class="card">
-        <div class="card-header"><span class="card-title">Permanent Trade Ledger &amp; Execution History</span></div>
+        <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <span class="card-title">Forward Trade Ledger &amp; Execution History</span>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <select id="paper-day-filter" onchange="renderPaperLedgerTable()" style="background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:4px 8px;font-size:12px;">
+              <option value="ALL">All Trading Days</option>
+            </select>
+            <select id="paper-side-filter" onchange="renderPaperLedgerTable()" style="background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:4px 8px;font-size:12px;">
+              <option value="ALL">All Sides (BUY &amp; SELL)</option>
+              <option value="BUY">BUY (Entries Only)</option>
+              <option value="SELL">SELL (Exits Only)</option>
+            </select>
+          </div>
+        </div>
+        <div id="paper-ledger-summary" style="font-size:12px;color:#94a3b8;margin-bottom:8px;"></div>
         <div id="paper-ledger-table"></div>
       </div>
     </section>
@@ -822,16 +835,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       `;
       const latestSnap = snaps[snaps.length - 1] || {};
       const retCls = (acc.total_return_pct >= 0) ? 'pos' : 'neg';
+      const dailyCls = ((acc.daily_pnl_usd || 0) >= 0) ? 'pos' : 'neg';
+      const weeklyCls = ((acc.weekly_pnl_usd || 0) >= 0) ? 'pos' : 'neg';
       document.getElementById('overview-kpis').innerHTML = `
         <div class="kpi-card" title="Cash Balance + Market Value of Open Positions. Equals Starting Capital ($100k) + Realised P&L + Unrealised P&L."><div class="kpi-label">Portfolio Equity ⓘ</div><div class="kpi-value">${fmtUsd(acc.total_equity)}</div><div class="kpi-sub">Starting: ${fmtUsd(acc.starting_capital)}</div></div>
-        <div class="kpi-card" title="Total percentage return on the $100,000 paper portfolio compared with the S&P 500 (SPY) benchmark."><div class="kpi-label">Total Return ⓘ</div><div class="kpi-value ${retCls}">${fmtPct(acc.total_return_pct)}</div><div class="kpi-sub">vs SPY: ${fmtPct(latestSnap.benchmark_cum_return_pct || 0)}</div></div>
-        <div class="kpi-card" title="Single-day return for the most recent trading session and cumulative locked-in Realised P&L."><div class="kpi-label">Daily Return ⓘ</div><div class="kpi-value">${fmtPct(latestSnap.daily_return_pct || 0)}</div><div class="kpi-sub">Realised P&L: ${fmtUsd(acc.realised_pnl)}</div></div>
-        <div class="kpi-card" title="Uninvested cash currently available to open new swing positions."><div class="kpi-label">Available Cash ⓘ</div><div class="kpi-value">${fmtUsd(acc.cash_balance)}</div><div class="kpi-sub">Buying Power: ${fmtUsd(acc.buying_power)}</div></div>
-        <div class="kpi-card" title="Number of active stock positions currently held (capped at 10 maximum)."><div class="kpi-label">Open Positions ⓘ</div><div class="kpi-value">${acc.open_positions_count || 0} / 10</div><div class="kpi-sub">Market Value: ${fmtUsd(acc.positions_market_value)}</div></div>
+        <div class="kpi-card" title="Single-day P&L and return for the most recent forward trading session."><div class="kpi-label">Daily P&amp;L ⓘ</div><div class="kpi-value ${dailyCls}">${fmtUsd(acc.daily_pnl_usd || 0)}</div><div class="kpi-sub">${fmtPct(acc.daily_return_pct || 0)} today</div></div>
+        <div class="kpi-card" title="Rolling 5-session (weekly) P&L and percentage return on the forward paper account."><div class="kpi-label">Weekly P&amp;L (5d) ⓘ</div><div class="kpi-value ${weeklyCls}">${fmtUsd(acc.weekly_pnl_usd || 0)}</div><div class="kpi-sub">${fmtPct(acc.weekly_return_pct || 0)} (5 sessions)</div></div>
+        <div class="kpi-card" title="Cumulative net P&L and percentage return since the $100,000 reset."><div class="kpi-label">Total P&amp;L ⓘ</div><div class="kpi-value ${retCls}">${fmtUsd(acc.total_pnl_usd || 0)} (${fmtPct(acc.total_return_pct)})</div><div class="kpi-sub">Realised ${fmtUsd(acc.realised_pnl)} · Unrealised ${fmtUsd(acc.unrealised_pnl)}</div></div>
+        <div class="kpi-card" title="Uninvested cash currently available to open new swing positions."><div class="kpi-label">Available Cash ⓘ</div><div class="kpi-value">${fmtUsd(acc.cash_balance)}</div><div class="kpi-sub">Open Positions: ${acc.open_positions_count || 0} / 10</div></div>
         <div class="kpi-card" title="Percentage drop from the portfolio's highest equity peak. New buying pauses automatically at -15.0%."><div class="kpi-label">Current Drawdown ⓘ</div><div class="kpi-value neg">-${Number(acc.current_drawdown_pct || 0).toFixed(2)}%</div><div class="kpi-sub">Kill Switch: ${acc.kill_switch_engaged ? 'ACTIVE' : 'Standby (15%)'}</div></div>
       `;
 
-      const chartPts = snaps.length >= 2 ? snaps.map(s => ({equity: s.total_equity})) : ((STATE.experiments && STATE.experiments[0] && STATE.experiments[0].equity_curve) || []);
+      const chartPts = snaps.length >= 2 ? snaps.map(s => ({equity: s.total_equity})) : [{equity: acc.starting_capital || 100000}, {equity: acc.total_equity || 100000}];
       document.getElementById('overview-equity-chart').innerHTML = renderSvgChart(chartPts, 'equity', '#10b981');
 
       const pos = STATE.positions || [];
@@ -1051,24 +1066,54 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </table>
       `;
 
+      const days = Array.from(new Set(ledger.map(l => l.fill_date).filter(Boolean))).sort().reverse();
+      const daySel = document.getElementById('paper-day-filter');
+      if (daySel) {
+        const curDay = daySel.value || 'ALL';
+        daySel.innerHTML = '<option value="ALL">All Trading Days</option>' + days.map(d => `<option value="${d}">${d}</option>`).join('');
+        if (days.includes(curDay)) daySel.value = curDay;
+      }
+      renderPaperLedgerTable();
+    }
+
+    function renderPaperLedgerTable() {
+      const ledger = STATE.trade_ledger || [];
+      const daySel = document.getElementById('paper-day-filter');
+      const sideSel = document.getElementById('paper-side-filter');
+      const selDay = daySel ? daySel.value : 'ALL';
+      const selSide = sideSel ? sideSel.value : 'ALL';
+
+      const filtered = ledger.filter(l => (selDay === 'ALL' || l.fill_date === selDay) && (selSide === 'ALL' || l.side === selSide));
+      const buys = filtered.filter(l => l.side === 'BUY').length;
+      const sells = filtered.filter(l => l.side === 'SELL').length;
+      const vol = filtered.reduce((acc, l) => acc + Number(l.gross_amount || 0), 0);
+      const fees = filtered.reduce((acc, l) => acc + Number(l.commission_usd || 0) + Number(l.slippage_usd || 0), 0);
+      const rpnl = filtered.filter(l => l.side === 'SELL').reduce((acc, l) => acc + Number(l.realised_pnl || 0), 0);
+
+      const sumEl = document.getElementById('paper-ledger-summary');
+      if (sumEl) {
+        sumEl.innerHTML = `Showing <strong>${filtered.length}</strong> executions (${buys} BUY entries · ${sells} SELL exits) &bull; Traded Volume: <strong>${fmtUsd(vol)}</strong> &bull; Fees &amp; Slippage: <strong>${fmtUsd(fees)}</strong> &bull; Locked-in Realised P&amp;L: <strong class="${rpnl >= 0 ? 'pos' : 'neg'}">${fmtUsd(rpnl)}</strong>`;
+      }
+
       document.getElementById('paper-ledger-table').innerHTML = `
         <table>
-          <thead><tr><th>Fill Date</th><th>Strategy</th><th>Ticker</th><th>Side</th><th>Qty</th><th>Fill Price</th><th>Gross</th><th>Comm/Slip</th><th>Realised P&L</th><th>Cash After</th></tr></thead>
+          <thead><tr><th>Trading Day</th><th>Action</th><th>Ticker</th><th>Qty</th><th>Fill Price</th><th>Gross</th><th>Comm/Slip</th><th>Realised P&L</th><th>Cash After</th><th>Strategy</th><th>Rationale</th></tr></thead>
           <tbody>
-            ${ledger.map(l => `
+            ${filtered.map(l => `
               <tr>
-                <td>${l.fill_date}</td>
-                <td>${l.strategy_id} v${l.strategy_version}</td>
+                <td><strong>${l.fill_date}</strong></td>
+                <td><span class="badge ${l.side === 'BUY' ? 'badge-info' : 'badge-warn'}">${l.side === 'BUY' ? 'BUY (Entry)' : 'SELL (Exit)'}</span></td>
                 <td><strong>${l.ticker}</strong></td>
-                <td><span class="badge ${l.side === 'BUY' ? 'badge-info' : 'badge-warn'}">${l.side}</span></td>
                 <td>${l.quantity}</td>
                 <td>${fmtUsd(l.fill_price)}</td>
                 <td>${fmtUsd(l.gross_amount)}</td>
                 <td>${fmtUsd(Number(l.commission_usd) + Number(l.slippage_usd))}</td>
-                <td class="${l.realised_pnl >= 0 ? 'pos' : 'neg'}">${fmtUsd(l.realised_pnl)}</td>
+                <td class="${l.side === 'SELL' ? (l.realised_pnl >= 0 ? 'pos' : 'neg') : ''}">${l.side === 'SELL' ? fmtUsd(l.realised_pnl) : '— (Entry)'}</td>
                 <td>${fmtUsd(l.cash_after)}</td>
+                <td>${l.strategy_id} v${l.strategy_version}</td>
+                <td style="font-size:11px;color:#94a3b8;">${l.notes || ''}</td>
               </tr>
-            `).join('')}
+            `).join('') || '<tr><td colspan="11" style="text-align:center;color:#94a3b8;padding:14px;">No paper executions recorded for this filter. Paper Account is at $100,000.00 waiting for forward daily runs.</td></tr>'}
           </tbody>
         </table>
       `;

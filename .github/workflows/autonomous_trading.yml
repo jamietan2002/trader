@@ -70,11 +70,6 @@ jobs:
           spy_bars = app.orchestrator.market_data.get_bars("SPY")
           session_date = spy_bars[-1].bar_date if spy_bars else "2025-06-27"
 
-          # If paper account has no snapshots yet (e.g. fresh provider reset), replay the last 60 trading sessions
-          if not app.orchestrator.paper_engine.get_portfolio_snapshots() and len(spy_bars) >= 65:
-              for hist_b in spy_bars[-60:-1]:
-                  app.orchestrator.run_daily_workflow(trading_date=hist_b.bar_date, force=True)
-
           if mode == "demo":
               from main import cmd_demo
               cmd_demo(app)

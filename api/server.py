@@ -256,11 +256,11 @@ def run_server(host: Optional[str] = None, port: Optional[int] = None, bootstrap
     settings = get_settings()
     app = PlatformApplication(settings)
     if bootstrap and not app.orchestrator.registry.list_strategies():
-        logger.info("Bootstrapping initial historical dataset, 3 baseline strategies, and paper sessions...")
+        logger.info("Bootstrapping initial historical dataset and 3 baseline strategies (backtesting only)...")
         app.orchestrator.bootstrap_baseline_system()
-        from core.market_data.models import USTradingCalendar
-        for session_dt in USTradingCalendar.get_trading_days("2025-05-01", "2025-05-20"):
-            app.orchestrator.run_daily_workflow(session_dt)
+        spy_bars = app.orchestrator.market_data.get_bars("SPY")
+        if spy_bars:
+            app.orchestrator.research_agent.run_market_scan(as_of_date=spy_bars[-1].bar_date, top_n=8)
 
     bind_host = host or settings.api_host
     bind_port = port or settings.api_port

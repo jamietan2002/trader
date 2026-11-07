@@ -128,7 +128,31 @@ class PaperTradingEngine:
         total_equity = cash + positions_mv
         peak_equity = max(float(acc["peak_equity"]), total_equity)
         drawdown_pct = ((peak_equity - total_equity) / peak_equity) * 100.0 if peak_equity > 0 else 0.0
+        total_pnl_usd = total_equity - starting_cash
         total_return_pct = ((total_equity / starting_cash) - 1.0) * 100.0 if starting_cash > 0 else 0.0
+
+        # Daily & Weekly (5-session) P&L from forward portfolio snapshots
+        snap_rows = self.db.fetch_all(
+            "SELECT snapshot_date, total_equity FROM portfolio_snapshots WHERE account_id = ? ORDER BY snapshot_date ASC",
+            (self.account_id,),
+        )
+        if len(snap_rows) >= 2:
+            prev_day_eq = float(snap_rows[-2]["total_equity"])
+        elif len(snap_rows) == 1:
+            prev_day_eq = starting_cash
+        else:
+            prev_day_eq = total_equity
+        daily_pnl_usd = total_equity - prev_day_eq
+        daily_return_pct = ((total_equity / prev_day_eq) - 1.0) * 100.0 if prev_day_eq > 0 else 0.0
+
+        if len(snap_rows) >= 6:
+            prev_week_eq = float(snap_rows[-6]["total_equity"])
+        elif len(snap_rows) >= 1:
+            prev_week_eq = starting_cash
+        else:
+            prev_week_eq = total_equity
+        weekly_pnl_usd = total_equity - prev_week_eq
+        weekly_return_pct = ((total_equity / prev_week_eq) - 1.0) * 100.0 if prev_week_eq > 0 else 0.0
 
         # Sector exposures
         sector_totals: Dict[str, float] = {}
@@ -150,7 +174,12 @@ class PaperTradingEngine:
             "buying_power": round(cash, 2),  # 1x cash account (no risky margin amplification)
             "positions_market_value": round(positions_mv, 2),
             "total_equity": round(total_equity, 2),
+            "total_pnl_usd": round(total_pnl_usd, 2),
             "total_return_pct": round(total_return_pct, 2),
+            "daily_pnl_usd": round(daily_pnl_usd, 2),
+            "daily_return_pct": round(daily_return_pct, 2),
+            "weekly_pnl_usd": round(weekly_pnl_usd, 2),
+            "weekly_return_pct": round(weekly_return_pct, 2),
             "realised_pnl": round(float(acc["realised_pnl"]), 2),
             "unrealised_pnl": round(unrealised_pnl, 2),
             "peak_equity": round(peak_equity, 2),
@@ -227,6 +256,7 @@ class PaperTradingEngine:
         self.db.execute("DELETE FROM trade_ledger WHERE account_id = ?", (self.account_id,))
         self.db.execute("DELETE FROM portfolio_snapshots WHERE account_id = ?", (self.account_id,))
         self.db.execute("DELETE FROM risk_alerts WHERE account_id = ?", (self.account_id,))
+        self.db.execute("DELETE FROM job_executions WHERE job_name = 'daily_market_execution'")
         self.db.execute(
             """
             UPDATE paper_accounts

@@ -102,9 +102,9 @@ Once a strategy reaches `READY FOR LIVE REVIEW` (or whenever you choose to mirro
 1. **What is required from you day-to-day?**
    - **Nothing.** There are no buttons you need to press.
 2. **How do you read the Profit & Loss (P&L) numbers?**
-   - **Paper Portfolio P&L (`Overview & P&L` and `Paper Ledger` tabs)**: Shows your simulated `$100,000` account trading day-by-day:
+   - **Forward Paper Portfolio P&L (`Overview & P&L` and `Paper Ledger` tabs)**: Tracks your simulated `$100,000` account strictly across actual forward daily runs (all historical testing is isolated in `Backtesting`):
      $$\text{Current Equity} = \$100,000\text{ (Start)} + \text{Realised P\&L (Closed Trades)} + \text{Unrealised P\&L (Open Positions)}$$
-     Every fill already subtracts realistic broker fees and bid-ask slippage.
+     Displays **Daily P&L** (latest session vs. prior close), **Weekly P&L** (rolling 5-session change), and **Total P&L** (since the `$100,000` baseline reset, split into Realised and Unrealised), net of realistic broker fees and bid-ask slippage. The `Paper Ledger` tab includes interactive **Trading Day**, **Order Side (`BUY`/`SELL`)**, and **Strategy** filters with a daily execution summary bar.
    - **Historical Backtest P&L (`Strategies & Readiness` and `Backtesting` tabs)**: Shows how a strategy rulebook performed over multi-year past history (`2023–2025`). Backtest numbers are used strictly to test rulebooks and are never mixed into your paper account cash.
 3. **How do you evaluate when a strategy is ready for real trading?**
    - Open the **`Strategies & Readiness`** tab. Look at the **`Live Trading Readiness`** column:
