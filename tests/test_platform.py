@@ -669,6 +669,53 @@ class TestSwingTradingPlatform(unittest.TestCase):
             orch.paper_engine.get_account_summary()["total_equity"],
         )
 
+        # 7. Verify Air-Gapped Live Trading Copilot (Real Account Shadow Ledger)
+        copilot = orch.live_copilot
+        acc_init = copilot.update_cash_balance(20_000.0, update_starting_baseline=True)
+        self.assertEqual(acc_init["cash_balance"], 20_000.0)
+        self.assertEqual(acc_init["open_positions_count"], 0)
+
+        # Generating daily action plan does NOT auto-assume positions
+        plan = copilot.get_daily_action_plan(as_of_date="2025-05-09")
+        self.assertIn("buy_actions", plan)
+        self.assertEqual(copilot.get_account_summary()["open_positions_count"], 0)
+
+        # Confirming a BUY execution deducts cash and tracks the position
+        after_buy = copilot.confirm_buy_execution(
+            ticker="NVDA",
+            strategy_id="strat_momentum_trend",
+            strategy_version=1,
+            quantity=10,
+            fill_price=120.0,
+            fees_usd=1.0,
+            stop_loss_price=112.0,
+            take_profit_price=135.0,
+            fill_date="2025-05-05",
+        )
+        self.assertEqual(after_buy["open_positions_count"], 1)
+        self.assertAlmostEqual(after_buy["cash_balance"], 20_000.0 - 1_201.0, places=2)
+
+        # Editing position share count and stop-loss works cleanly
+        copilot.edit_or_add_position(
+            ticker="NVDA",
+            quantity=15,
+            avg_entry_price=120.0,
+            stop_loss_price=114.0,
+            take_profit_price=138.0,
+        )
+        self.assertEqual(copilot.get_open_positions()[0]["quantity"], 15)
+
+        # Confirming a SELL execution closes the position and locks in realised P&L
+        after_sell = copilot.confirm_sell_execution(
+            ticker="NVDA",
+            quantity=15,
+            fill_price=130.0,
+            fees_usd=1.0,
+            fill_date="2025-05-09",
+        )
+        self.assertEqual(after_sell["open_positions_count"], 0)
+        self.assertAlmostEqual(after_sell["realised_pnl"], (130.0 - 120.0) * 15 - 1.0, places=2)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

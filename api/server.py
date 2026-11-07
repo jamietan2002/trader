@@ -50,6 +50,11 @@ class PlatformApplication:
             "proposals": self.orchestrator.analyst_agent.list_proposals(limit=15),
             "risk_alerts": self.orchestrator.risk_agent.get_recent_alerts(limit=30),
             "jobs": self.orchestrator.get_job_history(limit=30),
+            "copilot": {
+                "action_plan": self.orchestrator.live_copilot.get_daily_action_plan(),
+                "positions": self.orchestrator.live_copilot.get_open_positions(),
+                "trade_history": self.orchestrator.live_copilot.get_trade_history(limit=100),
+            },
         }
 
     def run_backtest_endpoint(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -167,6 +172,54 @@ def create_http_handler(app: PlatformApplication) -> type[BaseHTTPRequestHandler
                         week_ending_date=dt, preferred_family=fam, force=force
                     )
                     self._send_json(200, res)
+                elif path == "/api/copilot/cash":
+                    cash = float(payload.get("cash_balance", 25000.0))
+                    update_base = bool(payload.get("update_starting_baseline", False))
+                    res = app.orchestrator.live_copilot.update_cash_balance(cash, update_base)
+                    self._send_json(200, res)
+                elif path == "/api/copilot/confirm-buy":
+                    res = app.orchestrator.live_copilot.confirm_buy_execution(
+                        ticker=str(payload["ticker"]),
+                        strategy_id=str(payload.get("strategy_id", "strat_momentum_trend")),
+                        strategy_version=int(payload.get("strategy_version", 1)),
+                        quantity=int(payload["quantity"]),
+                        fill_price=float(payload["fill_price"]),
+                        fees_usd=float(payload.get("fees_usd", 0.0)),
+                        stop_loss_price=float(payload["stop_loss_price"]) if payload.get("stop_loss_price") else None,
+                        take_profit_price=float(payload["take_profit_price"]) if payload.get("take_profit_price") else None,
+                        sector=str(payload.get("sector", "Technology")),
+                        notes=str(payload.get("notes", "")),
+                    )
+                    self._send_json(200, res)
+                elif path == "/api/copilot/confirm-sell":
+                    res = app.orchestrator.live_copilot.confirm_sell_execution(
+                        ticker=str(payload["ticker"]),
+                        quantity=int(payload["quantity"]),
+                        fill_price=float(payload["fill_price"]),
+                        fees_usd=float(payload.get("fees_usd", 0.0)),
+                        notes=str(payload.get("notes", "")),
+                    )
+                    self._send_json(200, res)
+                elif path == "/api/copilot/edit-position":
+                    res = app.orchestrator.live_copilot.edit_or_add_position(
+                        ticker=str(payload["ticker"]),
+                        quantity=int(payload["quantity"]),
+                        avg_entry_price=float(payload["avg_entry_price"]),
+                        stop_loss_price=float(payload["stop_loss_price"]) if payload.get("stop_loss_price") else None,
+                        take_profit_price=float(payload["take_profit_price"]) if payload.get("take_profit_price") else None,
+                        strategy_id=str(payload.get("strategy_id", "strat_momentum_trend")),
+                        strategy_version=int(payload.get("strategy_version", 1)),
+                        deduct_from_cash=bool(payload.get("deduct_from_cash", False)),
+                    )
+                    self._send_json(200, res)
+                elif path == "/api/copilot/dismiss":
+                    app.orchestrator.live_copilot.dismiss_signal(
+                        signal_date=str(payload["signal_date"]),
+                        strategy_id=str(payload["strategy_id"]),
+                        ticker=str(payload["ticker"]),
+                        action=str(payload.get("action", "BUY")),
+                    )
+                    self._send_json(200, {"status": "dismissed"})
                 else:
                     self._send_json(404, {"error": f"Endpoint {path} not found"})
             except Exception as exc:

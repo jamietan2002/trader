@@ -39,7 +39,7 @@ from agents.risk_manager.agent import RiskManagerAgent
 from agents.strategy_architect.agent import StrategyDiscoveryAgent
 from agents.strategy_evaluator.agent import StrategyEvaluationAgent
 from core.backtesting.engine import BacktestEngine
-from core.execution.paper_broker import PaperTradingEngine
+from core.execution.paper_broker import LiveTradingCopilotEngine, PaperTradingEngine
 from core.market_data.models import USTradingCalendar
 from core.market_data.providers import MarketDataService
 from core.risk.manager import PortfolioRiskManager
@@ -73,6 +73,9 @@ class AutonomousWorkflowOrchestrator:
         self.backtest_engine = BacktestEngine(settings, self.market_data)
         self.paper_engine = PaperTradingEngine(
             settings, db, self.market_data, risk_manager=self.risk_manager
+        )
+        self.live_copilot = LiveTradingCopilotEngine(
+            settings, db, self.market_data, risk_manager=self.risk_manager, registry=self.registry
         )
 
         self.research_agent = MarketResearchAgent(settings, db, self.market_data)

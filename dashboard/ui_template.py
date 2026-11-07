@@ -252,6 +252,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <button class="active" onclick="switchTab('guide', this)">Platform Guide</button>
     <button onclick="switchTab('overview', this)">Overview &amp; P&amp;L</button>
     <button onclick="switchTab('strategies', this)">Strategies &amp; Readiness</button>
+    <button onclick="switchTab('copilot', this)">Live Copilot (Real Account)</button>
     <button onclick="switchTab('research', this)">Market Research</button>
     <button onclick="switchTab('backtesting', this)">Backtesting</button>
     <button onclick="switchTab('paper', this)">Paper Ledger</button>
@@ -560,6 +561,50 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
     </section>
+
+    <!-- 8. LIVE TRADING COPILOT (AIR-GAPPED REAL ACCOUNT) -->
+    <section id="tab-copilot" class="tab-section">
+      <div class="tab-intro">
+        <p><strong>Live Copilot (Real Account)</strong> — Step-by-step daily BUY and SELL instructions sized to your real account balance, with zero access to your brokerage account.</p>
+        <details class="tab-help">
+          <summary>? How Live Copilot works</summary>
+          <div class="help-body">
+            • <strong>Zero Broker Access:</strong> Never connects to your broker. You execute trades in your own brokerage app.<br/>
+            • <strong>Never Assumes Positions:</strong> Recommendations stay pending until you click <strong>Confirm Bought</strong> or <strong>Confirm Sold</strong>.<br/>
+            • <strong>Adapts to Your Real Account:</strong> Position sizing (1% risk), stop-losses, and exit rules adapt to your actual confirmed cash and holdings.
+          </div>
+        </details>
+      </div>
+      <div class="kpi-grid" id="copilot-kpis"></div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">1. Today's Step-by-Step Action Checklist (Next Market Open)</span></div>
+        <div id="copilot-sell-box" style="margin-bottom:14px;"></div>
+        <div id="copilot-buy-box"></div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-header"><span class="card-title">2. My Confirmed Real Positions &amp; Hold Status</span></div>
+          <div id="copilot-positions-table"></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">Update Real Cash or Add / Edit a Position</span></div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>My Real Uninvested Cash ($)</label>
+              <input type="number" id="cop-cash-input" value="25000" step="500" />
+            </div>
+            <button class="btn btn-secondary" onclick="saveCopilotCash()">Update Cash Balance</button>
+          </div>
+          <hr style="border:none;border-top:1px solid var(--border);margin:12px 0;" />
+          <div class="form-row">
+            <div class="form-group"><label>Ticker</label><input type="text" id="cop-edit-ticker" value="AAPL" style="width:90px;" /></div>
+            <div class="form-group"><label>Shares (0=Delete)</label><input type="number" id="cop-edit-qty" value="10" style="width:110px;" /></div>
+            <div class="form-group"><label>Avg Entry ($)</label><input type="number" id="cop-edit-px" value="180.00" step="0.5" style="width:110px;" /></div>
+            <button class="btn" onclick="saveCopilotPosition()">Save Position</button>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <script>
@@ -609,10 +654,136 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       renderOverview();
       renderResearch();
       renderStrategies();
+      renderCopilot();
       renderBacktesting(STATE.experiments && STATE.experiments[0]);
       renderPaperTrading();
       renderAnalytics();
       renderMonitoring();
+    }
+
+    function renderCopilot() {
+      const cop = STATE.copilot || {};
+      const plan = cop.action_plan || {};
+      const acc = plan.account_summary || {};
+      const sells = plan.sell_actions || [];
+      const buys = plan.buy_actions || [];
+      const holds = plan.hold_updates || [];
+
+      const cashIn = document.getElementById('cop-cash-input');
+      if (cashIn && acc.cash_balance !== undefined) cashIn.value = acc.cash_balance;
+
+      document.getElementById('copilot-kpis').innerHTML = `
+        <div class="kpi-card"><div class="kpi-label">My Real Equity</div><div class="kpi-value">${fmtUsd(acc.total_equity)}</div><div class="kpi-sub">Base: ${fmtUsd(acc.starting_cash)} (${fmtPct(acc.total_return_pct)})</div></div>
+        <div class="kpi-card"><div class="kpi-label">My Real Cash</div><div class="kpi-value">${fmtUsd(acc.cash_balance)}</div><div class="kpi-sub">Used for 1% Risk Sizing</div></div>
+        <div class="kpi-card"><div class="kpi-label">Invested Value</div><div class="kpi-value">${fmtUsd(acc.positions_market_value)}</div><div class="kpi-sub">${acc.open_positions_count || 0} confirmed positions</div></div>
+        <div class="kpi-card"><div class="kpi-label">Realised P&amp;L</div><div class="kpi-value ${acc.realised_pnl >= 0 ? 'pos' : 'neg'}">${fmtUsd(acc.realised_pnl)}</div><div class="kpi-sub">Confirmed Closed Trades</div></div>
+        <div class="kpi-card"><div class="kpi-label">Unrealised P&amp;L</div><div class="kpi-value ${acc.unrealised_pnl >= 0 ? 'pos' : 'neg'}">${fmtUsd(acc.unrealised_pnl)}</div><div class="kpi-sub">Confirmed Open Holdings</div></div>
+      `;
+
+      document.getElementById('copilot-sell-box').innerHTML = sells.length ? `
+        <div style="font-size:0.84rem;font-weight:600;color:var(--amber);margin-bottom:6px;">Step A — SELL Orders (Exits Triggered on Your Confirmed Holdings)</div>
+        <table>
+          <thead><tr><th>Ticker</th><th>Qty to Sell</th><th>Your Entry</th><th>Ref Exit Price</th><th>Est. P&amp;L</th><th>Exit Reason</th><th>Action</th></tr></thead>
+          <tbody>
+            ${sells.map(s => `
+              <tr>
+                <td><strong>${s.ticker}</strong></td>
+                <td>${s.quantity_to_sell}</td>
+                <td>${fmtUsd(s.avg_entry_price)}</td>
+                <td>${fmtUsd(s.reference_exit_price)}</td>
+                <td class="${s.estimated_realised_pnl >= 0 ? 'pos' : 'neg'}">${fmtUsd(s.estimated_realised_pnl)}</td>
+                <td>${s.reason}</td>
+                <td><button class="btn" onclick="confirmCopilotSell('${s.ticker}', ${s.quantity_to_sell}, ${s.reference_exit_price})">Confirm Sold</button></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      ` : '<div style="font-size:0.84rem;color:var(--muted);">No SELL exit triggers on your confirmed holdings today.</div>';
+
+      document.getElementById('copilot-buy-box').innerHTML = buys.length ? `
+        <div style="font-size:0.84rem;font-weight:600;color:var(--accent);margin:10px 0 6px;">Step B — BUY Candidates (Sized to 1% Risk of Your Real Account)</div>
+        <table>
+          <thead><tr><th>Ticker</th><th>Strategy</th><th>Rec. Shares</th><th>Ref Price</th><th>Est. Cost</th><th>Stop-Loss</th><th>Take-Profit</th><th>Max Risk</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${buys.map(b => `
+              <tr>
+                <td><strong>${b.ticker}</strong></td>
+                <td>${b.strategy_id} v${b.strategy_version}</td>
+                <td><strong>${b.recommended_shares}</strong></td>
+                <td>${fmtUsd(b.reference_entry_price)}</td>
+                <td>${fmtUsd(b.estimated_cost_usd)} (${b.portfolio_weight_pct}%)</td>
+                <td class="neg">${fmtUsd(b.stop_loss_price)}</td>
+                <td class="pos">${fmtUsd(b.take_profit_price)}</td>
+                <td>-${fmtUsd(b.estimated_risk_usd)}</td>
+                <td style="display:flex;gap:6px;">
+                  <button class="btn" onclick="confirmCopilotBuy('${b.ticker}', '${b.strategy_id}', ${b.strategy_version}, ${b.recommended_shares}, ${b.reference_entry_price}, ${b.stop_loss_price || 0}, ${b.take_profit_price || 0}, '${b.sector}')">Confirm Bought</button>
+                  <button class="btn btn-secondary" onclick="skipCopilotSignal('${b.signal_date}', '${b.strategy_id}', '${b.ticker}')">Skip</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      ` : '<div style="font-size:0.84rem;color:var(--muted);margin-top:8px;">No new BUY candidates pass your real-account cash and risk caps today.</div>';
+
+      document.getElementById('copilot-positions-table').innerHTML = holds.length ? `
+        <table>
+          <thead><tr><th>Ticker</th><th>Qty</th><th>Avg Entry</th><th>Current</th><th>Unrealised P&amp;L</th><th>Stop / Target</th><th>Status</th></tr></thead>
+          <tbody>
+            ${holds.map(h => `
+              <tr>
+                <td><strong>${h.ticker}</strong></td>
+                <td>${h.quantity}</td>
+                <td>${fmtUsd(h.avg_entry_price)}</td>
+                <td>${fmtUsd(h.current_price)}</td>
+                <td class="${h.unrealised_pnl >= 0 ? 'pos' : 'neg'}">${fmtUsd(h.unrealised_pnl)}</td>
+                <td>${fmtUsd(h.stop_loss_price)} / ${fmtUsd(h.take_profit_price)}</td>
+                <td>${h.status}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      ` : '<div style="font-size:0.84rem;color:var(--muted);">0 confirmed real positions. Click "Confirm Bought" above or add a holding on the right.</div>';
+    }
+
+    async function saveCopilotCash() {
+      const cash = Number(document.getElementById('cop-cash-input').value || 0);
+      await fetch('/api/copilot/cash', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({cash_balance: cash, update_starting_baseline: true})});
+      await loadDashboardState();
+    }
+
+    async function saveCopilotPosition() {
+      const ticker = document.getElementById('cop-edit-ticker').value;
+      const qty = Number(document.getElementById('cop-edit-qty').value || 0);
+      const px = Number(document.getElementById('cop-edit-px').value || 100);
+      await fetch('/api/copilot/edit-position', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ticker, quantity: qty, avg_entry_price: px})});
+      await loadDashboardState();
+    }
+
+    async function confirmCopilotBuy(ticker, strategy_id, strategy_version, quantity, fill_price, stop_loss_price, take_profit_price, sector) {
+      await fetch('/api/copilot/confirm-buy', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ticker, strategy_id, strategy_version, quantity, fill_price, stop_loss_price, take_profit_price, sector, fees_usd: 1.0})
+      });
+      await loadDashboardState();
+    }
+
+    async function confirmCopilotSell(ticker, quantity, fill_price) {
+      await fetch('/api/copilot/confirm-sell', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ticker, quantity, fill_price, fees_usd: 1.0})
+      });
+      await loadDashboardState();
+    }
+
+    async function skipCopilotSignal(signal_date, strategy_id, ticker) {
+      await fetch('/api/copilot/dismiss', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({signal_date, strategy_id, ticker, action: 'BUY'})
+      });
+      await loadDashboardState();
     }
 
     function showGuide(topic) {

@@ -15,6 +15,7 @@ from pathlib import Path
 REQUIRED_CONTEXT_FILES = [
     "AGENTS.md",
     "GEMINI.md",
+    "USER_GUIDE.md",
     "core/AGENTS.md",
     "agents/AGENTS.md",
     "docs/AGENT_CHANGELOG.md",

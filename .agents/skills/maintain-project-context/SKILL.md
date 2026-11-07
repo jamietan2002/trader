@@ -30,13 +30,14 @@ Use the mapping table in [update_checklist.md](./references/update_checklist.md)
 
 | If You Modified... | You MUST Update... |
 |---|---|
-| New/changed module, class, or CLI command | `AGENTS.md` (Codebase Map table) & `ARCHITECTURE.md` |
-| `core/indicators/` or `core/strategies/` | `STRATEGY_GUIDE.md` & `core/AGENTS.md` |
+| Any user-facing workflow, strategy, risk rule, UI tab, or engine behavior | `USER_GUIDE.md` (Operator User Guide & Technical Appendix) |
+| New/changed module, class, or CLI command | `AGENTS.md` (Codebase Map table), `ARCHITECTURE.md` & `USER_GUIDE.md` |
+| `core/indicators/` or `core/strategies/` | `STRATEGY_GUIDE.md`, `core/AGENTS.md` & `USER_GUIDE.md` |
 | `core/market_data/` | `DATA_SOURCES.md` & `core/AGENTS.md` |
-| `core/backtesting/`, `core/risk/`, or `evaluation/` | `BACKTESTING_METHODOLOGY.md` & `core/AGENTS.md` |
-| `agents/` | `agents/AGENTS.md` & `ARCHITECTURE.md` (Role Permission Matrix) |
+| `core/backtesting/`, `core/risk/`, or `evaluation/` | `BACKTESTING_METHODOLOGY.md`, `core/AGENTS.md` & `USER_GUIDE.md` |
+| `agents/` | `agents/AGENTS.md`, `ARCHITECTURE.md` (Role Permission Matrix) & `USER_GUIDE.md` |
 | `infrastructure/configuration/settings.py` or `.env.example` | `ENVIRONMENT_VARIABLES.md` & `.env.example` |
-| `api/`, `dashboard/`, `Dockerfile`, or `docker-compose.yml` | `DEPLOYMENT.md` & `README.md` |
+| `api/`, `dashboard/`, `Dockerfile`, or `docker-compose.yml` | `DEPLOYMENT.md`, `README.md` & `USER_GUIDE.md` |
 
 ### Step 3: Add or Update Automated Tests
 Every new indicator, strategy rule, risk check, data provider, or agent schema must have a corresponding test assertion in `tests/test_platform.py`.

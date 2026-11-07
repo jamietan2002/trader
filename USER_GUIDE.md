@@ -56,15 +56,37 @@ This system manages a simulated **$100,000 US stock portfolio** across liquid la
 
 ---
 
-### 3. Does It Use AI Tokens Daily or Weekly, or Is It Running a Script?
-**By default, it uses zero paid AI tokens (`$0.00` LLM cost) and runs 100% via deterministic quantitative Python scripts.**
+### 3. Why Do We Have "AI Agents" If Zero Tokens Are Used? (And How to Enable Live LLM Tokens)
 
-- **Default Mode (`LLM_PROVIDER = deterministic_research`)**:
-  - All 5 agents (`MarketResearchAgent`, `StrategyDiscoveryAgent`, `StrategyEvaluationAgent`, `PerformanceAnalystAgent`, `RiskManagerAgent`) run using built-in **deterministic quantitative rule synthesis** (`DeterministicQuantReasoningProvider`).
-  - Why? Because stock ranking, indicator calculation, parameter mutation (`v1 -> v2`), backtesting, and the 9-gate pass/fail audit are mathematical operations. Running them deterministically guarantees **zero hallucination, 100% reproducibility, and $0 token cost** on every daily and weekly run.
-- **Optional LLM Narrative Mode (`gemini` or `openai`)**:
-  - If you ever add a `GEMINI_API_KEY` or `OPENAI_API_KEY` to GitHub Secrets and set `LLM_PROVIDER=gemini` (or `openai`), the agents will use LLM tokens *only* to write richer natural-language commentary on research theses and post-session reviews.
-  - Even with an LLM enabled, **all price math, signals, position sizing, risk vetoes, backtesting, and promotion pass/fail gates remain 100% deterministic Python code.**
+The platform implements 5 specialized agent classes (`MarketResearchAgent`, `StrategyDiscoveryAgent`, `StrategyEvaluationAgent`, `PerformanceAnalystAgent`, and `RiskManagerAgent`) that call a pluggable reasoning interface (`self.llm.generate_structured_json()` in `agents/base.py`):
+
+1. **Why `$0` Tokens Are Used by Default (`LLM_PROVIDER = deterministic_research`)**:
+   - Every agent computes exact quantitative metrics first (20d relative strength vs `SPY`, volume ratios, win/loss attribution by market regime, and 9-gate pass/fail scores) and passes a structured `fallback_payload` into `self.llm.generate_structured_json()`.
+   - When `LLM_PROVIDER=deterministic_research` (the default), `DeterministicQuantReasoningProvider` returns that quantitative synthesis directly without making an external LLM API call. This guarantees **zero hallucination, 100% reproducibility, and $0 token cost**.
+2. **When Real AI Tokens *Are* Used (`LLM_PROVIDER = gemini` or `openai`)**:
+   - When you set `LLM_PROVIDER=gemini` and provide a `GEMINI_API_KEY` (from Google AI Studio / Vertex AI) in `.env` or GitHub Actions Secrets, `GeminiLLMProvider` (`agents/base.py`) calls `gemini-2.5-pro` with `responseMimeType: "application/json"` on:
+     - **Daily Run**: `MarketResearchAgent` (synthesizing bullish/bearish theses and risk factors per stock) and `PerformanceAnalystAgent` (diagnosing session attribution and proposing Saturday experiments).
+     - **Weekly Run**: `StrategyDiscoveryAgent` (proposing parameter refinements for `v+1`) and `StrategyEvaluationAgent` (writing the multi-regime evaluation narrative).
+   - **Ways to Expand AI Token Usage for Higher Alpha**:
+     - **SEC 8-K / 10-Q & Earnings Transcript Sentiment**: Feed quarterly earnings call transcripts and SEC filings into `MarketResearchAgent` so Gemini scores management guidance tone before `strat_pead_drift` enters.
+     - **News Catalyst Filtering**: Have Gemini classify breaking news headlines to distinguish genuine fundamental catalysts from noise before taking a breakout trade.
+     - **Adaptive Hypothesis Generation**: Let `StrategyDiscoveryAgent` use Gemini to analyze all losing trades from the past month and propose targeted multi-indicator entry/exit filters for `v+1`.
+
+---
+
+### 4. Using the "Live Trading Copilot (Real Account)" Tab
+
+Once a strategy reaches `READY FOR LIVE REVIEW` (or whenever you choose to mirror signals in your personal brokerage account), open the **`Live Copilot (Real Account)`** tab:
+
+1. **100% Air-Gapped Security (Zero Broker Access)**:
+   - The platform never connects to your real brokerage account or asks for trading credentials.
+2. **Set Your Real Cash Balance**:
+   - Expand **"Configure My Real Cash Balance & Active Copilot Strategies"** and enter your actual uninvested cash (for example, `$15,000` or `$25,000`).
+   - All BUY recommendations automatically scale their share count so that hitting a stop-loss risks **at most 1.0% of your real account equity** (e.g., `$150` max risk on `$15,000`).
+3. **Never Assumes Your Positions**:
+   - Each day's **Step-by-Step Action Checklist** shows pending **SELL Orders** (on positions you actually hold that hit their Stop-Loss, Take-Profit, or Max Hold days) and **BUY Candidates**.
+   - Nothing is added to or removed from your real portfolio until you click **`Confirm Bought`** or **`Confirm Sold`** (where you can edit the exact share count and fill price you got at your broker) or **`Skip Trade`**.
+   - You can also manually **Add, Edit, or Close** any position at any time if you traded independently in your broker.
 
 ---
 
@@ -121,3 +143,4 @@ This system manages a simulated **$100,000 US stock portfolio** across liquid la
 - **Database (`infrastructure/database/db.py`)**: 16-table SQLite database (`data/swing_trader.db`) storing market bars, strategy versions, backtest experiments, paper orders, trade ledger fills, daily snapshots, risk alerts, and idempotent job logs.
 - **Orchestrator (`infrastructure/scheduler/orchestrator.py`)**: Wraps every daily and weekly step in `run_idempotent_job()` keyed by date so a job never double-executes on the same trading session.
 - **GitHub Actions (`.github/workflows/autonomous_trading.yml`)**: Runs the Daily and Weekly workflows on Ubuntu runners, commits the updated `data/swing_trader.db` back to `main`, and triggers Streamlit Community Cloud (`dashboard/streamlit_app.py`) to refresh automatically.
+

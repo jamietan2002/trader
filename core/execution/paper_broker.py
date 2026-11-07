@@ -1003,3 +1003,675 @@ class PaperTradingEngine:
             slippage_usd=0.0,
         )
 
+
+class LiveTradingCopilotEngine:
+    """Air-Gapped Live Trading Copilot & Shadow Portfolio Engine.
+
+    Generates daily step-by-step BUY and SELL instructions sized specifically to the user's
+    real-account cash and confirmed holdings WITHOUT ever connecting to a live brokerage account
+    or assuming a trade was taken until the user explicitly confirms or edits it.
+    """
+
+    def __init__(
+        self,
+        settings: Settings,
+        db: DatabaseManager,
+        market_data: MarketDataService,
+        risk_manager: PortfolioRiskManager,
+        registry: Any,
+        account_id: str = "real_shadow_default",
+        default_starting_cash: float = 25_000.0,
+    ) -> None:
+        self.settings = settings
+        self.db = db
+        self.market_data = market_data
+        self.risk_manager = risk_manager
+        self.registry = registry
+        self.account_id = account_id
+        self.default_starting_cash = default_starting_cash
+        self.ensure_initialized()
+
+    def ensure_initialized(self) -> Dict[str, Any]:
+        row = self.db.fetch_one(
+            "SELECT * FROM shadow_accounts WHERE account_id = ?", (self.account_id,)
+        )
+        if row is None:
+            now_iso = utc_now_iso()
+            self.db.execute(
+                """
+                INSERT INTO shadow_accounts (
+                    account_id, starting_cash, cash_balance, realised_pnl, enabled_strategies_json, updated_at
+                ) VALUES (?, ?, ?, 0.0, '[]', ?)
+                """,
+                (self.account_id, self.default_starting_cash, self.default_starting_cash, now_iso),
+            )
+            row = self.db.fetch_one(
+                "SELECT * FROM shadow_accounts WHERE account_id = ?", (self.account_id,)
+            )
+        assert row is not None
+        return dict(row)
+
+    def sync_market_prices(self, as_of_date: Optional[str] = None) -> None:
+        """Mark all confirmed real positions to the latest closing price and update holding days."""
+        rows = self.db.fetch_all(
+            "SELECT * FROM shadow_positions WHERE account_id = ? ORDER BY ticker ASC",
+            (self.account_id,),
+        )
+        if not rows:
+            return
+        now_iso = utc_now_iso()
+        for r in rows:
+            ticker = r["ticker"]
+            bars = self.market_data.get_bars(ticker, end_date=as_of_date)
+            if not bars:
+                continue
+            latest_bar = bars[-1]
+            curr_price = float(latest_bar.adj_close)
+            high_since = max(float(r["highest_price_since_entry"]), float(latest_bar.adj_high), curr_price)
+            opened_dt = str(r["opened_date"])
+            hold_days = sum(1 for b in bars if b.bar_date > opened_dt)
+            self.db.execute(
+                """
+                UPDATE shadow_positions
+                SET current_price = ?, highest_price_since_entry = ?, holding_days = ?, updated_at = ?
+                WHERE account_id = ? AND ticker = ?
+                """,
+                (curr_price, high_since, hold_days, now_iso, self.account_id, ticker),
+            )
+
+    def get_open_positions(self) -> List[Dict[str, Any]]:
+        rows = self.db.fetch_all(
+            "SELECT * FROM shadow_positions WHERE account_id = ? ORDER BY ticker ASC",
+            (self.account_id,),
+        )
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            qty = int(r["quantity"])
+            avg_p = float(r["avg_entry_price"])
+            curr_p = float(r["current_price"])
+            mv = round(qty * curr_p, 2)
+            upnl = round(qty * (curr_p - avg_p), 2)
+            uret = round(((curr_p / avg_p) - 1.0) * 100.0, 2) if avg_p > 0 else 0.0
+            item = dict(r)
+            item["market_value"] = mv
+            item["unrealised_pnl"] = upnl
+            item["unrealised_return_pct"] = uret
+            out.append(item)
+        return out
+
+    def get_trade_history(self, limit: int = 100) -> List[Dict[str, Any]]:
+        rows = self.db.fetch_all(
+            "SELECT * FROM shadow_trade_history WHERE account_id = ? ORDER BY created_at DESC LIMIT ?",
+            (self.account_id, limit),
+        )
+        return [dict(r) for r in rows]
+
+    def get_account_summary(self, as_of_date: Optional[str] = None) -> Dict[str, Any]:
+        self.sync_market_prices(as_of_date=as_of_date)
+        acc = self.ensure_initialized()
+        positions = self.get_open_positions()
+        cash = round(float(acc["cash_balance"]), 2)
+        start_cash = round(float(acc["starting_cash"]), 2)
+        realised = round(float(acc["realised_pnl"]), 2)
+        pos_mv = round(sum(p["market_value"] for p in positions), 2)
+        unrealised = round(sum(p["unrealised_pnl"] for p in positions), 2)
+        total_eq = round(cash + pos_mv, 2)
+        total_ret_pct = round(((total_eq / start_cash) - 1.0) * 100.0, 2) if start_cash > 0 else 0.0
+
+        sector_mv: Dict[str, float] = {}
+        for p in positions:
+            sec = p.get("sector") or "Technology"
+            sector_mv[sec] = sector_mv.get(sec, 0.0) + p["market_value"]
+        sector_exp_pct = {
+            sec: round((mv / total_eq) * 100.0, 2) if total_eq > 0 else 0.0
+            for sec, mv in sector_mv.items()
+        }
+
+        enabled_strats = json.loads(acc.get("enabled_strategies_json") or "[]")
+        return {
+            "account_id": self.account_id,
+            "starting_cash": start_cash,
+            "cash_balance": cash,
+            "positions_market_value": pos_mv,
+            "total_equity": total_eq,
+            "realised_pnl": realised,
+            "unrealised_pnl": unrealised,
+            "total_return_pct": total_ret_pct,
+            "open_positions_count": len(positions),
+            "sector_exposures_pct": sector_exp_pct,
+            "enabled_strategies": enabled_strats,
+        }
+
+    def update_cash_balance(
+        self,
+        new_cash_balance: float,
+        update_starting_baseline: bool = False,
+    ) -> Dict[str, Any]:
+        """Update the user's real cash balance (and optionally reset the starting capital baseline)."""
+        if new_cash_balance < 0:
+            raise ValueError("Cash balance cannot be negative.")
+        acc = self.ensure_initialized()
+        positions = self.get_open_positions()
+        pos_cost = sum(int(p["quantity"]) * float(p["avg_entry_price"]) for p in positions)
+        new_start = round(new_cash_balance + pos_cost, 2) if update_starting_baseline else float(acc["starting_cash"])
+        self.db.execute(
+            """
+            UPDATE shadow_accounts
+            SET cash_balance = ?, starting_cash = ?, updated_at = ?
+            WHERE account_id = ?
+            """,
+            (round(new_cash_balance, 2), new_start, utc_now_iso(), self.account_id),
+        )
+        return self.get_account_summary()
+
+    def set_enabled_strategies(self, strategy_keys: List[str]) -> None:
+        """Save user's preferred active strategy IDs (e.g. ['strat_momentum_trend:1', 'strat_volatility_breakout:2'])."""
+        self.db.execute(
+            "UPDATE shadow_accounts SET enabled_strategies_json = ?, updated_at = ? WHERE account_id = ?",
+            (json.dumps(strategy_keys), utc_now_iso(), self.account_id),
+        )
+
+    def dismiss_signal(self, signal_date: str, strategy_id: str, ticker: str, action: str) -> None:
+        """Record that the user chose to skip a recommended signal today."""
+        self.db.execute(
+            """
+            INSERT INTO shadow_dismissed_signals (account_id, signal_date, strategy_id, ticker, action, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(account_id, signal_date, strategy_id, ticker, action) DO NOTHING
+            """,
+            (self.account_id, signal_date, strategy_id, ticker.upper(), action.upper(), utc_now_iso()),
+        )
+
+    def confirm_buy_execution(
+        self,
+        ticker: str,
+        strategy_id: str,
+        strategy_version: int,
+        quantity: int,
+        fill_price: float,
+        fees_usd: float = 0.0,
+        stop_loss_price: Optional[float] = None,
+        take_profit_price: Optional[float] = None,
+        fill_date: Optional[str] = None,
+        sector: str = "Technology",
+        notes: str = "",
+    ) -> Dict[str, Any]:
+        """Record a user-confirmed real-account BUY execution and update cash & open positions."""
+        if quantity <= 0 or fill_price <= 0:
+            raise ValueError("Quantity and fill price must be positive.")
+        ticker_u = ticker.strip().upper()
+        spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker)
+        dt_str = fill_date or (spy_bars[-1].bar_date if spy_bars else utc_now_iso()[:10])
+        now_iso = utc_now_iso()
+
+        acc = self.ensure_initialized()
+        cost = round(quantity * fill_price + fees_usd, 2)
+        new_cash = max(0.0, round(float(acc["cash_balance"]) - cost, 2))
+
+        existing = self.db.fetch_one(
+            "SELECT * FROM shadow_positions WHERE account_id = ? AND ticker = ?",
+            (self.account_id, ticker_u),
+        )
+        if existing is not None:
+            old_q = int(existing["quantity"])
+            old_p = float(existing["avg_entry_price"])
+            new_q = old_q + quantity
+            new_avg = round(((old_q * old_p) + (quantity * fill_price)) / new_q, 4)
+            self.db.execute(
+                """
+                UPDATE shadow_positions
+                SET quantity = ?, avg_entry_price = ?, current_price = ?,
+                    stop_loss_price = COALESCE(?, stop_loss_price),
+                    take_profit_price = COALESCE(?, take_profit_price),
+                    updated_at = ?
+                WHERE account_id = ? AND ticker = ?
+                """,
+                (new_q, new_avg, fill_price, stop_loss_price, take_profit_price, now_iso, self.account_id, ticker_u),
+            )
+        else:
+            meta = self.market_data.get_universe_metadata(include_delisted=True).get(ticker_u)
+            sec = meta.sector if meta else sector
+            self.db.execute(
+                """
+                INSERT INTO shadow_positions (
+                    account_id, ticker, strategy_id, strategy_version, sector,
+                    quantity, avg_entry_price, current_price, highest_price_since_entry,
+                    stop_loss_price, take_profit_price, opened_date, holding_days, notes, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                """,
+                (
+                    self.account_id,
+                    ticker_u,
+                    strategy_id,
+                    int(strategy_version),
+                    sec,
+                    int(quantity),
+                    round(fill_price, 4),
+                    round(fill_price, 4),
+                    round(fill_price, 4),
+                    round(stop_loss_price, 2) if stop_loss_price else None,
+                    round(take_profit_price, 2) if take_profit_price else None,
+                    dt_str,
+                    notes or "Confirmed via Live Trading Copilot",
+                    now_iso,
+                ),
+            )
+
+        self.db.execute(
+            "UPDATE shadow_accounts SET cash_balance = ?, updated_at = ? WHERE account_id = ?",
+            (new_cash, now_iso, self.account_id),
+        )
+        self.db.execute(
+            """
+            INSERT INTO shadow_trade_history (
+                trade_id, account_id, strategy_id, strategy_version, ticker, side,
+                fill_date, quantity, fill_price, fees_usd, realised_pnl, cash_after, notes, created_at
+            ) VALUES (?, ?, ?, ?, ?, 'BUY', ?, ?, ?, ?, 0.0, ?, ?, ?)
+            """,
+            (
+                f"shd_{uuid.uuid4().hex[:12]}",
+                self.account_id,
+                strategy_id,
+                int(strategy_version),
+                ticker_u,
+                dt_str,
+                int(quantity),
+                round(fill_price, 4),
+                round(fees_usd, 2),
+                new_cash,
+                notes or f"Confirmed BUY {quantity} {ticker_u} @ ${fill_price:.2f}",
+                now_iso,
+            ),
+        )
+        return self.get_account_summary()
+
+    def confirm_sell_execution(
+        self,
+        ticker: str,
+        quantity: int,
+        fill_price: float,
+        fees_usd: float = 0.0,
+        fill_date: Optional[str] = None,
+        notes: str = "",
+    ) -> Dict[str, Any]:
+        """Record a user-confirmed real-account SELL execution, lock in realised P&L, and update cash."""
+        ticker_u = ticker.strip().upper()
+        existing = self.db.fetch_one(
+            "SELECT * FROM shadow_positions WHERE account_id = ? AND ticker = ?",
+            (self.account_id, ticker_u),
+        )
+        if existing is None:
+            raise KeyError(f"Position {ticker_u} not found in real portfolio.")
+
+        held_qty = int(existing["quantity"])
+        sell_qty = min(held_qty, max(1, int(quantity)))
+        avg_entry = float(existing["avg_entry_price"])
+        proceeds = round(sell_qty * fill_price - fees_usd, 2)
+        realised_delta = round((fill_price - avg_entry) * sell_qty - fees_usd, 2)
+
+        spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker)
+        dt_str = fill_date or (spy_bars[-1].bar_date if spy_bars else utc_now_iso()[:10])
+        now_iso = utc_now_iso()
+
+        acc = self.ensure_initialized()
+        new_cash = round(float(acc["cash_balance"]) + proceeds, 2)
+        new_realised = round(float(acc["realised_pnl"]) + realised_delta, 2)
+
+        if sell_qty >= held_qty:
+            self.db.execute(
+                "DELETE FROM shadow_positions WHERE account_id = ? AND ticker = ?",
+                (self.account_id, ticker_u),
+            )
+        else:
+            self.db.execute(
+                "UPDATE shadow_positions SET quantity = ?, current_price = ?, updated_at = ? WHERE account_id = ? AND ticker = ?",
+                (held_qty - sell_qty, round(fill_price, 4), now_iso, self.account_id, ticker_u),
+            )
+
+        self.db.execute(
+            "UPDATE shadow_accounts SET cash_balance = ?, realised_pnl = ?, updated_at = ? WHERE account_id = ?",
+            (new_cash, new_realised, now_iso, self.account_id),
+        )
+        self.db.execute(
+            """
+            INSERT INTO shadow_trade_history (
+                trade_id, account_id, strategy_id, strategy_version, ticker, side,
+                fill_date, quantity, fill_price, fees_usd, realised_pnl, cash_after, notes, created_at
+            ) VALUES (?, ?, ?, ?, ?, 'SELL', ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"shd_{uuid.uuid4().hex[:12]}",
+                self.account_id,
+                existing["strategy_id"],
+                int(existing["strategy_version"]),
+                ticker_u,
+                dt_str,
+                sell_qty,
+                round(fill_price, 4),
+                round(fees_usd, 2),
+                realised_delta,
+                new_cash,
+                notes or f"Confirmed SELL {sell_qty} {ticker_u} @ ${fill_price:.2f}",
+                now_iso,
+            ),
+        )
+        return self.get_account_summary()
+
+    def edit_or_add_position(
+        self,
+        ticker: str,
+        quantity: int,
+        avg_entry_price: float,
+        stop_loss_price: Optional[float] = None,
+        take_profit_price: Optional[float] = None,
+        strategy_id: str = "strat_momentum_trend",
+        strategy_version: int = 1,
+        opened_date: Optional[str] = None,
+        deduct_from_cash: bool = False,
+    ) -> Dict[str, Any]:
+        """Manually add, edit, or delete (quantity=0) a position in the user's real shadow ledger."""
+        ticker_u = ticker.strip().upper()
+        now_iso = utc_now_iso()
+        if quantity <= 0:
+            self.db.execute(
+                "DELETE FROM shadow_positions WHERE account_id = ? AND ticker = ?",
+                (self.account_id, ticker_u),
+            )
+            return self.get_account_summary()
+
+        bars = self.market_data.get_bars(ticker_u)
+        latest_close = float(bars[-1].adj_close) if bars else avg_entry_price
+        dt_str = opened_date or (bars[-1].bar_date if bars else now_iso[:10])
+        meta = self.market_data.get_universe_metadata(include_delisted=True).get(ticker_u)
+        sec = meta.sector if meta else "Technology"
+
+        # Auto-compute default ATR stop/target if omitted
+        if (stop_loss_price is None or take_profit_price is None) and len(bars) >= 20:
+            inds = compute_indicator_series(bars)
+            ind_last = inds.get(bars[-1].bar_date)
+            atr = float(ind_last.atr_14) if (ind_last and ind_last.atr_14) else avg_entry_price * 0.025
+            if stop_loss_price is None:
+                stop_loss_price = round(avg_entry_price - 2.0 * atr, 2)
+            if take_profit_price is None:
+                take_profit_price = round(avg_entry_price + 3.5 * atr, 2)
+
+        self.db.execute(
+            """
+            INSERT INTO shadow_positions (
+                account_id, ticker, strategy_id, strategy_version, sector,
+                quantity, avg_entry_price, current_price, highest_price_since_entry,
+                stop_loss_price, take_profit_price, opened_date, holding_days, notes, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'Manual position edit/entry', ?)
+            ON CONFLICT(account_id, ticker) DO UPDATE SET
+                strategy_id=excluded.strategy_id,
+                strategy_version=excluded.strategy_version,
+                quantity=excluded.quantity,
+                avg_entry_price=excluded.avg_entry_price,
+                current_price=excluded.current_price,
+                stop_loss_price=excluded.stop_loss_price,
+                take_profit_price=excluded.take_profit_price,
+                updated_at=excluded.updated_at
+            """,
+            (
+                self.account_id,
+                ticker_u,
+                strategy_id,
+                int(strategy_version),
+                sec,
+                int(quantity),
+                round(avg_entry_price, 4),
+                round(latest_close, 4),
+                max(round(avg_entry_price, 4), round(latest_close, 4)),
+                round(stop_loss_price, 2) if stop_loss_price else None,
+                round(take_profit_price, 2) if take_profit_price else None,
+                dt_str,
+                now_iso,
+            ),
+        )
+        if deduct_from_cash:
+            acc = self.ensure_initialized()
+            new_cash = max(0.0, round(float(acc["cash_balance"]) - (quantity * avg_entry_price), 2))
+            self.db.execute(
+                "UPDATE shadow_accounts SET cash_balance = ?, updated_at = ? WHERE account_id = ?",
+                (new_cash, now_iso, self.account_id),
+            )
+        return self.get_account_summary()
+
+    def get_daily_action_plan(self, as_of_date: Optional[str] = None) -> Dict[str, Any]:
+        """Compute step-by-step SELL and BUY recommendations tailored to the user's real account."""
+        spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker, end_date=as_of_date)
+        session_date = spy_bars[-1].bar_date if spy_bars else (as_of_date or utc_now_iso()[:10])
+        spy_inds = compute_indicator_series(spy_bars) if spy_bars else {}
+
+        summary = self.get_account_summary(as_of_date=session_date)
+        open_positions = self.get_open_positions()
+        open_by_ticker = {p["ticker"]: p for p in open_positions}
+
+        dismissed_rows = self.db.fetch_all(
+            "SELECT strategy_id, ticker, action FROM shadow_dismissed_signals WHERE account_id = ? AND signal_date = ?",
+            (self.account_id, session_date),
+        )
+        dismissed_set = {(r["strategy_id"], r["ticker"], r["action"]) for r in dismissed_rows}
+
+        all_strats = self.registry.list_strategies()
+        strat_by_key = {f"{s.strategy_id}:{s.version}": s for s in all_strats}
+        enabled_keys = summary.get("enabled_strategies") or []
+        if enabled_keys:
+            active_strats = [strat_by_key[k] for k in enabled_keys if k in strat_by_key]
+        else:
+            active_strats = [s for s in all_strats if s.status == "PAPER_TRADING"]
+
+        # Deduplicate by strategy_id (keep highest version)
+        latest_by_id: Dict[str, StrategyConfig] = {}
+        for s in active_strats:
+            prev = latest_by_id.get(s.strategy_id)
+            if prev is None or s.version > prev.version:
+                latest_by_id[s.strategy_id] = s
+        deduped_strats = list(latest_by_id.values())
+        fallback_strat = deduped_strats[0] if deduped_strats else (all_strats[0] if all_strats else None)
+
+        # 1. Evaluate SELL / HOLD status for every confirmed position the user actually holds
+        sell_actions: List[Dict[str, Any]] = []
+        hold_updates: List[Dict[str, Any]] = []
+        for pos in open_positions:
+            ticker = pos["ticker"]
+            if (pos["strategy_id"], ticker, "SELL") in dismissed_set:
+                continue
+            bars = self.market_data.get_bars(ticker, end_date=session_date)
+            if not bars:
+                continue
+            inds = compute_indicator_series(bars, spy_bars=spy_bars)
+            ind_today = inds.get(bars[-1].bar_date)
+            if ind_today is None:
+                continue
+            strat = strat_by_key.get(f"{pos['strategy_id']}:{pos['strategy_version']}", fallback_strat)
+            if strat is None:
+                continue
+
+            exit_sig = StrategySignalEngine.evaluate_exit(
+                config=strat,
+                ind=ind_today,
+                entry_price=float(pos["avg_entry_price"]),
+                highest_price_since_entry=float(pos["highest_price_since_entry"]),
+                holding_days=int(pos["holding_days"]),
+                stop_loss_price=float(pos["stop_loss_price"]) if pos.get("stop_loss_price") else None,
+                take_profit_price=float(pos["take_profit_price"]) if pos.get("take_profit_price") else None,
+            )
+            if exit_sig is not None:
+                sell_actions.append(
+                    {
+                        "action": "SELL",
+                        "ticker": ticker,
+                        "sector": pos["sector"],
+                        "strategy_id": pos["strategy_id"],
+                        "strategy_version": pos["strategy_version"],
+                        "quantity_to_sell": int(pos["quantity"]),
+                        "avg_entry_price": float(pos["avg_entry_price"]),
+                        "reference_exit_price": round(float(bars[-1].adj_close), 2),
+                        "estimated_realised_pnl": round(
+                            (float(bars[-1].adj_close) - float(pos["avg_entry_price"])) * int(pos["quantity"]), 2
+                        ),
+                        "holding_days": int(pos["holding_days"]),
+                        "reason": exit_sig.reason,
+                        "signal_date": session_date,
+                    }
+                )
+            else:
+                max_hold = strat.holding_period_max_days
+                days_left = max(0, max_hold - int(pos["holding_days"]))
+                hold_updates.append(
+                    {
+                        "ticker": ticker,
+                        "strategy": f"{pos['strategy_id']} v{pos['strategy_version']}",
+                        "quantity": int(pos["quantity"]),
+                        "avg_entry_price": float(pos["avg_entry_price"]),
+                        "current_price": float(pos["current_price"]),
+                        "unrealised_pnl": float(pos["unrealised_pnl"]),
+                        "stop_loss_price": pos.get("stop_loss_price"),
+                        "take_profit_price": pos.get("take_profit_price"),
+                        "status": f"HOLD ({days_left} trading days until max time-exit)",
+                    }
+                )
+
+        # 2. Evaluate BUY signals sized to the user's real account equity & cash
+        buy_actions: List[Dict[str, Any]] = []
+        vetoed_signals: List[Dict[str, Any]] = []
+        universe_meta = self.market_data.get_universe_metadata(include_delisted=True)
+
+        # Simulate remaining cash/exposure as recommendations are queued so total recommendations respect user's caps
+        sim_cash = float(summary["cash_balance"])
+        sim_open_map = dict(open_by_ticker)
+        total_eq = max(1.0, float(summary["total_equity"]))
+
+        # Collect signals across all active strategies and interleave by strategy family
+        signals_by_strat: Dict[str, List[Tuple[StrategyConfig, str, DailyBar, Any]]] = {}
+        for strat in deduped_strats:
+            bucket: List[Tuple[StrategyConfig, str, DailyBar, Any]] = []
+            for ticker in strat.universe:
+                if ticker == self.settings.benchmark_ticker or ticker in sim_open_map:
+                    continue
+                if (strat.strategy_id, ticker, "BUY") in dismissed_set:
+                    continue
+                bars = self.market_data.get_bars(ticker, end_date=session_date)
+                if len(bars) < 25:
+                    continue
+                latest_bar = bars[-1]
+                inds = compute_indicator_series(bars, spy_bars=spy_bars)
+                ind_latest = inds.get(latest_bar.bar_date)
+                if ind_latest is None:
+                    continue
+                recent_ev = self.market_data.get_point_in_time_earnings(
+                    ticker, latest_bar.bar_date, lookback_days=10
+                )
+                sig = StrategySignalEngine.evaluate_entry(
+                    config=strat,
+                    ind=ind_latest,
+                    spy_ind=spy_inds.get(latest_bar.bar_date),
+                    recent_earnings=recent_ev,
+                )
+                if sig is not None:
+                    bucket.append((strat, ticker, latest_bar, sig))
+            bucket.sort(key=lambda item: float(item[3].conviction_score), reverse=True)
+            if bucket:
+                signals_by_strat[strat.strategy_id] = bucket
+
+        strat_order = sorted(
+            signals_by_strat.keys(),
+            key=lambda sid: (0 if "breakout" in sid or "pead" in sid else 1, sid),
+        )
+        max_len = max((len(v) for v in signals_by_strat.values()), default=0)
+        interleaved: List[Tuple[StrategyConfig, str, DailyBar, Any]] = []
+        for idx in range(max_len):
+            for sid in strat_order:
+                if idx < len(signals_by_strat[sid]):
+                    interleaved.append(signals_by_strat[sid][idx])
+
+        for strat, ticker, latest_bar, sig in interleaved:
+            if ticker in sim_open_map:
+                continue
+            meta = universe_meta.get(ticker)
+            sector = meta.sector if meta else "Technology"
+            ref_price = round(float(latest_bar.adj_close), 2)
+
+            # Use Temporary RiskManager without DB alert logging so previewing recommendations doesn't spam paper risk_alerts
+            preview_rm = PortfolioRiskManager(self.settings.risk, db=None)
+            decision = preview_rm.evaluate_proposed_entry(
+                account_id=self.account_id,
+                eval_date=session_date,
+                ticker=ticker,
+                sector=sector,
+                strategy_id=strat.strategy_id,
+                strategy_family=strat.strategy_family,
+                entry_price=ref_price,
+                stop_loss_price=sig.stop_loss_price,
+                atr_14=sig.atr_at_signal,
+                portfolio_equity=total_eq,
+                peak_equity=total_eq,
+                available_cash=sim_cash,
+                open_positions=sim_open_map,
+                strategy_risk_pct=strat.risk_params.get("risk_per_trade_pct"),
+                strategy_max_exp_pct=strat.risk_params.get("max_position_exposure_pct"),
+            )
+            if decision.approved and decision.recommended_shares > 0:
+                shares = decision.recommended_shares
+                est_cost = round(shares * ref_price, 2)
+                weight_pct = round((est_cost / total_eq) * 100.0, 2)
+                buy_actions.append(
+                    {
+                        "action": "BUY",
+                        "ticker": ticker,
+                        "sector": sector,
+                        "strategy_id": strat.strategy_id,
+                        "strategy_version": strat.version,
+                        "strategy_name": strat.name,
+                        "recommended_shares": shares,
+                        "reference_entry_price": ref_price,
+                        "estimated_cost_usd": est_cost,
+                        "portfolio_weight_pct": weight_pct,
+                        "stop_loss_price": round(float(sig.stop_loss_price), 2) if sig.stop_loss_price else None,
+                        "take_profit_price": round(float(sig.take_profit_price), 2) if sig.take_profit_price else None,
+                        "estimated_risk_usd": decision.estimated_risk_usd,
+                        "risk_pct_of_equity": round((decision.estimated_risk_usd / total_eq) * 100.0, 2),
+                        "holding_horizon_days": f"{strat.holding_period_min_days}–{strat.holding_period_max_days} trading days",
+                        "conviction_score": round(float(sig.conviction_score) * 100.0, 0),
+                        "reason": sig.reason,
+                        "signal_date": session_date,
+                    }
+                )
+                sim_cash = max(0.0, sim_cash - est_cost)
+                sim_open_map[ticker] = {
+                    "ticker": ticker,
+                    "sector": sector,
+                    "quantity": shares,
+                    "current_price": ref_price,
+                    "avg_entry_price": ref_price,
+                    "stop_loss_price": sig.stop_loss_price,
+                }
+            else:
+                vetoed_signals.append(
+                    {
+                        "ticker": ticker,
+                        "strategy": f"{strat.strategy_id} v{strat.version}",
+                        "reference_price": ref_price,
+                        "veto_rule": decision.rule_triggered,
+                        "reason": decision.veto_reason,
+                    }
+                )
+
+        return {
+            "session_date": session_date,
+            "account_summary": summary,
+            "sell_actions": sell_actions,
+            "buy_actions": buy_actions,
+            "hold_updates": hold_updates,
+            "vetoed_signals": vetoed_signals,
+        }
+
+    def export_state(self) -> Dict[str, Any]:
+        return {
+            "account": self.get_account_summary(),
+            "positions": self.get_open_positions(),
+            "trade_history": self.get_trade_history(limit=500),
+        }
+
+

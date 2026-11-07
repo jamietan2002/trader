@@ -292,6 +292,65 @@ CREATE TABLE IF NOT EXISTS api_cache (
     retrieved_at TEXT NOT NULL,
     expires_at TEXT NOT NULL
 );
+
+-- 17. Air-Gapped Live Trading Copilot — Real Account Shadow State
+CREATE TABLE IF NOT EXISTS shadow_accounts (
+    account_id TEXT PRIMARY KEY,
+    starting_cash REAL NOT NULL,
+    cash_balance REAL NOT NULL,
+    realised_pnl REAL NOT NULL DEFAULT 0.0,
+    enabled_strategies_json TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NOT NULL
+);
+
+-- 18. Air-Gapped Live Trading Copilot — Confirmed Real Positions
+CREATE TABLE IF NOT EXISTS shadow_positions (
+    account_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    strategy_id TEXT NOT NULL,
+    strategy_version INTEGER NOT NULL,
+    sector TEXT NOT NULL,
+    quantity INTEGER NOT NULL,
+    avg_entry_price REAL NOT NULL,
+    current_price REAL NOT NULL,
+    highest_price_since_entry REAL NOT NULL,
+    stop_loss_price REAL,
+    take_profit_price REAL,
+    opened_date TEXT NOT NULL,
+    holding_days INTEGER NOT NULL DEFAULT 0,
+    notes TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (account_id, ticker)
+);
+
+-- 19. Air-Gapped Live Trading Copilot — Confirmed Real Trade History
+CREATE TABLE IF NOT EXISTS shadow_trade_history (
+    trade_id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    strategy_id TEXT NOT NULL,
+    strategy_version INTEGER NOT NULL,
+    ticker TEXT NOT NULL,
+    side TEXT NOT NULL,
+    fill_date TEXT NOT NULL,
+    quantity INTEGER NOT NULL,
+    fill_price REAL NOT NULL,
+    fees_usd REAL NOT NULL DEFAULT 0.0,
+    realised_pnl REAL NOT NULL DEFAULT 0.0,
+    cash_after REAL NOT NULL,
+    notes TEXT,
+    created_at TEXT NOT NULL
+);
+
+-- 20. Air-Gapped Live Trading Copilot — Skipped/Dismissed Daily Signals
+CREATE TABLE IF NOT EXISTS shadow_dismissed_signals (
+    account_id TEXT NOT NULL,
+    signal_date TEXT NOT NULL,
+    strategy_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    action TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (account_id, signal_date, strategy_id, ticker, action)
+);
 """
 
 

@@ -60,7 +60,7 @@ This repository implements an autonomous **AI-Powered Swing Trading Research, Ba
 | `core/strategies/registry.py` | 5 Strategy families, deterministic signal engine, version registry | `StrategyConfig`, `StrategySignalEngine`, `StrategyRegistry`, `get_baseline_strategies()` |
 | `core/backtesting/engine.py` | Event-driven chronological backtester, walk-forward, stress tests | `BacktestEngine`, `BacktestResult` |
 | `core/risk/manager.py` | Trade veto authority, ATR sizing, sector/stock caps, kill switch | `PortfolioRiskManager`, `RiskDecision` |
-| `core/execution/paper_broker.py` | $100k simulated brokerage, order types, idempotency, trade ledger | `PaperTradingEngine`, `OrderSubmissionResult` |
+| `core/execution/paper_broker.py` | $100k simulated brokerage, order types, idempotency, trade ledger, and air-gapped Live Trading Copilot | `PaperTradingEngine`, `LiveTradingCopilotEngine`, `OrderSubmissionResult` |
 | `evaluation/metrics/performance.py` | 16+ performance metrics & Monte Carlo trade-sequence simulator | `calculate_performance_metrics()`, `run_monte_carlo_trade_sequence()` |
 | `agents/base.py` | LLM abstraction (`deterministic_research`, `gemini`, `openai`), permissions | `BaseAgent`, `LLMProvider`, `validate_required_fields()` |
 | `agents/market_researcher/agent.py` | Universe scanner & multi-factor candidate ranker | `MarketResearchAgent`, `CandidateResearchReport` |
@@ -83,6 +83,6 @@ Whenever you implement a feature, fix a bug, add an indicator/strategy/agent/pro
 
 Before completing any task, you must:
 1. Run `.venv/bin/python .agents/skills/maintain-project-context/scripts/verify_context.py` to verify all unit/integration tests and documentation sync checks pass.
-2. Update `AGENTS.md`, `GEMINI.md`, subdirectory context files (`core/AGENTS.md`, `agents/AGENTS.md`), and the relevant topical Markdown docs (`ARCHITECTURE.md`, `STRATEGY_GUIDE.md`, `DATA_SOURCES.md`, `BACKTESTING_METHODOLOGY.md`, `DEPLOYMENT.md`, `ENVIRONMENT_VARIABLES.md`, `README.md`) to reflect your changes.
+2. Update `AGENTS.md`, `GEMINI.md`, `USER_GUIDE.md`, subdirectory context files (`core/AGENTS.md`, `agents/AGENTS.md`), and the relevant topical Markdown docs (`ARCHITECTURE.md`, `STRATEGY_GUIDE.md`, `DATA_SOURCES.md`, `BACKTESTING_METHODOLOGY.md`, `DEPLOYMENT.md`, `ENVIRONMENT_VARIABLES.md`, `README.md`) to reflect your changes.
 3. Append a concise entry to ` docs/AGENT_CHANGELOG.md` recording the architectural/code changes made.
 

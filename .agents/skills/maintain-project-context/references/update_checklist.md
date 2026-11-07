@@ -29,5 +29,8 @@ When updating documentation as part of the `maintain-project-context` skill, che
 ## 5. Adding or Modifying an AI Agent (`agents/`)
 - [ ] Subclass `BaseAgent` and register permitted and forbidden actions in `AGENT_PERMISSIONS` / `FORBIDDEN_AGENT_TOOLS` (`agents/base.py`).
 - [ ] Define a strict schema dictionary (`*_SCHEMA`) and call `validate_required_fields()` on every output.
-- [ ] Update `agents/AGENTS.md` and the Role Permission Matrix in `ARCHITECTURE.md`.
+- [ ] Update `agents/AGENTS.md`, `USER_GUIDE.md`, and the Role Permission Matrix in `ARCHITECTURE.md`.
+
+## 6. Updating Operator User Guide (`USER_GUIDE.md`)
+- [ ] Whenever any workflow, strategy, risk limit, UI tab, or engine component changes, update both **Part 1 (High-Level User Guide)** and **Part 2 (Technical Appendix)** in `USER_GUIDE.md` so the operator documentation remains 100% synchronized with the live implementation.
 

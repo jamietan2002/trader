@@ -407,6 +407,7 @@ def main() -> None:
             "Platform Guide",
             "Overview & P&L",
             "Strategies & Readiness",
+            "Live Copilot (Real Account)",
             "Market Research",
             "Backtesting",
             "Paper Ledger",
@@ -663,9 +664,268 @@ def main() -> None:
                     st.caption(f"**Hypothesis**: {s['hypothesis']}")
 
     # =========================================================================
-    # TAB 3: MARKET RESEARCH
+    # TAB 3: LIVE TRADING COPILOT (AIR-GAPPED REAL ACCOUNT SHADOW LEDGER)
     # =========================================================================
     with tabs[3]:
+        _render_tab_header(
+            st,
+            "Live Copilot (Real Account): Step-by-step daily BUY and SELL instructions sized to your real account balance—with zero access to your brokerage account.",
+            "How Live Copilot works",
+            "**100% Air-Gapped Shadow Portfolio:**\n\n"
+            "- **Zero Broker Access**: This engine never connects to your real broker. You execute trades in your own brokerage app.\n"
+            "- **Never Assumes Your Positions**: Recommendations stay pending until you click **Confirm Bought** or **Confirm Sold** (where you can enter the exact price and share count you got).\n"
+            "- **Adapts to Your Real Holdings**: Stop-loss, take-profit, holding-day countdowns, and 1% risk sizing all adapt to your actual confirmed positions and cash balance.",
+        )
+
+        copilot_data = state.get("copilot") or {}
+        plan = copilot_data.get("action_plan") or app.orchestrator.live_copilot.get_daily_action_plan()
+        real_acc = plan["account_summary"]
+        sell_actions = plan["sell_actions"]
+        buy_actions = plan["buy_actions"]
+        hold_updates = plan["hold_updates"]
+        real_positions = copilot_data.get("positions") or []
+        real_history = copilot_data.get("trade_history") or []
+
+        # 1. Real Account Summary Metrics
+        rc1, rc2, rc3, rc4, rc5 = st.columns(5)
+        rc1.metric(
+            "My Real Total Equity",
+            f"${real_acc['total_equity']:,.2f}",
+            f"{real_acc['total_return_pct']:+.2f}% vs ${real_acc['starting_cash']:,.0f} base",
+            help="Your confirmed Real Cash Balance + Market Value of your confirmed Real Positions.",
+        )
+        rc2.metric(
+            "My Real Cash Balance",
+            f"${real_acc['cash_balance']:,.2f}",
+            help="Uninvested cash in your real account used by the Copilot to size new BUY recommendations.",
+        )
+        rc3.metric(
+            "Invested Market Value",
+            f"${real_acc['positions_market_value']:,.2f}",
+            f"{real_acc['open_positions_count']} open positions",
+            help="Current market value of the positions you have confirmed holding.",
+        )
+        rc4.metric(
+            "Realised P&L (Closed)",
+            f"${real_acc['realised_pnl']:+,.2f}",
+            help="Net profit/loss locked in from real trades you confirmed closing.",
+        )
+        rc5.metric(
+            "Unrealised P&L (Open)",
+            f"${real_acc['unrealised_pnl']:+,.2f}",
+            help="Floating profit/loss on your confirmed open positions at the latest market close.",
+        )
+
+        with st.expander("Configure My Real Cash Balance & Active Copilot Strategies", expanded=False):
+            cfg_c1, cfg_c2 = st.columns(2)
+            with cfg_c1:
+                st.markdown("**Update Real Cash Balance**")
+                new_cash_val = st.number_input(
+                    "Current Uninvested Cash in Your Broker ($)",
+                    min_value=0.0,
+                    value=float(real_acc["cash_balance"]),
+                    step=500.0,
+                    key="copilot_cash_input",
+                )
+                reset_base = st.checkbox(
+                    "Also set this (+ current positions) as my Starting Capital baseline",
+                    value=False,
+                    key="copilot_reset_base",
+                )
+                if st.button("Save Real Cash Balance", use_container_width=True):
+                    app.orchestrator.live_copilot.update_cash_balance(new_cash_val, reset_base)
+                    st.rerun()
+            with cfg_c2:
+                st.markdown("**Select Strategies Driving Your Copilot**")
+                avail_keys = [
+                    f"{s['strategy_id']}:{s['version']}"
+                    for s in strats
+                    if s["status"] in ("PAPER_TRADING", "APPROVED_FOR_REVIEW")
+                ]
+                default_keys = real_acc.get("enabled_strategies") or avail_keys
+                valid_defaults = [k for k in default_keys if k in avail_keys] or avail_keys
+                chosen_keys = st.multiselect(
+                    "Active Strategies for Real Account Signals",
+                    options=avail_keys,
+                    default=valid_defaults,
+                    key="copilot_strats_select",
+                )
+                if st.button("Save Strategy Selection", use_container_width=True):
+                    app.orchestrator.live_copilot.set_enabled_strategies(chosen_keys)
+                    st.rerun()
+
+        st.markdown(f"#### 1. Step-by-Step Action Checklist for Next Market Open (Session `{plan['session_date']}`)")
+
+        # A. SELL Actions (Exits on confirmed positions)
+        if sell_actions:
+            st.markdown("##### Step A — SELL Orders (Exits Triggered on Positions You Hold)")
+            for idx, sa in enumerate(sell_actions):
+                with st.container():
+                    st.warning(
+                        f"**SELL `{sa['quantity_to_sell']}` shares of `{sa['ticker']}`** at Market Open  ·  "
+                        f"**Reason**: {sa['reason']}  ·  "
+                        f"**Your Entry**: `${sa['avg_entry_price']:.2f}` → **Ref Price**: `${sa['reference_exit_price']:.2f}` "
+                        f"(`Est. P&L: ${sa['estimated_realised_pnl']:+,.2f}`)"
+                    )
+                    sc1, sc2, sc3, sc4 = st.columns([1.2, 1.2, 1.2, 1])
+                    s_qty = sc1.number_input(
+                        f"Shares Sold ({sa['ticker']})",
+                        min_value=1,
+                        max_value=int(sa["quantity_to_sell"]),
+                        value=int(sa["quantity_to_sell"]),
+                        key=f"sell_qty_{sa['ticker']}_{idx}",
+                    )
+                    s_price = sc2.number_input(
+                        f"Actual Exit Price ($)",
+                        min_value=0.01,
+                        value=float(sa["reference_exit_price"]),
+                        step=0.10,
+                        key=f"sell_px_{sa['ticker']}_{idx}",
+                    )
+                    s_fee = sc3.number_input(
+                        "Broker Fee ($)",
+                        min_value=0.0,
+                        value=1.00,
+                        step=0.50,
+                        key=f"sell_fee_{sa['ticker']}_{idx}",
+                    )
+                    with sc4:
+                        st.write("")
+                        if st.button(f"Confirm Sold {sa['ticker']}", key=f"btn_sell_{sa['ticker']}_{idx}", use_container_width=True):
+                            app.orchestrator.live_copilot.confirm_sell_execution(
+                                ticker=sa["ticker"],
+                                quantity=int(s_qty),
+                                fill_price=float(s_price),
+                                fees_usd=float(s_fee),
+                                notes=sa["reason"],
+                            )
+                            st.rerun()
+        else:
+            st.caption("No SELL exit triggers on your current holdings today.")
+
+        # B. BUY Actions (New entries sized to user's real cash & equity)
+        if buy_actions:
+            st.markdown("##### Step B — BUY Candidates (Sized to 1% Risk of Your Real Account)")
+            for idx, ba in enumerate(buy_actions):
+                with st.expander(
+                    f"BUY {ba['recommended_shares']} shares of {ba['ticker']} (~${ba['estimated_cost_usd']:,.2f} · "
+                    f"{ba['portfolio_weight_pct']:.1f}% of your account)  ·  "
+                    f"Strategy: {ba['strategy_id']} v{ba['strategy_version']}  ·  "
+                    f"Stop-Loss: ${ba['stop_loss_price']:.2f} (Max Risk: -${ba['estimated_risk_usd']:,.2f})",
+                    expanded=(idx < 3),
+                ):
+                    st.markdown(
+                        f"""
+                        - **Signal Rationale**: {ba['reason']}
+                        - **Bracket Levels to Set in Your Broker**: **Stop-Loss**: `${ba['stop_loss_price']:.2f}` · **Take-Profit**: `${ba['take_profit_price']:.2f}` · **Max Holding Window**: `{ba['holding_horizon_days']}`
+                        """
+                    )
+                    bc1, bc2, bc3, bc4, bc5 = st.columns([1.1, 1.1, 1.0, 1.1, 0.9])
+                    b_qty = bc1.number_input(
+                        f"Shares Bought ({ba['ticker']})",
+                        min_value=1,
+                        value=int(ba["recommended_shares"]),
+                        step=1,
+                        key=f"buy_qty_{ba['ticker']}_{idx}",
+                    )
+                    b_price = bc2.number_input(
+                        "Actual Fill Price ($)",
+                        min_value=0.01,
+                        value=float(ba["reference_entry_price"]),
+                        step=0.10,
+                        key=f"buy_px_{ba['ticker']}_{idx}",
+                    )
+                    b_fee = bc3.number_input(
+                        "Broker Fee ($)",
+                        min_value=0.0,
+                        value=1.00,
+                        step=0.50,
+                        key=f"buy_fee_{ba['ticker']}_{idx}",
+                    )
+                    with bc4:
+                        st.write("")
+                        if st.button(
+                            f"Confirm Bought {ba['ticker']}",
+                            key=f"btn_buy_{ba['ticker']}_{idx}",
+                            use_container_width=True,
+                        ):
+                            app.orchestrator.live_copilot.confirm_buy_execution(
+                                ticker=ba["ticker"],
+                                strategy_id=ba["strategy_id"],
+                                strategy_version=int(ba["strategy_version"]),
+                                quantity=int(b_qty),
+                                fill_price=float(b_price),
+                                fees_usd=float(b_fee),
+                                stop_loss_price=ba["stop_loss_price"],
+                                take_profit_price=ba["take_profit_price"],
+                                sector=ba["sector"],
+                                notes=ba["reason"],
+                            )
+                            st.rerun()
+                    with bc5:
+                        st.write("")
+                        if st.button(
+                            "Skip Trade",
+                            key=f"btn_skip_{ba['ticker']}_{idx}",
+                            use_container_width=True,
+                        ):
+                            app.orchestrator.live_copilot.dismiss_signal(
+                                signal_date=ba["signal_date"],
+                                strategy_id=ba["strategy_id"],
+                                ticker=ba["ticker"],
+                                action="BUY",
+                            )
+                            st.rerun()
+        else:
+            st.info("No new BUY signals currently pass your real-account cash and risk caps for this session.")
+
+        # 2. My Confirmed Real Positions & Manual Position Editor
+        st.markdown("#### 2. My Confirmed Real Positions & Hold Status")
+        if hold_updates:
+            st.dataframe(hold_updates, use_container_width=True)
+        elif real_positions:
+            st.dataframe(real_positions, use_container_width=True)
+        else:
+            st.write(
+                "You currently have 0 confirmed real positions. Click **Confirm Bought** on a recommendation above "
+                "or use **Add / Edit / Close a Position** below to log an existing holding."
+            )
+
+        with st.expander("Add, Edit, or Manually Close a Real Position", expanded=False):
+            st.caption(
+                "Use this form if you already hold a stock in your broker, if you adjusted your share count, "
+                "or if you want to remove a position (set Shares = 0 to remove without logging a sale, or use Close Position below)."
+            )
+            ec1, ec2, ec3, ec4, ec5 = st.columns(5)
+            universe_tickers = sorted({t for s in strats for t in s["universe"]})
+            e_ticker = ec1.selectbox("Ticker", options=universe_tickers, key="edit_pos_ticker")
+            e_qty = ec2.number_input("Shares (0 to delete)", min_value=0, value=10, step=1, key="edit_pos_qty")
+            e_entry = ec3.number_input("Avg Entry Price ($)", min_value=0.01, value=150.0, step=0.50, key="edit_pos_px")
+            e_stop = ec4.number_input("Stop-Loss ($ · 0=Auto ATR)", min_value=0.0, value=0.0, step=0.50, key="edit_pos_sl")
+            e_tp = ec5.number_input("Take-Profit ($ · 0=Auto ATR)", min_value=0.0, value=0.0, step=0.50, key="edit_pos_tp")
+            deduct_chk = st.checkbox("Deduct cost (Shares × Entry Price) from my Real Cash Balance", value=False, key="edit_pos_deduct")
+            if st.button("Save Position Update", use_container_width=True):
+                app.orchestrator.live_copilot.edit_or_add_position(
+                    ticker=e_ticker,
+                    quantity=int(e_qty),
+                    avg_entry_price=float(e_entry),
+                    stop_loss_price=float(e_stop) if e_stop > 0 else None,
+                    take_profit_price=float(e_tp) if e_tp > 0 else None,
+                    deduct_from_cash=deduct_chk,
+                )
+                st.rerun()
+
+        # 3. Confirmed Real Trade History
+        with st.expander(f"3. My Confirmed Real Trade History ({len(real_history)} fills)", expanded=False):
+            if real_history:
+                st.dataframe(real_history, use_container_width=True)
+            else:
+                st.write("No real trades confirmed yet.")
+
+    # =========================================================================
+    # TAB 4: MARKET RESEARCH
+    # =========================================================================
+    with tabs[4]:
         _render_tab_header(
             st,
             "Market Research: Daily ranking of liquid US stocks by trend strength vs. SPY, volume activity, and earnings catalysts.",
@@ -703,9 +963,9 @@ def main() -> None:
             st.dataframe(state["proposals"], use_container_width=True)
 
     # =========================================================================
-    # TAB 4: BACKTESTING
+    # TAB 5: BACKTESTING
     # =========================================================================
-    with tabs[4]:
+    with tabs[5]:
         _render_tab_header(
             st,
             "Backtesting: Multi-year historical simulations showing how each strategy performed across past market cycles.",
@@ -738,9 +998,9 @@ def main() -> None:
                 st.dataframe(exp["trades"][:25], use_container_width=True)
 
     # =========================================================================
-    # TAB 5: PAPER TRADING LEDGER
+    # TAB 6: PAPER TRADING LEDGER
     # =========================================================================
-    with tabs[5]:
+    with tabs[6]:
         _render_tab_header(
             st,
             "Paper Ledger: Chronological log of every simulated buy/sell fill across all active strategies, transaction fees, and resulting cash balance.",
@@ -773,9 +1033,9 @@ def main() -> None:
             st.write("No paper executions recorded yet.")
 
     # =========================================================================
-    # TAB 6: RISK & ANALYTICS
+    # TAB 7: RISK & ANALYTICS
     # =========================================================================
-    with tabs[6]:
+    with tabs[7]:
         _render_tab_header(
             st,
             "Risk & Analytics: Real-time sector exposure vs. the 30% cap and multi-window walk-forward stability.",
@@ -802,9 +1062,9 @@ def main() -> None:
                 st.dataframe(wf_windows, use_container_width=True)
 
     # =========================================================================
-    # TAB 7: SYSTEM LOGS
+    # TAB 8: SYSTEM LOGS
     # =========================================================================
-    with tabs[7]:
+    with tabs[8]:
         _render_tab_header(
             st,
             "System Logs: Audit trail of automated daily/weekly runs and any trades blocked by the Risk Manager.",

@@ -4,6 +4,23 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-07] — Air-Gapped Live Trading Copilot (Real Account Shadow Engine) & Mandatory User Guide Sync
+
+### Summary
+- **Air-Gapped Live Trading Copilot (`LiveTradingCopilotEngine` in `core/execution/paper_broker.py`)**: Implemented a complete shadow portfolio engine (`shadow_accounts`, `shadow_positions`, `shadow_trade_history`, `shadow_dismissed_signals` in `infrastructure/database/db.py`) that computes daily step-by-step SELL and BUY instructions sized to the user's real account balance (`1.0%` ATR risk and all 7 portfolio caps) without ever connecting to a live brokerage account or assuming a trade was taken until confirmed by the user.
+- **Interactive `Live Copilot (Real Account)` Tab (`dashboard/streamlit_app.py`, `dashboard/ui_template.py`, `api/server.py`)**: Added interactive `Confirm Bought`, `Confirm Sold`, and `Skip Trade` controls with editable fill prices and share counts, real-cash balance configuration, strategy selection, and manual position editing/addition.
+- **Mandatory `USER_GUIDE.md` Synchronization in `maintain-project-context` Skill**: Updated `.agents/skills/maintain-project-context/SKILL.md`, `references/update_checklist.md`, `scripts/verify_context.py`, `AGENTS.md`, and `GEMINI.md` to enforce updating `USER_GUIDE.md` whenever workflows, UI tabs, strategies, or engine components change.
+
+### Modules Added / Modified
+- `infrastructure/database/db.py` (20 tables: added `shadow_accounts`, `shadow_positions`, `shadow_trade_history`, `shadow_dismissed_signals`)
+- `core/execution/paper_broker.py` (`LiveTradingCopilotEngine`)
+- `infrastructure/scheduler/orchestrator.py`, `api/server.py`
+- `dashboard/streamlit_app.py`, `dashboard/ui_template.py`
+- `tests/test_platform.py`, `USER_GUIDE.md`, `AGENTS.md`, `GEMINI.md`
+- `.agents/skills/maintain-project-context/SKILL.md`, `references/update_checklist.md`, `scripts/verify_context.py`
+
+---
+
 ## [2026-11-07] — Fair Multi-Strategy Allocation, Live-Readiness Scorecard & Hands-Off Autonomous UI
 
 ### Summary
