@@ -167,30 +167,97 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       margin-bottom: 16px;
       border-radius: 4px;
     }
+    .tab-intro {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .tab-intro p { font-size: 0.86rem; color: var(--muted); margin: 0; }
+    details.tab-help {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 0.81rem;
+      color: var(--text);
+    }
+    details.tab-help summary {
+      cursor: pointer;
+      color: var(--accent);
+      font-weight: 600;
+      user-select: none;
+    }
+    details.tab-help .help-body {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      line-height: 1.55;
+    }
+    details.guide-accordion {
+      background: var(--panel-alt);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 11px 15px;
+      margin-bottom: 10px;
+      font-size: 0.86rem;
+    }
+    details.guide-accordion summary {
+      cursor: pointer;
+      font-weight: 600;
+      color: var(--text);
+      user-select: none;
+    }
+    details.guide-accordion .acc-body {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      color: #cbd5e1;
+      line-height: 1.6;
+    }
+    .flow-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .flow-step {
+      background: var(--panel-alt);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-size: 0.8rem;
+    }
+    .flow-step strong { display: block; color: var(--text); margin-bottom: 3px; }
+    .flow-step span { color: var(--muted); }
   </style>
 </head>
 <body>
   <header>
     <div class="brand">
       <h1>SWING TRADING AI PLATFORM</h1>
-      <span class="badge badge-paper" id="mode-badge">TRADING_MODE = PAPER ($100K)</span>
-      <span class="badge badge-info" id="tz-badge">NYSE/NASDAQ • SGT Reporting</span>
+      <span class="badge badge-paper" id="mode-badge" title="All trades execute in a simulated $100,000 paper account.">TRADING_MODE = PAPER ($100K)</span>
+      <span class="badge badge-info" id="tz-badge" title="US market execution (NYSE/NASDAQ) with Singapore (SGT) reporting.">NYSE/NASDAQ • SGT Reporting</span>
     </div>
     <div style="display:flex; gap:10px;">
-      <button class="btn btn-secondary" onclick="triggerDailyWorkflow()">Run Daily Session</button>
-      <button class="btn" onclick="triggerWeeklyDiscovery()">Run AI Strategy Discovery</button>
+      <button class="btn btn-secondary" title="Download latest market prices, check stop-loss/take-profit exits, and evaluate new entries." onclick="triggerDailyWorkflow()">Run Daily Session</button>
+      <button class="btn" title="Review closed trades, propose a candidate strategy improvement, and run the 9-gate backtest audit." onclick="triggerWeeklyDiscovery()">Run AI Strategy Discovery</button>
     </div>
   </header>
 
   <nav id="main-nav">
-    <button class="active" onclick="switchTab('overview', this)">Overview &amp; P&amp;L</button>
+    <button class="active" onclick="switchTab('guide', this)">Platform Guide</button>
+    <button onclick="switchTab('overview', this)">Overview &amp; P&amp;L</button>
     <button onclick="switchTab('research', this)">Market Research</button>
     <button onclick="switchTab('strategies', this)">Strategies</button>
     <button onclick="switchTab('backtesting', this)">Backtesting</button>
     <button onclick="switchTab('paper', this)">Paper Ledger</button>
     <button onclick="switchTab('analytics', this)">Risk &amp; Analytics</button>
     <button onclick="switchTab('monitoring', this)">System Logs</button>
-    <button onclick="switchTab('guide', this)">Platform Guide</button>
   </nav>
 
   <main>
@@ -200,11 +267,104 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       research confidence scores do not guarantee future profitability.
     </div>
 
+    <!-- 0. PLATFORM GUIDE -->
+    <section id="tab-guide" class="tab-section active">
+      <div class="card">
+        <div class="card-header"><span class="card-title">What This System Does &amp; How It Runs</span></div>
+        <p style="font-size:0.9rem;color:#cbd5e1;margin-bottom:16px;">
+          This platform manages a simulated <strong>$100,000 US stock portfolio</strong> over <strong>3 to 15 trading-day</strong> holding periods (swing trading).
+          To keep decision-making disciplined, <strong>AI agents only research stocks and propose strategy rules</strong>, while <strong>strict mathematical code</strong>
+          tests those rules on historical data, enforces risk limits, and executes every trade.
+        </p>
+
+        <div style="font-size:0.76rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--accent);font-weight:600;margin-bottom:6px;">
+          1. Daily Execution Loop (Mon–Fri, After US Market Close)
+        </div>
+        <div class="flow-grid">
+          <div class="flow-step"><strong>Step 1 · Market Data</strong><span>Download daily prices &amp; earnings updates.</span></div>
+          <div class="flow-step"><strong>Step 2 · AI Research</strong><span>Rank liquid US stocks by trend &amp; catalysts.</span></div>
+          <div class="flow-step"><strong>Step 3 · Rule Signals</strong><span>Check active strategies for buy/sell triggers.</span></div>
+          <div class="flow-step" style="border-left-color:var(--green);"><strong>Step 4 · Risk Gate</strong><span>Size trade (1% risk) &amp; check 7 safety caps.</span></div>
+          <div class="flow-step" style="border-left-color:var(--green);"><strong>Step 5 · Paper Ledger</strong><span>Simulate fill after fees &amp; update P&amp;L.</span></div>
+        </div>
+
+        <div style="font-size:0.76rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--purple);font-weight:600;margin-bottom:6px;">
+          2. Weekly Self-Improvement Loop (Saturdays, 10:00 SGT)
+        </div>
+        <div class="flow-grid">
+          <div class="flow-step" style="border-left-color:var(--purple);"><strong>Step A · Review Trades</strong><span>Diagnose wins, losses &amp; current market regime.</span></div>
+          <div class="flow-step" style="border-left-color:var(--purple);"><strong>Step B · Draft Upgrade</strong><span>Create a candidate strategy version (v+1).</span></div>
+          <div class="flow-step" style="border-left-color:var(--amber);"><strong>Step C · 9-Gate Audit</strong><span>Test across historical &amp; walk-forward periods.</span></div>
+          <div class="flow-step" style="border-left-color:var(--green);"><strong>Step D · Promote / Reject</strong><span>Only versions passing all 9 gates go live.</span></div>
+        </div>
+
+        <div style="margin:18px 0 10px;font-size:0.86rem;font-weight:600;color:var(--text);">
+          Interactive Walkthrough — Click Any Stage to Inspect How It Works:
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+          <button class="btn btn-secondary" onclick="showGuide('arch')">1. Stock Scan</button>
+          <button class="btn btn-secondary" onclick="showGuide('strategies')">2. Strategy Signal</button>
+          <button class="btn btn-secondary" onclick="showGuide('risk')">3. Risk &amp; Sizing</button>
+          <button class="btn btn-secondary" onclick="showGuide('pnl')">4. Execution &amp; P&amp;L</button>
+          <button class="btn btn-secondary" onclick="showGuide('validation')">5. Weekly Upgrade</button>
+        </div>
+        <div id="guide-detail-box" style="background:rgba(56,189,248,0.06);border:1px solid rgba(56,189,248,0.25);padding:14px 16px;border-radius:8px;font-size:0.86rem;line-height:1.6;margin-bottom:18px;">
+          <strong>Stage 1 — Daily Stock Scan (<code>MarketResearchAgent</code>):</strong><br/>
+          After the US market closes, the system downloads daily prices for liquid NYSE/NASDAQ large-cap stocks and compares them against the S&amp;P 500 (<code>SPY</code>). It highlights stocks outperforming <code>SPY</code> over 20 days on strong volume or reacting to earnings beats. Research rankings never place orders directly.
+        </div>
+
+        <div style="margin-bottom:8px;font-size:0.86rem;font-weight:600;color:var(--text);">
+          Deeper Dives — Click Any Topic to Expand:
+        </div>
+        <details class="guide-accordion">
+          <summary>The 3 Trading Strategies — How buy &amp; sell signals are triggered</summary>
+          <div class="acc-body">
+            • <strong>Momentum &amp; Relative Strength (<code>strat_momentum_trend</code>):</strong> Enters liquid stocks trading above rising 20-day and 50-day moving averages that outperform <code>SPY</code> over 20 days with volume confirmation.<br/>
+            • <strong>Post-Earnings Drift (<code>strat_pead_drift</code>):</strong> Captures multi-day follow-through after a company reports a positive quarterly earnings surprise (+4% or higher) on 1.3x normal volume.<br/>
+            • <strong>Volatility Breakout (<code>strat_volatility_breakout</code>):</strong> Identifies stocks consolidating quietly in a tight 10-day range that break above their prior 20-day high on 1.35x volume.
+          </div>
+        </details>
+        <details class="guide-accordion">
+          <summary>The 7 Risk Controls — How the portfolio is protected from large drawdowns</summary>
+          <div class="acc-body">
+            • <strong>1.0% Max Risk Per Trade:</strong> Position size scales with stock volatility (ATR) so hitting a stop-loss loses at most ~$1,000 on a $100,000 account.<br/>
+            • <strong>5.0% Max Total Open Risk (Portfolio Heat):</strong> Combined stop-loss risk across all open positions cannot exceed 5% of total equity.<br/>
+            • <strong>15.0% Single-Stock &amp; 30.0% Sector Caps:</strong> Prevents concentration in any single company or industry.<br/>
+            • <strong>Max 10 Open Positions, Liquidity (&ge;$20M/day) &amp; Correlation (&le;0.80) Checks.</strong><br/>
+            • <strong>15.0% Drawdown Kill Switch:</strong> Automatically pauses new entries if portfolio equity drops 15% from its peak.
+          </div>
+        </details>
+        <details class="guide-accordion">
+          <summary>The 9 Validation Gates — How candidate upgrades are tested before trading</summary>
+          <div class="acc-body">
+            Before any strategy version can enter <code>PAPER_TRADING</code> status, it must pass all 9 historical checks:
+            1) Positive Out-of-Sample net return • 2) Sharpe Ratio &ge; 1.0 • 3) Profit Factor &ge; 1.3 • 4) Max Drawdown &le; 15% • 5) Minimum 15 trades • 6) Walk-Forward consistency &ge; 60% • 7) Survives 2x transaction cost stress test • 8) Beats SPY risk-adjusted • 9) No single trade accounts for &gt;65% of total profit.
+          </div>
+        </details>
+        <details class="guide-accordion">
+          <summary>How P&amp;L Is Calculated — Paper Account vs. Historical Backtests</summary>
+          <div class="acc-body">
+            • <strong>Paper Portfolio Equity:</strong> <code>Starting Capital ($100,000) + Realised P&amp;L (closed trades after fees) + Unrealised P&amp;L (open positions marked to market)</code>.<br/>
+            • <strong>Strict Separation:</strong> Multi-year historical backtest returns (shown in the Strategies and Backtesting tabs) validate rulebooks on past data and never alter your simulated paper cash or equity.
+          </div>
+        </details>
+      </div>
+    </section>
+
     <!-- 1. OVERVIEW -->
-    <section id="tab-overview" class="tab-section active">
-      <p style="font-size:0.86rem;color:#94a3b8;margin-bottom:12px;">
-        <strong>Overview &amp; P&amp;L</strong> — Tracks daily account equity, open holdings, and exact profit attribution for the simulated $100,000 portfolio.
-      </p>
+    <section id="tab-overview" class="tab-section">
+      <div class="tab-intro">
+        <p><strong>Overview &amp; P&amp;L</strong> — Real-time simulated portfolio value, strategy attribution, and currently held positions.</p>
+        <details class="tab-help">
+          <summary>? How this tab works</summary>
+          <div class="help-body">
+            Tracks your simulated $100,000 account.<br/>
+            • <strong>Realised P&amp;L:</strong> Locked-in profit/loss from closed trades after commissions and slippage.<br/>
+            • <strong>Unrealised P&amp;L:</strong> Floating profit/loss on currently held positions at the latest closing price.<br/>
+            • Hover over any metric card below for its exact definition.
+          </div>
+        </details>
+      </div>
       <div class="disclaimer" id="overview-pnl-explainer"></div>
       <div class="kpi-grid" id="overview-kpis"></div>
       <div class="grid-2">
@@ -221,9 +381,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- 2. RESEARCH -->
     <section id="tab-research" class="tab-section">
-      <p style="font-size:0.86rem;color:#94a3b8;margin-bottom:12px;">
-        <strong>Market Research</strong> — Ranks liquid US large-cap equities daily by relative strength vs. SPY, volume expansion, and earnings catalysts. Research rankings inform discovery and do not place trades directly.
-      </p>
+      <div class="tab-intro">
+        <p><strong>Market Research</strong> — Daily ranking of liquid US stocks by trend strength vs. SPY, volume activity, and earnings catalysts.</p>
+        <details class="tab-help">
+          <summary>? How this tab works</summary>
+          <div class="help-body">
+            • <strong>20d RS vs SPY:</strong> How much the stock beat or trailed the S&amp;P 500 over the past 20 trading days.<br/>
+            • <strong>Vol Ratio:</strong> Latest volume divided by its 20-day average (&gt;1.2x signals institutional participation).<br/>
+            • Click any row in the table to view the full bullish and bearish thesis below.
+          </div>
+        </details>
+      </div>
       <div class="card">
         <div class="card-header">
           <span class="card-title">Autonomous Market Research Agent — Ranked Swing Candidates</span>
@@ -245,9 +413,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- 3. STRATEGIES -->
     <section id="tab-strategies" class="tab-section">
-      <p style="font-size:0.86rem;color:#94a3b8;margin-bottom:12px;">
-        <strong>Strategy Registry</strong> — Lists all quantitative rulebooks, version histories, and validation gates. Only strategies in <code>PAPER_TRADING</code> status are permitted to generate simulated orders.
-      </p>
+      <div class="tab-intro">
+        <p><strong>Strategies</strong> — Registry of all quantitative rulebooks, historical test scores, and promotion status.</p>
+        <details class="tab-help">
+          <summary>? How this tab works</summary>
+          <div class="help-body">
+            • <strong>PAPER_TRADING:</strong> Passed all 9 validation gates and is permitted to place simulated trades.<br/>
+            • <strong>REJECTED:</strong> Failed one or more validation gates during historical testing and is blocked from trading.<br/>
+            • <strong>Sharpe / Profit Factor:</strong> Risk-adjusted return (&ge;1.0 required) and gross wins divided by gross losses (&ge;1.3 required).
+          </div>
+        </details>
+      </div>
       <div class="card">
         <div class="card-header">
           <span class="card-title">Versioned Strategy Registry &amp; Promotion Lifecycle</span>
@@ -258,9 +434,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- 4. BACKTESTING -->
     <section id="tab-backtesting" class="tab-section">
-      <p style="font-size:0.86rem;color:#94a3b8;margin-bottom:12px;">
-        <strong>Historical Backtesting</strong> — Evaluates strategies across historical market regimes with commissions, bid-ask spreads, and slippage deducted on every trade.
-      </p>
+      <div class="tab-intro">
+        <p><strong>Backtesting</strong> — Multi-year historical simulations with commissions, bid-ask spreads, and slippage deducted on every trade.</p>
+        <details class="tab-help">
+          <summary>? How this tab works</summary>
+          <div class="help-body">
+            • Evaluates how a strategy rulebook performed over historical market regimes.<br/>
+            • Signals generated at Day T market close execute at Day T+1 market open (zero look-ahead bias).<br/>
+            • Backtest simulations never alter your live paper trading balance.
+          </div>
+        </details>
+      </div>
       <div class="card">
         <div class="card-header"><span class="card-title">Launch Quantitative Backtest &amp; Walk-Forward Experiment</span></div>
         <div class="form-row">
@@ -298,9 +482,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- 5. PAPER TRADING -->
     <section id="tab-paper" class="tab-section">
-      <p style="font-size:0.86rem;color:#94a3b8;margin-bottom:12px;">
-        <strong>Paper Trading Ledger</strong> — Records every simulated order, execution fill, transaction cost, and strategy-level P&amp;L contribution.
-      </p>
+      <div class="tab-intro">
+        <p><strong>Paper Ledger</strong> — Chronological log of every simulated order fill, transaction cost, and strategy P&amp;L contribution.</p>
+        <details class="tab-help">
+          <summary>? How this tab works</summary>
+          <div class="help-body">
+            • <strong>BUY rows:</strong> Deduct purchase cost plus commission/slippage from cash.<br/>
+            • <strong>SELL rows:</strong> Return sale proceeds to cash and lock in net Realised P&amp;L.<br/>
+            • <strong>Strategy P&amp;L Attribution:</strong> Summarizes total fills, fees, and realised profit per strategy.
+          </div>
+        </details>
+      </div>
       <div class="kpi-grid" id="paper-kpis"></div>
       <div class="grid-2">
         <div class="card">
@@ -320,9 +512,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- 6. ANALYTICS -->
     <section id="tab-analytics" class="tab-section">
-      <p style="font-size:0.86rem;color:#94a3b8;margin-bottom:12px;">
-        <strong>Risk &amp; Analytics</strong> — Monitors sector concentration against the 30% limit, multi-window walk-forward stability, and market regime performance.
-      </p>
+      <div class="tab-intro">
+        <p><strong>Risk &amp; Analytics</strong> — Monitors sector concentration against the 30% cap and multi-window walk-forward stability.</p>
+        <details class="tab-help">
+          <summary>? How this tab works</summary>
+          <div class="help-body">
+            • <strong>Sector Exposure:</strong> Verifies that no single industry exceeds 30% of portfolio equity.<br/>
+            • <strong>Walk-Forward Validation:</strong> Splits historical data into 4 rolling time folds to verify consistent performance across different market conditions.
+          </div>
+        </details>
+      </div>
       <div class="grid-2">
         <div class="card">
           <div class="card-header"><span class="card-title">Performance by Market Regime</span></div>
@@ -341,9 +540,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- 7. SYSTEM MONITORING -->
     <section id="tab-monitoring" class="tab-section">
-      <p style="font-size:0.86rem;color:#94a3b8;margin-bottom:12px;">
-        <strong>System Logs</strong> — Audit trail of scheduled workflow runs, idempotency keys, and risk-veto events.
-      </p>
+      <div class="tab-intro">
+        <p><strong>System Logs</strong> — Audit trail of scheduled workflow runs, idempotency keys, and Risk Manager trade vetoes.</p>
+        <details class="tab-help">
+          <summary>? How this tab works</summary>
+          <div class="help-body">
+            • <strong>Workflow Execution Log:</strong> Confirms when daily and weekly jobs executed and prevents duplicate runs.<br/>
+            • <strong>Risk Alerts &amp; Vetoes:</strong> Logs every trade blocked by the Risk Manager (e.g., sector cap or portfolio heat limit).
+          </div>
+        </details>
+      </div>
       <div class="grid-2">
         <div class="card">
           <div class="card-header"><span class="card-title">Autonomous Job &amp; Workflow Execution Log</span></div>
@@ -352,29 +558,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="card">
           <div class="card-header"><span class="card-title">Portfolio Risk Alerts &amp; Veto Audit Trail</span></div>
           <div id="monitoring-alerts-table"></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- 8. PLATFORM GUIDE -->
-    <section id="tab-guide" class="tab-section">
-      <div class="card">
-        <div class="card-header"><span class="card-title">Platform Guide — Architecture, Risk Governance &amp; P&amp;L Methodology</span></div>
-        <p style="font-size:0.9rem;color:#cbd5e1;margin-bottom:14px;">
-          A concise reference covering how the platform researches equities, validates strategies, enforces risk limits, and calculates returns. Select a topic below to inspect its methodology:
-        </p>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
-          <button class="btn btn-secondary" onclick="showGuide('arch')">1. Core Architecture</button>
-          <button class="btn btn-secondary" onclick="showGuide('strategies')">2. Strategy Families</button>
-          <button class="btn btn-secondary" onclick="showGuide('validation')">3. Validation Gates</button>
-          <button class="btn btn-secondary" onclick="showGuide('risk')">4. Risk Controls</button>
-          <button class="btn btn-secondary" onclick="showGuide('pnl')">5. P&amp;L Accounting</button>
-        </div>
-        <div id="guide-detail-box" style="background:rgba(56,189,248,0.06);border:1px solid rgba(56,189,248,0.25);padding:16px 18px;border-radius:8px;font-size:0.88rem;line-height:1.6;">
-          <strong>1. Core Architecture — Separation of AI Reasoning &amp; Quantitative Execution:</strong><br/>
-          • <strong>Deterministic Financial Engine:</strong> All price adjustments, technical indicators, signal triggers, position sizing, risk checks, and accounting are executed by deterministic Python code.<br/>
-          • <strong>AI Research &amp; Governance Layer:</strong> Specialized agents scan the equity universe, diagnose post-session performance, and propose falsifiable strategy revisions.<br/>
-          • <strong>Daily &amp; Weekly Cadence:</strong> Each weekday after US market close, the system updates market data, processes stop-loss/take-profit exits, and evaluates new entries. Every Saturday, it runs walk-forward optimization to test candidate strategy improvements.
         </div>
       </div>
     </section>
@@ -458,12 +641,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const latestSnap = snaps[snaps.length - 1] || {};
       const retCls = (acc.total_return_pct >= 0) ? 'pos' : 'neg';
       document.getElementById('overview-kpis').innerHTML = `
-        <div class="kpi-card"><div class="kpi-label">Portfolio Equity</div><div class="kpi-value">${fmtUsd(acc.total_equity)}</div><div class="kpi-sub">Starting: ${fmtUsd(acc.starting_capital)}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Total Return</div><div class="kpi-value ${retCls}">${fmtPct(acc.total_return_pct)}</div><div class="kpi-sub">vs SPY: ${fmtPct(latestSnap.benchmark_cum_return_pct || 0)}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Daily Return</div><div class="kpi-value">${fmtPct(latestSnap.daily_return_pct || 0)}</div><div class="kpi-sub">Realised P&L: ${fmtUsd(acc.realised_pnl)}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Available Cash</div><div class="kpi-value">${fmtUsd(acc.cash_balance)}</div><div class="kpi-sub">Buying Power: ${fmtUsd(acc.buying_power)}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Open Positions</div><div class="kpi-value">${acc.open_positions_count || 0} / 10</div><div class="kpi-sub">Market Value: ${fmtUsd(acc.positions_market_value)}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Current Drawdown</div><div class="kpi-value neg">-${Number(acc.current_drawdown_pct || 0).toFixed(2)}%</div><div class="kpi-sub">Kill Switch: ${acc.kill_switch_engaged ? 'ACTIVE' : 'Standby (15%)'}</div></div>
+        <div class="kpi-card" title="Cash Balance + Market Value of Open Positions. Equals Starting Capital ($100k) + Realised P&L + Unrealised P&L."><div class="kpi-label">Portfolio Equity ⓘ</div><div class="kpi-value">${fmtUsd(acc.total_equity)}</div><div class="kpi-sub">Starting: ${fmtUsd(acc.starting_capital)}</div></div>
+        <div class="kpi-card" title="Total percentage return on the $100,000 paper portfolio compared with the S&P 500 (SPY) benchmark."><div class="kpi-label">Total Return ⓘ</div><div class="kpi-value ${retCls}">${fmtPct(acc.total_return_pct)}</div><div class="kpi-sub">vs SPY: ${fmtPct(latestSnap.benchmark_cum_return_pct || 0)}</div></div>
+        <div class="kpi-card" title="Single-day return for the most recent trading session and cumulative locked-in Realised P&L."><div class="kpi-label">Daily Return ⓘ</div><div class="kpi-value">${fmtPct(latestSnap.daily_return_pct || 0)}</div><div class="kpi-sub">Realised P&L: ${fmtUsd(acc.realised_pnl)}</div></div>
+        <div class="kpi-card" title="Uninvested cash currently available to open new swing positions."><div class="kpi-label">Available Cash ⓘ</div><div class="kpi-value">${fmtUsd(acc.cash_balance)}</div><div class="kpi-sub">Buying Power: ${fmtUsd(acc.buying_power)}</div></div>
+        <div class="kpi-card" title="Number of active stock positions currently held (capped at 10 maximum)."><div class="kpi-label">Open Positions ⓘ</div><div class="kpi-value">${acc.open_positions_count || 0} / 10</div><div class="kpi-sub">Market Value: ${fmtUsd(acc.positions_market_value)}</div></div>
+        <div class="kpi-card" title="Percentage drop from the portfolio's highest equity peak. New buying pauses automatically at -15.0%."><div class="kpi-label">Current Drawdown ⓘ</div><div class="kpi-value neg">-${Number(acc.current_drawdown_pct || 0).toFixed(2)}%</div><div class="kpi-sub">Kill Switch: ${acc.kill_switch_engaged ? 'ACTIVE' : 'Standby (15%)'}</div></div>
       `;
 
       const chartPts = snaps.length >= 2 ? snaps.map(s => ({equity: s.total_equity})) : ((STATE.experiments && STATE.experiments[0] && STATE.experiments[0].equity_curve) || []);

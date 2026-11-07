@@ -4,6 +4,19 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-07] — Interactive Platform Guide with Visual Mental Model Diagram & Per-Tab Tooltips
+
+### Summary
+- **Visual Mental-Model Diagram & Progressive Disclosure in `Platform Guide`**: Redesigned the `Platform Guide` tab in both `dashboard/streamlit_app.py` and `dashboard/ui_template.py` to present a clean two-loop visual flowchart (`1. Daily Execution Loop` and `2. Weekly Self-Improvement Loop`), a 5-stage interactive walkthrough (`Stock Scan`, `Strategy Signal`, `Risk & Sizing`, `Execution & Exit`, `Weekly Upgrade`), and collapsible accordion sections (`The 3 Trading Strategies`, `The 7 Risk Controls`, `The 9 Validation Gates`, `How P&L Is Calculated`) so users only expand what they want to explore.
+- **Interactive `? How this tab works` Popovers & Hover Tooltips Across All Tabs**: Added an interactive `? How this tab works` popover/expander on every tab (`Overview & P&L`, `Market Research`, `Strategies`, `Backtesting`, `Paper Ledger`, `Risk & Analytics`, `System Logs`) along with hover tooltips (`help=...` / `title=...`) on KPI metrics and controls while keeping the overall layout minimalistic.
+
+### Modules Added / Modified
+- `dashboard/streamlit_app.py`
+- `dashboard/ui_template.py`
+- `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-07] — Minimalist Adult UI Redesign, Provider-Scale Isolation & Portfolio Heat Cap
 
 ### Summary
