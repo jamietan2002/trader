@@ -183,13 +183,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </header>
 
   <nav id="main-nav">
-    <button class="active" onclick="switchTab('overview', this)">1. Overview</button>
+    <button class="active" onclick="switchTab('eli5', this)">🧸 Start Here (Explain Like I'm 5)</button>
+    <button onclick="switchTab('overview', this)">1. Overview &amp; P&amp;L</button>
     <button onclick="switchTab('research', this)">2. Market Research</button>
-    <button onclick="switchTab('strategies', this)">3. Strategy Registry</button>
-    <button onclick="switchTab('backtesting', this)">4. Backtesting Engine</button>
-    <button onclick="switchTab('paper', this)">5. Paper Trading</button>
-    <button onclick="switchTab('analytics', this)">6. Portfolio Analytics</button>
-    <button onclick="switchTab('monitoring', this)">7. System Monitoring</button>
+    <button onclick="switchTab('strategies', this)">3. Strategy Rulebooks</button>
+    <button onclick="switchTab('backtesting', this)">4. Historical Backtests</button>
+    <button onclick="switchTab('paper', this)">5. Paper Trading Ledger</button>
+    <button onclick="switchTab('analytics', this)">6. Risk &amp; Sector Analytics</button>
+    <button onclick="switchTab('monitoring', this)">7. System Logs</button>
   </nav>
 
   <main>
@@ -199,8 +200,33 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       research confidence scores do not guarantee future profitability.
     </div>
 
+    <!-- 0. EXPLAIN LIKE I'M 5 -->
+    <section id="tab-eli5" class="tab-section active">
+      <div class="card">
+        <div class="card-header"><span class="card-title">🧸 Explain Like I'm 5: How Does This App Actually Work?</span></div>
+        <p style="font-size:0.92rem;color:#cbd5e1;margin-bottom:14px;">
+          Imagine you have a <strong>toy piggy bank with $100,000 of pretend money</strong> (called <strong>Paper Money</strong>).
+          This app tests whether strict math rulebooks can grow that piggy bank by buying shares of big US companies, holding them for
+          <strong>3 to 15 days</strong> (Swing Trading), and selling them. We split the work into two strict teams:
+          <strong>1) The AI Detective Team</strong> (finds stock ideas and suggests rules, but is <em>never</em> allowed to touch the money) and
+          <strong>2) The Strict Calculator &amp; Safety Guard</strong> (tests the rules on past history, checks 6 safety seatbelts, and tracks every penny).
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+          <button class="btn btn-secondary" onclick="showEli5('loop')">🔄 1. The Daily &amp; Weekly Loop</button>
+          <button class="btn btn-secondary" onclick="showEli5('agents')">🤖 2. Meet the 5 AI Helpers</button>
+          <button class="btn btn-secondary" onclick="showEli5('strategies')">📏 3. The 3 Trading Rulebooks</button>
+          <button class="btn btn-secondary" onclick="showEli5('safety')">🛡️ 4. The 6 Safety Seatbelts</button>
+          <button class="btn btn-secondary" onclick="showEli5('pnl')">💰 5. How P&amp;L Math Works</button>
+        </div>
+        <div id="eli5-detail-box" style="background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.3);padding:14px 16px;border-radius:8px;font-size:0.88rem;">
+          <strong>🔄 The Daily &amp; Weekly Loop:</strong> Every weekday after the US market closes, the app downloads fresh stock prices, sells any pretend stock that hit its goal or safety stop-loss, and buys new stocks that pass all rules. Every Saturday morning, the AI Coach reviews any mistakes, proposes an improved rulebook version, and tests it against a 9-part exam before promoting it!
+        </div>
+      </div>
+    </section>
+
     <!-- 1. OVERVIEW -->
-    <section id="tab-overview" class="tab-section active">
+    <section id="tab-overview" class="tab-section">
+      <div class="disclaimer" id="overview-pnl-explainer"></div>
       <div class="kpi-grid" id="overview-kpis"></div>
       <div class="grid-2">
         <div class="card">
@@ -387,9 +413,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       renderMonitoring();
     }
 
+    function showEli5(topic) {
+      const notes = {
+        loop: '<strong>🔄 The Daily &amp; Weekly Loop:</strong> Every weekday after the US market closes, the app downloads fresh stock prices, sells any pretend stock that hit its goal or safety stop-loss, and buys new stocks that pass all rules. Every Saturday morning, the AI Coach reviews any mistakes, proposes an improved rulebook version, and tests it against a 9-part exam before promoting it!',
+        agents: '<strong>🤖 Meet the 5 AI Helpers:</strong> 1) <em>Market Researcher</em> scans 15+ US stocks daily; 2) <em>Strategy Architect</em> writes math rulebooks; 3) <em>Strategy Evaluator</em> grades rulebooks on a 9-part exam and rejects weak ones; 4) <em>Portfolio Risk Manager</em> blocks any trade that breaks safety limits; 5) <em>Performance Analyst</em> reviews closed trades and suggests Saturday upgrades.',
+        strategies: '<strong>📏 The 3 Core Rulebooks:</strong> 1) <em>Momentum Trend</em> buys stocks beating the S&amp;P 500 (SPY) above their 20d/50d averages; 2) <em>Post-Earnings Drift (PEAD)</em> buys companies right after a big quarterly earnings beat; 3) <em>Volatility Breakout</em> buys stocks breaking above their 20-day high on high volume after a quiet 10-day consolidation.',
+        safety: '<strong>🛡️ The 6 Safety Seatbelts:</strong> 1) Max 1% risk per trade ($1,000 max loss on $100k); 2) Max 15% in any single stock; 3) Max 30% in any single sector; 4) Max 10 stocks held at once; 5) Automatic Emergency Kill Switch if portfolio drops -15% from peak; 6) Hardcoded to Paper Mode Only.',
+        pnl: '<strong>💰 Honest P&amp;L Math:</strong> We never mix multi-year Backtest P&amp;L with daily Paper Account P&amp;L. Paper Account Equity = Starting Capital ($100,000) + Locked-In Realised P&amp;L (from closed trades after fees/slippage) + Open Unrealised P&amp;L (from currently held stocks).'
+      };
+      document.getElementById('eli5-detail-box').innerHTML = notes[topic] || notes.loop;
+    }
+
     function renderOverview() {
       const acc = STATE.account || {};
       const snaps = STATE.snapshots || [];
+      const activeStrats = (STATE.strategies || []).filter(s => s.status === 'PAPER_TRADING').map(s => `${s.name} (${s.strategy_id} v${s.version})`).join(', ') || 'None';
+      const dateSpan = snaps.length ? `${snaps[0].snapshot_date} to ${snaps[snaps.length - 1].snapshot_date} (${snaps.length} trading days)` : 'Initial session';
+      document.getElementById('overview-pnl-explainer').innerHTML = `
+        <strong>💡 Transparent Paper P&amp;L Breakdown:</strong><br/>
+        • <strong>Strategies Used:</strong> ${activeStrats}<br/>
+        • <strong>Exact Date Span:</strong> ${dateSpan}<br/>
+        • <strong>How We Arrived at ${fmtUsd(acc.total_equity)}:</strong> Starting Capital (${fmtUsd(acc.starting_capital)}) + Closed Trade Realised P&amp;L (${fmtUsd(acc.realised_pnl)}) + Open Position Unrealised P&amp;L (${fmtUsd(acc.unrealised_pnl)}) = <strong>${fmtUsd(acc.total_equity)} (${fmtPct(acc.total_return_pct)})</strong>
+      `;
       const latestSnap = snaps[snaps.length - 1] || {};
       const retCls = (acc.total_return_pct >= 0) ? 'pos' : 'neg';
       document.getElementById('overview-kpis').innerHTML = `

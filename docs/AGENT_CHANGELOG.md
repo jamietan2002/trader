@@ -4,6 +4,20 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-07] — Beginner-Friendly Interactive ELI5 Guide & Transparent P&L Breakdown
+
+### Summary
+- Added a dedicated **"🧸 Start Here (Explain Like I'm 5)"** interactive page with 5 clickable deep-dive buttons (`The Daily & Weekly Loop`, `Meet the 5 AI Helpers`, `The 3 Trading Rulebooks`, `The 6 Safety Seatbelts`, and `How P&L Math Works`) in both `dashboard/streamlit_app.py` and `dashboard/ui_template.py`.
+- Added simple, concise plain-English explanations at the top of every tab (`1. Overview & P&L Breakdown`, `2. Stock Research`, `3. Strategy Rulebooks`, `4. Historical Backtests`, `5. Paper Trading Ledger`, `6. Risk & Sector Analytics`, `7. System Logs`).
+- Redesigned all Profit & Loss (P&L) displays (`_summarize_pnl_by_strategy`, `_get_paper_date_span`) so they are 100% transparent and never misleading: every P&L figure explicitly states the **Strategy Used**, the **Exact Date Span**, and the **Step-by-Step Math** (`Starting Capital + Closed Trade Realised P&L + Open Position Unrealised P&L [after broker fees & slippage] = Current Total Equity`), while clearly separating daily Paper Account P&L from 2.3-year Historical Backtest P&L.
+
+### Modules Added / Modified
+- `dashboard/streamlit_app.py`
+- `dashboard/ui_template.py`
+- `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-07] — Alpaca Free-Tier IEX Feed & Paper URL Normalization
 
 ### Summary
