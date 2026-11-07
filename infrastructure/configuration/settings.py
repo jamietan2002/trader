@@ -38,6 +38,9 @@ class PromotionCriteriaConfig:
     min_sharpe_ratio: float = 1.0  # Sharpe ratio > 1.0
     min_profit_factor: float = 1.3  # Profit factor > 1.3
     max_drawdown_pct: float = 0.15  # Max drawdown < 15%
+    max_ulcer_index: float = 6.0  # Ulcer Index <= 6.0% (penalizes depth & duration of drawdowns)
+    max_time_under_water_days: int = 252  # Max recovery duration <= 252 trading days (1 trading year)
+    min_deflated_sharpe_pct: float = 70.0  # Deflated Sharpe Ratio >= 70% statistical confidence
     min_trade_count: int = 15  # Minimum trades for statistical evaluation
     min_walk_forward_consistency: float = 0.60  # At least 60% of walk-forward windows profitable
     require_positive_after_costs: bool = True

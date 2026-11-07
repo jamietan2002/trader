@@ -389,7 +389,8 @@ class BacktestEngine:
             # ------------------------------------------------------------------
             if not kill_switch_engaged and day_idx < len(sim_dates) - 1:
                 spy_ind = spy_indicators.get(current_date)
-                # Compute causal point-in-time sector relative-strength ranks on `current_date`
+                pead_lookback = max(20, int(strategy.entry_rules.get("max_days_since_earnings", 10)) + 5)
+                # Compute causal point-in-time sector relative-strength ranks on `current_date` (by top-2 sector leaders)
                 sector_rs_lists: Dict[str, List[float]] = {}
                 for t_sym in tickers:
                     t_ind = indicators_by_ticker.get(t_sym, {}).get(current_date)
@@ -398,7 +399,7 @@ class BacktestEngine:
                         sector_rs_lists.setdefault(t_meta.sector, []).append(float(t_ind.rs_vs_spy_20d))
                 sorted_sectors = sorted(
                     sector_rs_lists.keys(),
-                    key=lambda s: sum(sector_rs_lists[s]) / len(sector_rs_lists[s]),
+                    key=lambda s: sum(sorted(sector_rs_lists[s], reverse=True)[:2]) / min(2, len(sector_rs_lists[s])),
                     reverse=True,
                 )
                 sector_rank_map = {sec_name: idx + 1 for idx, sec_name in enumerate(sorted_sectors)}
@@ -412,7 +413,7 @@ class BacktestEngine:
                     t_meta = universe_meta.get(ticker)
                     sec_rank = sector_rank_map.get(t_meta.sector) if t_meta else None
                     recent_ev = self.market_data.get_point_in_time_earnings(
-                        ticker, current_date, lookback_days=10
+                        ticker, current_date, lookback_days=pead_lookback
                     )
                     sig = StrategySignalEngine.evaluate_entry(
                         config=strategy,
@@ -487,8 +488,8 @@ class BacktestEngine:
         wf_res = self.run_walk_forward_validation(strategy, in_sample_range[0], oos_range[1], num_windows=4)
         stress_res = self.run_transaction_cost_stress_test(strategy, oos_range[0], oos_range[1])
 
-        is_cagr = float(is_res.metrics.get("cagr_pct", 0.0))
-        oos_cagr = float(oos_res.metrics.get("cagr_pct", 0.0))
+        is_cagr = float(is_res.metrics.get("annualised_return_pct", is_res.metrics.get("cagr_pct", 0.0)))
+        oos_cagr = float(oos_res.metrics.get("annualised_return_pct", oos_res.metrics.get("cagr_pct", 0.0)))
         wfe_ratio = round(oos_cagr / is_cagr, 4) if abs(is_cagr) > 0.5 else (1.0 if oos_cagr > 0 else 0.0)
         wf_res["walk_forward_efficiency_ratio"] = wfe_ratio
 

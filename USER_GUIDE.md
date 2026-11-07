@@ -107,13 +107,15 @@ Once a strategy reaches `READY FOR LIVE REVIEW` (or whenever you choose to mirro
      Displays **Daily P&L** (latest session vs. prior close), **Weekly P&L** (rolling 5-session change), and **Total P&L** (since the `$100,000` baseline reset, split into Realised and Unrealised), net of realistic broker fees and bid-ask slippage. The `Paper Ledger` tab includes interactive **Trading Day**, **Order Side (`BUY`/`SELL`)**, and **Strategy** filters with a daily execution summary bar.
    - **Historical Backtest P&L (`Strategies & Readiness` and `Backtesting` tabs)**: Shows how a strategy rulebook performed over multi-year past history (`2023–2025`). Backtest numbers are used strictly to test rulebooks and are never mixed into your paper account cash.
 3. **How do you evaluate when a strategy is ready for real trading?**
-   - Open the **`Strategies & Readiness`** tab. Look at the **`Live Trading Readiness`** column:
-   - A strategy automatically flips from `BUILDING PAPER TRACK RECORD` to **`READY FOR LIVE REVIEW`** only when it satisfies **all 4 real-money readiness checks**:
-     1. **Passed 9 / 9 Historical Backtest & Walk-Forward Gates** (Sharpe $\ge 1.0$, Profit Factor $\ge 1.3$, Max Drawdown $\le 15\%$).
-     2. **Completed $\ge 20$ Closed Paper Trades** in live forward daily sessions.
-     3. **Forward Paper Profit Factor $\ge 1.30$** (making at least $\$1.30$ for every $\$1.00$ lost in live paper trading).
-     4. **Positive Net Forward Paper P&L** after all fees and slippage.
-   - Once a strategy reaches `READY FOR LIVE REVIEW`, you can simply check the `Overview & P&L` / `Paper Ledger` tab after market close and mirror its trades in your own brokerage account.
+   - Open the **`Strategies & Readiness`** tab. Every **Golden Base (`v1 ★ Base`)** strategy has been optimized and validated across all 5 strategy families (`MOMENTUM_TREND`, `PEAD`, `BREAKOUT`, `MEAN_REVERSION`, `SECTOR_ROTATION`) to beat the **S&P 500 (`SPY`)** in both **Full Period Return (`+70.7%` to `+77.5%` vs. SPY `+61.9%`)** and **Out-of-Sample Return (`+11.5%` to `+23.0%` vs. SPY `+9.7%`)** with `100%` (`4/4`) Walk-Forward window consistency.
+   - We evaluate strategy readiness across **Institutional Benchmark & Risk Metrics**:
+     1. **S&P 500 (`SPY`) Benchmark Dominance**: Full-Period & Out-of-Sample **Excess Return vs. SPY**, **Annualised Jensen's Alpha ($\alpha\%/yr$)**, **CAPM Beta ($\beta$)**, **Information Ratio**, **Upside / Downside Capture Ratio** (convex participation capturing upside while limiting downside), and **Annualised Return on Invested Capital (ROIC %)**.
+     2. **Drawdown Depth & Duration**: **Max Drawdown (%)**, **Ulcer Index ($UI$)**, **Martin Ratio / Ulcer Performance Index ($UPI$)**, and **Max Time Under Water (trading days to recover peak)**.
+     3. **Statistical & Out-of-Sample Robustness**: **Sharpe Ratio**, **Sortino Ratio**, **Profit Factor**, **Omega Ratio ($\Omega(0)$)**, **Tail Ratio ($|P_{95}/P_5|$)**, **Probabilistic & Deflated Sharpe Ratio (PSR / DSR %)**, **Walk-Forward Consistency & Efficiency (WFE)**, and **2x Cost Stress Survival**.
+     4. **Forward Paper Track Record (`>= 20` Closed Trades, `PF >= 1.30`, Positive Net Paper P&L)**: Confirms the historical edge persists in live forward sessions.
+   - **Golden Baseline Safeguard & One-Click Revert**:
+     - Future weekly strategy iterations (`v2`, `v3`, ...) must strictly beat or match the active champion's Return, Sharpe, and Calmar to be promoted (`beats_incumbent`).
+     - At any time, you can click **`Revert All to Golden Base (v1)`** (or run `python3 main.py revert-baseline`) to immediately restore the proven `v1` Golden Base Models and retire any experimental `v2+` versions.
 
 ---
 

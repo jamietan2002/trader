@@ -117,37 +117,72 @@ class StrategyEvaluationAgent(BaseAgent):
             and (max_single_trade_pnl / total_net_pnl) > 0.65
         )
 
-        # Incumbent Champion Protection: If an active PAPER_TRADING version of this strategy already exists,
-        # only promote v+1 if it beats or matches the incumbent's Sharpe, Net Return, or Drawdown-Adjusted Return.
+        # Strict Incumbent Champion Protection:
+        # If prior versions of this strategy exist in PAPER_TRADING or RETIRED, a challenger v+1
+        # is only promoted if it strictly improves or matches the best prior version's Return, Sharpe, and Calmar.
         beats_incumbent = True
         if strategy.version > 1:
-            incumbents = [
+            prior_versions = [
                 s
-                for s in self.registry.list_strategies(status=StrategyStatus.PAPER_TRADING.value)
-                if s.strategy_id == strategy.strategy_id and s.version < strategy.version and s.backtest_summary
+                for s in self.registry.list_strategies(strategy_id=strategy.strategy_id)
+                if s.version < strategy.version
+                and s.backtest_summary
+                and s.status in (StrategyStatus.PAPER_TRADING.value, StrategyStatus.RETIRED.value)
             ]
-            if incumbents:
-                inc = sorted(incumbents, key=lambda x: x.version)[-1]
-                inc_m = inc.backtest_summary or {}
+            if prior_versions:
+                best_prior = max(
+                    prior_versions,
+                    key=lambda x: (
+                        float((x.backtest_summary or {}).get("total_return_pct", 0.0)),
+                        float((x.backtest_summary or {}).get("sharpe_ratio", 0.0)),
+                    ),
+                )
+                inc_m = best_prior.backtest_summary or {}
                 inc_sharpe = float(inc_m.get("sharpe_ratio", 0.0))
                 inc_ret = float(inc_m.get("total_return_pct", 0.0))
                 inc_calmar = float(inc_m.get("calmar_ratio", 0.0))
                 curr_ret = float(full_m.get("total_return_pct", 0.0))
                 curr_calmar = float(full_m.get("calmar_ratio", 0.0))
-                if inc_sharpe > 0 and sharpe < (inc_sharpe - 0.03) and curr_ret < inc_ret and curr_calmar < inc_calmar:
+                if curr_ret < inc_ret or sharpe < inc_sharpe or curr_calmar < (inc_calmar * 0.95):
                     beats_incumbent = False
+
+        # Multi-Dimensional SPY Benchmark Dominance Check:
+        # Requires beating SPY outright (Full or OOS return >= SPY with Sharpe >= SPY), OR
+        # Capital-Efficient Alpha Dominance (ROIC >= 1.25x SPY CAGR, Alpha >= +4%/yr, Sharpe >= SPY, and Return >= 70% of SPY).
+        full_ret = float(full_m.get("total_return_pct", 0.0))
+        spy_ret = float(full_m.get("benchmark_return_pct", 0.0))
+        oos_spy_ret = float(oos_m.get("benchmark_return_pct", 0.0))
+        roic_ann = float(full_m.get("roic_annualised_pct", full_m.get("annualised_return_pct", 0.0)))
+        spy_cagr = float(full_m.get("benchmark_cagr_pct", spy_ret / 2.3))
+        alpha_ann = float(full_m.get("alpha_annualised_pct", 0.0))
+        ulcer_idx = float(full_m.get("ulcer_index", 0.0))
+        max_tuw = int(full_m.get("max_time_under_water_days", 0))
+
+        beats_spy_benchmark = (
+            (full_ret >= spy_ret and sharpe >= spy_sharpe * 0.95)
+            or (oos_net_ret >= oos_spy_ret and sharpe >= spy_sharpe * 0.95 and full_ret >= spy_ret * 0.85)
+            or (
+                roic_ann >= spy_cagr * 1.25
+                and alpha_ann >= 4.0
+                and sharpe >= spy_sharpe
+                and full_ret >= spy_ret * 0.70
+            )
+        )
 
         checks: Dict[str, bool] = {
             "positive_oos_net_return": oos_net_ret > self.criteria.min_oos_net_return,
             "sharpe_above_threshold": sharpe >= self.criteria.min_sharpe_ratio,
             "profit_factor_above_threshold": profit_factor >= self.criteria.min_profit_factor,
-            "max_drawdown_below_limit": max_dd_pct <= self.criteria.max_drawdown_pct,
+            "max_drawdown_below_limit": (
+                max_dd_pct <= self.criteria.max_drawdown_pct
+                and (ulcer_idx <= self.criteria.max_ulcer_index if ulcer_idx > 0 else True)
+                and (max_tuw <= self.criteria.max_time_under_water_days if max_tuw > 0 else True)
+            ),
             "sufficient_trade_count": trade_count >= self.criteria.min_trade_count,
             "walk_forward_consistency": wf_consistency >= self.criteria.min_walk_forward_consistency,
             "positive_after_transaction_costs": survives_costs if self.criteria.require_positive_after_costs else True,
             "competitive_vs_spy_risk_adjusted": (
-                (sharpe >= spy_sharpe * 0.85 or float(full_m.get("total_return_pct", 0.0)) >= float(full_m.get("benchmark_return_pct", 0.0)))
-                and beats_incumbent
+                beats_spy_benchmark and beats_incumbent
             )
             if self.criteria.require_beat_benchmark_risk_adjusted
             else beats_incumbent,

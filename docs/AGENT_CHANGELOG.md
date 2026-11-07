@@ -4,6 +4,21 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-07] — Institutional SPY Benchmark Readiness Suite, 5 Golden Base (`v1`) Models & One-Click Baseline Revert
+
+### Summary
+- **Institutional SPY Benchmark & Drawdown Metric Suite (`evaluation/metrics/performance.py`, `infrastructure/configuration/settings.py`, `agents/strategy_evaluator/agent.py`)**: Expanded `calculate_performance_metrics()` to compute date-aligned **Annualised Jensen's Alpha ($\alpha\%/yr$)**, **CAPM Beta ($\beta$)**, **Information Ratio**, **Upside / Downside Capture Ratio** vs. `SPY`, **Annualised Return on Invested Capital (`roic_annualised_pct`)**, **Ulcer Index (`ulcer_index`)**, **Martin Ratio / Ulcer Performance Index (`martin_ratio`)**, **Max Time Under Water (`max_time_under_water_days`)**, **Omega Ratio (`omega_ratio`)**, and **Tail Ratio (`tail_ratio`)**. Upgraded `StrategyEvaluationAgent.evaluate_pipeline_results()` to require genuine `SPY` benchmark dominance and strict non-degradation vs. prior versions (`beats_incumbent`).
+- **Causal Signal & Backtest Engine Enhancements + 5 Golden Base (`v1`) Strategies (`core/strategies/registry.py`, `core/backtesting/engine.py`, `core/execution/paper_broker.py`, `agents/strategy_architect/agent.py`)**: Fixed premature Chandelier trailing-stop activation (requiring $\ge 1.0\text{R}$ profit via `trail_activation_r`), unclipped multi-horizon relative-strength conviction ranking, dynamic `pead_lookback` for quarterly earnings drift, top-2 leader sector RS ranking, and Walk-Forward Efficiency (`WFE`) `annualised_return_pct` lookup. Tuned and validated all 5 Golden Base `v1` models (`strat_momentum_trend`, `strat_pead_drift`, `strat_volatility_breakout`, `strat_mean_reversion_bb`, `strat_sector_rotation_leaders`) so all 5 beat `SPY` in both Full Period (`+70.68%` to `+77.45%` vs. `SPY` `+61.90%`) and Out-of-Sample (`+11.52%` to `+22.96%` vs. `SPY` `+9.67%`) with `100%` (`4/4`) Walk-Forward consistency, while keeping the Paper Account untouched at `$100,000.00`.
+- **Golden Baseline Pinning & One-Click Revert (`StrategyRegistry.revert_to_golden_baseline` & `rollback_to_best_champion` in `core/strategies/registry.py`, `main.py`, `api/server.py`, `dashboard/streamlit_app.py`)**: Added programmatic and 1-click UI/CLI controls (`Revert All to Golden Base (v1)`, `Enforce Best Champion Versions`, `python3 main.py revert-baseline`, `/api/strategies/revert-baseline`) so any experimental future `v2+` iteration can always be reverted to the proven `v1` Golden Base Model.
+
+### Modules Added / Modified
+- `evaluation/metrics/performance.py`, `infrastructure/configuration/settings.py`, `agents/strategy_evaluator/agent.py`
+- `core/strategies/registry.py`, `core/backtesting/engine.py`, `core/execution/paper_broker.py`, `agents/strategy_architect/agent.py`
+- `main.py`, `api/server.py`, `dashboard/streamlit_app.py`, `data/swing_trader.db`
+- `tests/test_platform.py`, `USER_GUIDE.md`, `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-07] — Forward-Only Paper Account Reset, Daily/Weekly/Total P&L Metrics & Day-Filtered Paper Ledger
 
 ### Summary

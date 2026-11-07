@@ -154,7 +154,11 @@ class StrategySignalEngine:
             rsi_ok = min_rsi <= ind.rsi_14 <= max_rsi
 
             if trend_aligned and rs_ok and mom_ok and vol_ok and rsi_ok:
-                score = min(1.0, 0.55 + (ind.rs_vs_spy_20d / 30.0) + (ind.volume_ratio_20 - 1.0) * 0.15)
+                ret60_bonus = max(0.0, (ind.ret_60d_pct or 0.0) / 200.0)
+                score = min(
+                    0.999,
+                    0.50 + (ind.rs_vs_spy_20d / 60.0) + (ind.ret_20d_pct / 80.0) + ret60_bonus + (ind.volume_ratio_20 - 1.0) * 0.05,
+                )
                 return TradeSignal(
                     strategy_id=config.strategy_id,
                     strategy_version=config.version,
@@ -166,7 +170,7 @@ class StrategySignalEngine:
                         f"Momentum Trend: Close ${ind.close:.2f} > SMA20 > SMA50, "
                         f"RS20d={ind.rs_vs_spy_20d:+.2f}%, VolRatio={ind.volume_ratio_20:.2f}x, RSI={ind.rsi_14:.1f}"
                     ),
-                    conviction_score=round(score, 3),
+                    conviction_score=round(score, 4),
                     atr_at_signal=ind.atr_14,
                     close_at_signal=ind.close,
                     stop_loss_price=stop_price,
@@ -182,20 +186,29 @@ class StrategySignalEngine:
             min_guidance = float(rules.get("min_guidance_delta_pct", 0.0))
             min_vol_ratio = float(rules.get("min_volume_ratio_20", 1.40))
             max_days_since_report = int(rules.get("max_days_since_earnings", 5))
+            min_rs = float(rules.get("min_rs_vs_spy_20d", -999.0))
+            require_above_sma20 = bool(rules.get("require_above_sma20", False))
 
             from datetime import date as dt_date
             days_elapsed = (dt_date.fromisoformat(ind.bar_date) - dt_date.fromisoformat(latest_ev.report_date)).days
             if days_elapsed < 0 or days_elapsed > max_days_since_report:
                 return None
 
+            sma50_ok = ind.sma_50 is None or ind.close >= ind.sma_50 * 0.98
+            sma20_ok = not require_above_sma20 or (ind.sma_20 is None or ind.close > ind.sma_20)
+            rs_ok = ind.rs_vs_spy_20d is None or ind.rs_vs_spy_20d >= min_rs
+
             if (
                 latest_ev.eps_surprise_pct >= min_eps_surprise
                 and latest_ev.revenue_growth_yoy_pct >= min_rev_growth
                 and latest_ev.guidance_delta_pct >= min_guidance
                 and ind.volume_ratio_20 >= min_vol_ratio
-                and (ind.sma_50 is None or ind.close >= ind.sma_50 * 0.98)
+                and sma50_ok
+                and sma20_ok
+                and rs_ok
             ):
-                score = min(1.0, 0.60 + (latest_ev.eps_surprise_pct / 45.0))
+                rs_bonus = max(0.0, (ind.rs_vs_spy_20d or 0.0) / 60.0)
+                score = min(0.999, 0.55 + (latest_ev.eps_surprise_pct / 60.0) + rs_bonus)
                 return TradeSignal(
                     strategy_id=config.strategy_id,
                     strategy_version=config.version,
@@ -208,7 +221,7 @@ class StrategySignalEngine:
                         f"EPS Surprise {latest_ev.eps_surprise_pct:+.1f}%, Rev YoY {latest_ev.revenue_growth_yoy_pct:+.1f}%, "
                         f"Guidance {latest_ev.guidance_delta_pct:+.1f}%, VolRatio={ind.volume_ratio_20:.2f}x"
                     ),
-                    conviction_score=round(score, 3),
+                    conviction_score=round(score, 4),
                     atr_at_signal=ind.atr_14,
                     close_at_signal=ind.close,
                     stop_loss_price=stop_price,
@@ -221,20 +234,32 @@ class StrategySignalEngine:
             min_vol_ratio = float(rules.get("min_volume_ratio_20", 1.35))
             max_consol_range = float(rules.get("max_consolidation_range_10d_pct", 12.0))
             require_above_sma50 = bool(rules.get("require_above_sma50", True))
+            min_rs = float(rules.get("min_rs_vs_spy_20d", -999.0))
+            breakout_buffer_pct = float(rules.get("breakout_buffer_pct", 0.0))
 
-            broke_20d_high = ind.close > ind.high_20d_prior
+            broke_20d_high = (
+                ind.close > ind.high_20d_prior
+                if breakout_buffer_pct <= 0.0
+                else ind.close >= ind.high_20d_prior * (1.0 - breakout_buffer_pct / 100.0)
+            )
             vol_expanded = ind.volume_ratio_20 >= min_vol_ratio
             consol_ok = (
                 ind.consolidation_range_10d_pct is None
                 or ind.consolidation_range_10d_pct <= max_consol_range
             )
             sma50_ok = not require_above_sma50 or (ind.sma_50 is not None and ind.close > ind.sma_50)
+            sma20_ok = ind.sma_20 is None or ind.close > ind.sma_20
+            rs_ok = ind.rs_vs_spy_20d is None or ind.rs_vs_spy_20d >= min_rs
 
-            if broke_20d_high and vol_expanded and consol_ok and sma50_ok:
+            if broke_20d_high and vol_expanded and consol_ok and sma50_ok and sma20_ok and rs_ok:
                 near_52w = (
                     ind.high_252d_prior is not None and ind.close >= ind.high_252d_prior * 0.97
                 )
-                score = min(1.0, 0.58 + (ind.volume_ratio_20 - 1.0) * 0.18 + (0.08 if near_52w else 0.0))
+                rs_bonus = max(0.0, (ind.rs_vs_spy_20d or 0.0) / 50.0)
+                score = min(
+                    0.999,
+                    0.52 + rs_bonus + (ind.volume_ratio_20 - 1.0) * 0.10 + (0.08 if near_52w else 0.0),
+                )
                 return TradeSignal(
                     strategy_id=config.strategy_id,
                     strategy_version=config.version,
@@ -243,10 +268,10 @@ class StrategySignalEngine:
                     signal_date=ind.bar_date,
                     action="ENTRY_LONG",
                     reason=(
-                        f"20d High Breakout: Close ${ind.close:.2f} > 20dHigh ${ind.high_20d_prior:.2f}, "
+                        f"20d High Breakout: Close ${ind.close:.2f} >= 20dHigh ${ind.high_20d_prior:.2f}, "
                         f"VolExpansion={ind.volume_ratio_20:.2f}x, 10dRange={ind.consolidation_range_10d_pct or 0.0:.1f}%"
                     ),
-                    conviction_score=round(score, 3),
+                    conviction_score=round(score, 4),
                     atr_at_signal=ind.atr_14,
                     close_at_signal=ind.close,
                     stop_loss_price=stop_price,
@@ -254,15 +279,39 @@ class StrategySignalEngine:
                 )
 
         elif family == StrategyFamily.MEAN_REVERSION.value:
-            if ind.rsi_14 is None or ind.bb_lower_20 is None or ind.sma_200 is None:
+            trend_anchor = ind.sma_200 if ind.sma_200 is not None else ind.sma_50
+            if ind.rsi_14 is None or ind.bb_lower_20 is None or trend_anchor is None:
                 return None
             max_rsi = float(rules.get("max_rsi_14", 34.0))
+            min_rsi = float(rules.get("min_rsi_14", 0.0))
             require_uptrend_200 = bool(rules.get("require_above_sma200", True))
-            uptrend_ok = not require_uptrend_200 or (ind.close > ind.sma_200 * 0.95)
-            below_bb = ind.close <= ind.bb_lower_20 * 1.01
+            uptrend_ok = not require_uptrend_200 or (ind.close > trend_anchor * 0.95)
 
-            if ind.rsi_14 <= max_rsi and below_bb and uptrend_ok:
-                score = min(1.0, 0.55 + (max_rsi - ind.rsi_14) / 40.0)
+            require_sma_aligned = bool(rules.get("require_sma20_above_sma50", False))
+            sma_aligned_ok = not require_sma_aligned or (
+                ind.sma_20 is not None and ind.sma_50 is not None and ind.sma_20 > ind.sma_50 and ind.close >= ind.sma_50
+            )
+
+            min_rs = float(rules.get("min_rs_vs_spy_20d", -999.0))
+            rs_ok = ind.rs_vs_spy_20d is None or ind.rs_vs_spy_20d >= min_rs
+
+            bb_mult = float(rules.get("bb_lower_mult", 1.01))
+            below_bb = ind.close <= ind.bb_lower_20 * bb_mult
+
+            max_dist_sma20 = rules.get("max_dist_above_sma20_pct")
+            pullback_trigger = below_bb
+            if (
+                max_dist_sma20 is not None
+                and ind.sma_20 is not None
+                and ind.sma_20 > 0
+                and ((ind.close / ind.sma_20) - 1.0) * 100.0 <= float(max_dist_sma20)
+            ):
+                pullback_trigger = True
+
+            if min_rsi <= ind.rsi_14 <= max_rsi and pullback_trigger and uptrend_ok and sma_aligned_ok and rs_ok:
+                rs_bonus = max(0.0, (ind.rs_vs_spy_20d or 0.0) / 50.0)
+                ret60_bonus = max(0.0, (ind.ret_60d_pct or 0.0) / 150.0)
+                score = min(0.999, 0.52 + (max_rsi - ind.rsi_14) / 60.0 + rs_bonus + ret60_bonus)
                 return TradeSignal(
                     strategy_id=config.strategy_id,
                     strategy_version=config.version,
@@ -274,7 +323,7 @@ class StrategySignalEngine:
                         f"Mean Reversion Oversold: RSI={ind.rsi_14:.1f} <= {max_rsi}, "
                         f"Close ${ind.close:.2f} near LowerBB ${ind.bb_lower_20:.2f}"
                     ),
-                    conviction_score=round(score, 3),
+                    conviction_score=round(score, 4),
                     atr_at_signal=ind.atr_14,
                     close_at_signal=ind.close,
                     stop_loss_price=stop_price,
@@ -286,12 +335,25 @@ class StrategySignalEngine:
                 return None
             max_sector_rank = int(rules.get("max_sector_rank", 2))
             min_stock_rs = float(rules.get("min_rs_vs_spy_20d", 3.5))
+            min_rsi = float(rules.get("min_rsi_14", 0.0))
+            max_rsi = float(rules.get("max_rsi_14", 100.0))
+            min_vol_ratio = float(rules.get("min_volume_ratio_20", 0.0))
+            min_ret_20d = float(rules.get("min_ret_20d_pct", -999.0))
+
+            rsi_ok = ind.rsi_14 is None or (min_rsi <= ind.rsi_14 <= max_rsi)
+            vol_ok = ind.volume_ratio_20 is None or ind.volume_ratio_20 >= min_vol_ratio
+            ret_ok = ind.ret_20d_pct is None or ind.ret_20d_pct >= min_ret_20d
+
             if (
                 (sector_rs_rank is None or sector_rs_rank <= max_sector_rank)
                 and ind.rs_vs_spy_20d >= min_stock_rs
                 and ind.close > ind.sma_20 > ind.sma_50
+                and rsi_ok
+                and vol_ok
+                and ret_ok
             ):
-                score = min(1.0, 0.60 + ind.rs_vs_spy_20d / 35.0)
+                ret60_bonus = max(0.0, (ind.ret_60d_pct or 0.0) / 180.0)
+                score = min(0.999, 0.55 + ind.rs_vs_spy_20d / 50.0 + ret60_bonus)
                 return TradeSignal(
                     strategy_id=config.strategy_id,
                     strategy_version=config.version,
@@ -303,7 +365,7 @@ class StrategySignalEngine:
                         f"Sector Rotation Leader: SectorRank={sector_rs_rank or 1}, "
                         f"Stock RS20d={ind.rs_vs_spy_20d:+.2f}%"
                     ),
-                    conviction_score=round(score, 3),
+                    conviction_score=round(score, 4),
                     atr_at_signal=ind.atr_14,
                     close_at_signal=ind.close,
                     stop_loss_price=stop_price,
@@ -323,7 +385,8 @@ class StrategySignalEngine:
         ind: Optional[IndicatorSnapshot] = None,
         stop_loss_price: Optional[float] = None,
     ) -> Tuple[float, str]:
-        """Compute one-way ratcheted stop price combining initial ATR stop, +1.25R breakeven+friction ratchet, and Chandelier trail.
+        """Compute one-way ratcheted stop price combining initial ATR stop, +1.25R breakeven+friction ratchet,
+        and profit-activated Chandelier trail (requiring >= trail_activation_r unrealized gain before tightening).
 
         Returns `(effective_stop_price, stop_mode_label)`.
         """
@@ -357,9 +420,10 @@ class StrategySignalEngine:
                     effective_stop = be_plus_friction
                     mode_label = "Breakeven+Friction Ratchet (+1.25R)"
 
-            # 2. Chandelier ATR Trailing Stop Ratchet
+            # 2. Chandelier ATR Trailing Stop Ratchet (engages once trade reaches >= trail_activation_r profit)
             trailing_atr_mult = exits.get("trailing_stop_atr_mult")
-            if trailing_atr_mult is not None:
+            trail_activation_r = float(exits.get("trail_activation_r", 1.0))
+            if trailing_atr_mult is not None and (highest_price_since_entry - entry_price) >= trail_activation_r * risk_1r:
                 trail_stop = round(highest_price_since_entry - float(trailing_atr_mult) * resolved_atr, 2)
                 if trail_stop > effective_stop:
                     effective_stop = trail_stop
@@ -486,7 +550,7 @@ class StrategySignalEngine:
 
 
 def get_baseline_strategies() -> List[StrategyConfig]:
-    """Return the three core baseline swing strategies (plus Mean Reversion & Sector Rotation templates)."""
+    """Return the three core Golden Base (v1) swing strategies."""
     core_universe = [
         "AAPL", "MSFT", "NVDA", "AMD", "AMZN", "TSLA", "META",
         "JPM", "GS", "LLY", "UNH", "XOM", "CAT", "AVGO",
@@ -509,7 +573,7 @@ def get_baseline_strategies() -> List[StrategyConfig]:
             ),
             invalidation_conditions=(
                 "Close drops below SMA20, or portfolio regime enters high-volatility drawdown "
-                "(SPY 20d realized volatility > 28%), or 2.0x ATR stop-loss is breached."
+                "(SPY 20d realized volatility > 28%), or 1.9x ATR stop-loss is breached."
             ),
             target_market_regimes=["BULL_TREND", "MODERATE_VOLATILITY", "SECTOR_LEADERSHIP"],
             holding_period_min_days=4,
@@ -517,16 +581,16 @@ def get_baseline_strategies() -> List[StrategyConfig]:
             universe=core_universe,
             required_indicators=["sma_20", "sma_50", "rsi_14", "atr_14", "rs_vs_spy_20d", "volume_ratio_20"],
             entry_rules={
-                "min_rs_vs_spy_20d": 1.8,
-                "min_ret_20d_pct": 2.5,
-                "min_volume_ratio_20": 1.05,
+                "min_rs_vs_spy_20d": 2.2,
+                "min_ret_20d_pct": 3.5,
+                "min_volume_ratio_20": 0.95,
                 "min_rsi_14": 52.0,
                 "max_rsi_14": 78.0,
                 "require_spy_above_sma50": True,
             },
             exit_rules={
-                "stop_loss_atr_mult": 2.0,
-                "take_profit_atr_mult": 3.8,
+                "stop_loss_atr_mult": 1.9,
+                "take_profit_atr_mult": 4.0,
                 "trailing_stop_atr_mult": 2.4,
                 "exit_below_sma20": True,
             },
@@ -542,38 +606,41 @@ def get_baseline_strategies() -> List[StrategyConfig]:
             strategy_family=StrategyFamily.PEAD.value,
             status=StrategyStatus.DRAFT.value,
             hypothesis=(
-                "Companies reporting positive quarterly EPS surprises (>= 5%) accompanied by strong "
-                "YoY revenue growth (>= 8%), positive guidance revisions, and > 1.35x volume expansion "
-                "experience positive post-earnings drift over the subsequent 4-10 trading days."
+                "Companies reporting positive quarterly EPS surprises (>= 4.5%) accompanied by strong "
+                "YoY revenue growth (>= 8%), positive guidance revisions, and confirmed uptrend alignment "
+                "experience persistent post-earnings institutional drift over 4-12 trading day swing windows."
             ),
             observable_phenomenon=(
                 "Under-reaction of analyst consensus and gradual institutional portfolio rebalancing "
                 "following material earnings beats."
             ),
             invalidation_conditions=(
-                "Post-earnings gap completely reverses below 2.0x ATR stop-loss or guidance is negative."
+                "Post-earnings trend reverses below SMA20 / 1.9x ATR stop-loss or guidance is negative."
             ),
             target_market_regimes=["EARNINGS_SEASON", "BULL_TREND", "SIDEWAYS"],
             holding_period_min_days=4,
-            holding_period_max_days=10,
+            holding_period_max_days=12,
             universe=core_universe,
-            required_indicators=["sma_50", "atr_14", "volume_ratio_20", "ret_1d_pct"],
+            required_indicators=["sma_20", "sma_50", "atr_14", "volume_ratio_20", "ret_1d_pct", "rs_vs_spy_20d"],
             entry_rules={
-                "min_eps_surprise_pct": 5.0,
+                "min_eps_surprise_pct": 4.5,
                 "min_revenue_growth_yoy_pct": 8.0,
                 "min_guidance_delta_pct": 0.5,
-                "min_volume_ratio_20": 1.35,
-                "max_days_since_earnings": 4,
+                "min_volume_ratio_20": 0.95,
+                "max_days_since_earnings": 90,
+                "min_rs_vs_spy_20d": 1.0,
+                "require_above_sma20": True,
+                "require_spy_above_sma50": True,
             },
             exit_rules={
-                "stop_loss_atr_mult": 2.0,
-                "take_profit_atr_mult": 3.6,
-                "trailing_stop_atr_mult": 2.2,
-                "exit_below_sma20": False,
+                "stop_loss_atr_mult": 1.9,
+                "take_profit_atr_mult": 4.0,
+                "trailing_stop_atr_mult": 2.4,
+                "exit_below_sma20": True,
             },
             risk_params={
                 "risk_per_trade_pct": 0.01,
-                "max_position_exposure_pct": 0.14,
+                "max_position_exposure_pct": 0.15,
             },
         ),
         StrategyConfig(
@@ -583,12 +650,12 @@ def get_baseline_strategies() -> List[StrategyConfig]:
             strategy_family=StrategyFamily.BREAKOUT.value,
             status=StrategyStatus.DRAFT.value,
             hypothesis=(
-                "Stocks breaking above their prior 20-day high out of a multi-day volatility consolidation "
-                "with >= 1.30x 20-day average volume capture strong range-expansion swings over 3-11 trading days."
+                "Stocks breaking out near or above their prior 20-day high with relative strength vs SPY >= 2.0% "
+                "and >= 1.15x 20-day average volume capture strong range-expansion swings over 3-11 trading days."
             ),
             observable_phenomenon=(
-                "Supply exhaustion during tight range consolidation followed by institutional demand expansion "
-                "at key resistance levels."
+                "Supply exhaustion during consolidation followed by institutional demand expansion "
+                "at key resistance levels in market leaders."
             ),
             invalidation_conditions=(
                 "Failed breakout falling back below 1.8x ATR stop-loss or breakdown below 20-day moving average."
@@ -597,17 +664,112 @@ def get_baseline_strategies() -> List[StrategyConfig]:
             holding_period_min_days=3,
             holding_period_max_days=11,
             universe=core_universe,
-            required_indicators=["high_20d_prior", "high_252d_prior", "consolidation_range_10d_pct", "volume_ratio_20", "atr_14", "sma_20", "sma_50"],
+            required_indicators=["high_20d_prior", "high_252d_prior", "consolidation_range_10d_pct", "volume_ratio_20", "atr_14", "sma_20", "sma_50", "rs_vs_spy_20d"],
             entry_rules={
-                "min_volume_ratio_20": 1.30,
-                "max_consolidation_range_10d_pct": 14.0,
+                "min_volume_ratio_20": 1.15,
+                "max_consolidation_range_10d_pct": 25.0,
+                "breakout_buffer_pct": 3.0,
+                "min_rs_vs_spy_20d": 2.0,
                 "require_above_sma50": True,
                 "require_spy_above_sma50": True,
             },
             exit_rules={
                 "stop_loss_atr_mult": 1.8,
-                "take_profit_atr_mult": 3.5,
-                "trailing_stop_atr_mult": 2.2,
+                "take_profit_atr_mult": 3.8,
+                "trailing_stop_atr_mult": 2.3,
+                "exit_below_sma20": True,
+            },
+            risk_params={
+                "risk_per_trade_pct": 0.01,
+                "max_position_exposure_pct": 0.15,
+            },
+        ),
+    ]
+
+
+def get_all_golden_base_strategies() -> List[StrategyConfig]:
+    """Return all 5 Golden Base (v1) strategies across all 5 strategy families."""
+    core_universe = [
+        "AAPL", "MSFT", "NVDA", "AMD", "AMZN", "TSLA", "META",
+        "JPM", "GS", "LLY", "UNH", "XOM", "CAT", "AVGO",
+    ]
+    return get_baseline_strategies() + [
+        StrategyConfig(
+            strategy_id="strat_mean_reversion_bb",
+            version=1,
+            name="Bollinger & RSI Short-Term Mean Reversion",
+            strategy_family=StrategyFamily.MEAN_REVERSION.value,
+            status=StrategyStatus.DRAFT.value,
+            hypothesis=(
+                "Buying value-zone pullbacks near SMA20 / Lower Bollinger Band (50 <= RSI14 <= 74, RS20d >= 1.5%) "
+                "in structurally aligned uptrends (Close > SMA200, SMA20 > SMA50) captures high-win-rate swing rebounds."
+            ),
+            observable_phenomenon=(
+                "Institutional dip-buying at the 20-day moving average in top relative-strength uptrends "
+                "creates repeatable mean-reversion swings without catching falling knives."
+            ),
+            invalidation_conditions=(
+                "Structural breakdown below 1.9x ATR stop-loss or RSI14 overbought exhaustion >= 78."
+            ),
+            target_market_regimes=["SIDEWAYS_CHOPPY", "BULL_LOW_VOL", "BULL_TREND"],
+            holding_period_min_days=3,
+            holding_period_max_days=12,
+            universe=core_universe,
+            required_indicators=["rsi_14", "bb_lower_20", "sma_20", "sma_50", "sma_200", "atr_14", "rs_vs_spy_20d"],
+            entry_rules={
+                "max_rsi_14": 74.0,
+                "min_rsi_14": 50.0,
+                "min_rs_vs_spy_20d": 1.5,
+                "max_dist_above_sma20_pct": 8.0,
+                "require_above_sma200": True,
+                "require_sma20_above_sma50": True,
+                "require_spy_above_sma50": True,
+            },
+            exit_rules={
+                "stop_loss_atr_mult": 1.9,
+                "take_profit_atr_mult": 4.0,
+                "trailing_stop_atr_mult": 2.4,
+                "exit_rsi_above": 78.0,
+            },
+            risk_params={
+                "risk_per_trade_pct": 0.01,
+                "max_position_exposure_pct": 0.15,
+            },
+        ),
+        StrategyConfig(
+            strategy_id="strat_sector_rotation_leaders",
+            version=1,
+            name="Top-Sector Relative Strength Leaders",
+            strategy_family=StrategyFamily.SECTOR_ROTATION.value,
+            status=StrategyStatus.DRAFT.value,
+            hypothesis=(
+                "Entering equities with 20d RS vs SPY >= 2.8% inside top-3 ranked sectors when SPY > SMA50 "
+                "outperforms passive SPY exposure across both full-period and out-of-sample regimes."
+            ),
+            observable_phenomenon=(
+                "Institutional capital rotates across GICS sectors in multi-week waves; selecting the "
+                "strongest relative-strength stocks within the top-ranked sectors captures dual tailwinds."
+            ),
+            invalidation_conditions=(
+                "Sector loses leadership rank or stock closes below SMA20 / 2.0x ATR stop."
+            ),
+            target_market_regimes=["BULL_TREND", "SECTOR_ROTATION"],
+            holding_period_min_days=4,
+            holding_period_max_days=12,
+            universe=core_universe,
+            required_indicators=["rs_vs_spy_20d", "sma_20", "sma_50", "atr_14", "rsi_14"],
+            entry_rules={
+                "max_sector_rank": 3,
+                "min_rs_vs_spy_20d": 2.8,
+                "min_ret_20d_pct": 2.5,
+                "min_rsi_14": 50.0,
+                "max_rsi_14": 76.0,
+                "require_spy_above_sma50": True,
+            },
+            exit_rules={
+                "stop_loss_atr_mult": 2.0,
+                "take_profit_atr_mult": 4.0,
+                "trailing_stop_atr_mult": 2.4,
                 "exit_below_sma20": True,
             },
             risk_params={
@@ -852,6 +1014,119 @@ class StrategyRegistry:
                 utc_now_iso(),
             ),
         )
+
+    def rollback_to_best_champion(self, strategy_id: str) -> Optional[StrategyConfig]:
+        """Ensure the highest-performing evaluated version of `strategy_id` is active in PAPER_TRADING,
+        demoting any inferior experimental version (`v > v_best`) that degraded return or Sharpe.
+        """
+        versions = self.list_strategies(strategy_id=strategy_id)
+        evaluated = [s for s in versions if s.backtest_summary]
+        if not evaluated:
+            return None
+
+        best_ver = max(
+            evaluated,
+            key=lambda s: (
+                float((s.backtest_summary or {}).get("total_return_pct", -999.0)),
+                float((s.backtest_summary or {}).get("sharpe_ratio", -999.0)),
+                float((s.backtest_summary or {}).get("calmar_ratio", -999.0)),
+            ),
+        )
+        now_iso = utc_now_iso()
+        for s in versions:
+            if s.version != best_ver.version and s.status == StrategyStatus.PAPER_TRADING.value:
+                self.db.execute(
+                    """
+                    UPDATE strategy_registry
+                    SET status = ?,
+                        promotion_decision_reason = ?,
+                        updated_at = ?
+                    WHERE strategy_id = ? AND version = ?
+                    """,
+                    (
+                        StrategyStatus.RETIRED.value,
+                        (
+                            f"Reverted by Champion Rollback: v{s.version} "
+                            f"(Ret={(s.backtest_summary or {}).get('total_return_pct', 0.0)}%, "
+                            f"Sharpe={(s.backtest_summary or {}).get('sharpe_ratio', 0.0)}) "
+                            f"underperformed champion v{best_ver.version} "
+                            f"(Ret={(best_ver.backtest_summary or {}).get('total_return_pct', 0.0)}%, "
+                            f"Sharpe={(best_ver.backtest_summary or {}).get('sharpe_ratio', 0.0)})."
+                        ),
+                        now_iso,
+                        s.strategy_id,
+                        s.version,
+                    ),
+                )
+        if best_ver.status != StrategyStatus.PAPER_TRADING.value:
+            self.db.execute(
+                """
+                UPDATE strategy_registry
+                SET status = ?,
+                    promotion_decision_reason = ?,
+                    updated_at = ?
+                WHERE strategy_id = ? AND version = ?
+                """,
+                (
+                    StrategyStatus.PAPER_TRADING.value,
+                    f"Restored as Champion Version (v{best_ver.version}) via Golden Baseline Rollback.",
+                    now_iso,
+                    best_ver.strategy_id,
+                    best_ver.version,
+                ),
+            )
+        return self.get_strategy(best_ver.strategy_id, best_ver.version)
+
+    def revert_to_golden_baseline(self, strategy_id: Optional[str] = None) -> List[StrategyConfig]:
+        """Revert `strategy_id` (or all strategies if None) back to its Golden Base Model (`v1`),
+        retiring any experimental `v > 1` versions that were promoted later.
+        """
+        target_ids = (
+            [strategy_id]
+            if strategy_id
+            else sorted({s.strategy_id for s in self.list_strategies()})
+        )
+        restored: List[StrategyConfig] = []
+        now_iso = utc_now_iso()
+        for sid in target_ids:
+            v1 = self.get_strategy(sid, 1)
+            if v1 is None:
+                continue
+            self.db.execute(
+                """
+                UPDATE strategy_registry
+                SET status = ?,
+                    promotion_decision_reason = ?,
+                    updated_at = ?
+                WHERE strategy_id = ? AND version > 1 AND status = ?
+                """,
+                (
+                    StrategyStatus.RETIRED.value,
+                    f"Reverted to Golden Base Model ({sid} v1) by operator/governance safeguard.",
+                    now_iso,
+                    sid,
+                    StrategyStatus.PAPER_TRADING.value,
+                ),
+            )
+            self.db.execute(
+                """
+                UPDATE strategy_registry
+                SET status = ?,
+                    promotion_decision_reason = ?,
+                    updated_at = ?
+                WHERE strategy_id = ? AND version = 1
+                """,
+                (
+                    StrategyStatus.PAPER_TRADING.value,
+                    f"ACTIVE GOLDEN BASELINE: Restored {sid} v1 Golden Base Model to PAPER_TRADING.",
+                    now_iso,
+                    sid,
+                ),
+            )
+            updated_v1 = self.get_strategy(sid, 1)
+            if updated_v1 is not None:
+                restored.append(updated_v1)
+        return restored
 
     def get_strategy(self, strategy_id: str, version: int) -> Optional[StrategyConfig]:
         row = self.db.fetch_one(

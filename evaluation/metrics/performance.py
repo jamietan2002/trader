@@ -38,6 +38,31 @@ def compute_drawdown_series(equities: Sequence[float]) -> List[float]:
     return dds
 
 
+def compute_drawdown_and_underwater_stats(
+    equities: Sequence[float],
+) -> tuple[List[float], float, float, int]:
+    """Return (dds_fraction, max_dd_fraction, ulcer_index_pct, max_time_under_water_days)."""
+    peak = 0.0
+    dds: List[float] = []
+    sq_sum_pct = 0.0
+    curr_uw = 0
+    max_uw = 0
+    for eq in equities:
+        if eq >= peak:
+            peak = eq
+            curr_uw = 0
+        else:
+            curr_uw += 1
+            if curr_uw > max_uw:
+                max_uw = curr_uw
+        dd = (peak - eq) / peak if peak > 0 else 0.0
+        dds.append(round(dd, 6))
+        sq_sum_pct += (dd * 100.0) ** 2
+    max_dd = max(dds) if dds else 0.0
+    ulcer_index = math.sqrt(sq_sum_pct / len(equities)) if equities else 0.0
+    return dds, max_dd, ulcer_index, max_uw
+
+
 def _norm_cdf(z: float) -> float:
     """Standard normal cumulative distribution function using math.erf."""
     return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
@@ -104,6 +129,7 @@ def calculate_performance_metrics(
         return {
             "total_return_pct": 0.0,
             "annualised_return_pct": 0.0,
+            "roic_annualised_pct": 0.0,
             "sharpe_ratio": 0.0,
             "sortino_ratio": 0.0,
             "probabilistic_sharpe_pct": 0.0,
@@ -111,7 +137,12 @@ def calculate_performance_metrics(
             "return_skewness": 0.0,
             "return_kurtosis": 3.0,
             "max_drawdown_pct": 0.0,
+            "ulcer_index": 0.0,
+            "martin_ratio": 0.0,
+            "max_time_under_water_days": 0,
             "calmar_ratio": 0.0,
+            "omega_ratio": 1.0,
+            "tail_ratio": 1.0,
             "win_rate_pct": 0.0,
             "profit_factor": 0.0,
             "avg_winning_trade_usd": 0.0,
@@ -125,8 +156,15 @@ def calculate_performance_metrics(
             "annualised_turnover": 0.0,
             "trade_count": 0,
             "benchmark_return_pct": 0.0,
+            "benchmark_cagr_pct": 0.0,
             "excess_return_vs_spy_pct": 0.0,
             "benchmark_sharpe": 0.0,
+            "alpha_annualised_pct": 0.0,
+            "beta_vs_spy": 0.0,
+            "information_ratio": 0.0,
+            "upside_capture_pct": 0.0,
+            "downside_capture_pct": 0.0,
+            "capture_ratio": 0.0,
         }
 
     equities = [float(pt["equity"]) for pt in equity_curve]
@@ -158,9 +196,21 @@ def calculate_performance_metrics(
         sharpe = 0.0
         sortino = 0.0
 
-    dds = compute_drawdown_series(equities)
-    max_dd = max(dds) if dds else 0.0
+    dds, max_dd, ulcer_index, max_tuw_days = compute_drawdown_and_underwater_stats(equities)
     calmar = (cagr / max_dd) if max_dd > 1e-6 else (10.0 if cagr > 0 else 0.0)
+    martin_ratio = ((cagr * 100.0) / ulcer_index) if ulcer_index > 1e-6 else (10.0 if cagr > 0 else 0.0)
+
+    # Omega Ratio & Tail Ratio (95th / 5th percentile daily returns)
+    pos_sum = sum(r for r in daily_returns if r > 0.0)
+    neg_sum = abs(sum(r for r in daily_returns if r < 0.0))
+    omega_ratio = (pos_sum / neg_sum) if neg_sum > 1e-12 else (5.0 if pos_sum > 0 else 1.0)
+    if len(daily_returns) >= 10:
+        sorted_rets = sorted(daily_returns)
+        p95 = sorted_rets[min(len(sorted_rets) - 1, int(len(sorted_rets) * 0.95))]
+        p05 = sorted_rets[max(0, int(len(sorted_rets) * 0.05))]
+        tail_ratio = (abs(p95) / abs(p05)) if abs(p05) > 1e-9 else 1.0
+    else:
+        tail_ratio = 1.0
 
     # Trade-level statistics
     n_trades = len(trades)
@@ -223,6 +273,55 @@ def calculate_performance_metrics(
                 sd_s = math.sqrt(v_s)
                 spy_sharpe = (m_s / sd_s) * math.sqrt(252.0) if sd_s > 1e-12 else 0.0
 
+    spy_cagr = (1.0 + spy_ret) ** (1.0 / years) - 1.0 if (1.0 + spy_ret) > 0 else -1.0
+    roic_annualised = (cagr / max(0.05, avg_exposure)) if avg_exposure > 0 else 0.0
+
+    alpha_ann_pct = 0.0
+    beta_vs_spy = 0.0
+    info_ratio = 0.0
+    upside_capture_pct = 0.0
+    downside_capture_pct = 0.0
+    capture_ratio = 0.0
+
+    if spy_bars and len(equity_curve) >= 3:
+        spy_map = {b.bar_date: float(b.adj_close) for b in spy_bars if b.adj_close > 0}
+        paired_p: List[float] = []
+        paired_m: List[float] = []
+        for i in range(1, len(equity_curve)):
+            d_prev = equity_curve[i - 1]["date"]
+            d_curr = equity_curve[i]["date"]
+            if d_prev in spy_map and d_curr in spy_map and equities[i - 1] > 0:
+                paired_p.append((equities[i] / equities[i - 1]) - 1.0)
+                paired_m.append((spy_map[d_curr] / spy_map[d_prev]) - 1.0)
+
+        if len(paired_p) >= 5:
+            n_p = len(paired_p)
+            mp = sum(paired_p) / n_p
+            mm = sum(paired_m) / n_p
+            var_m = sum((x - mm) ** 2 for x in paired_m) / max(1, n_p - 1)
+            cov_pm = sum((paired_p[k] - mp) * (paired_m[k] - mm) for k in range(n_p)) / max(1, n_p - 1)
+            beta_vs_spy = (cov_pm / var_m) if var_m > 1e-12 else 0.0
+            alpha_ann_pct = ((mp - beta_vs_spy * mm) * 252.0) * 100.0
+
+            active_rets = [paired_p[k] - paired_m[k] for k in range(n_p)]
+            m_act = sum(active_rets) / n_p
+            var_act = sum((a - m_act) ** 2 for a in active_rets) / max(1, n_p - 1)
+            te_daily = math.sqrt(var_act)
+            info_ratio = (m_act / te_daily) * math.sqrt(252.0) if te_daily > 1e-12 else 0.0
+
+            up_m = [paired_m[k] for k in range(n_p) if paired_m[k] > 0]
+            up_p = [paired_p[k] for k in range(n_p) if paired_m[k] > 0]
+            dn_m = [paired_m[k] for k in range(n_p) if paired_m[k] < 0]
+            dn_p = [paired_p[k] for k in range(n_p) if paired_m[k] < 0]
+            if up_m and sum(up_m) > 1e-9:
+                upside_capture_pct = (sum(up_p) / sum(up_m)) * 100.0
+            if dn_m and abs(sum(dn_m)) > 1e-9:
+                downside_capture_pct = (sum(dn_p) / sum(dn_m)) * 100.0
+            if downside_capture_pct > 1e-6:
+                capture_ratio = upside_capture_pct / downside_capture_pct
+            elif upside_capture_pct > 0:
+                capture_ratio = 5.0
+
     skew, kurt, psr_pct, dsr_pct = compute_probabilistic_and_deflated_sharpe(
         daily_returns=daily_returns,
         annualised_sharpe=sharpe,
@@ -232,6 +331,7 @@ def calculate_performance_metrics(
     return {
         "total_return_pct": round(total_return * 100.0, 2),
         "annualised_return_pct": round(cagr * 100.0, 2),
+        "roic_annualised_pct": round(roic_annualised * 100.0, 2),
         "sharpe_ratio": round(sharpe, 3),
         "sortino_ratio": round(sortino, 3),
         "probabilistic_sharpe_pct": psr_pct,
@@ -239,7 +339,12 @@ def calculate_performance_metrics(
         "return_skewness": skew,
         "return_kurtosis": kurt,
         "max_drawdown_pct": round(max_dd * 100.0, 2),
+        "ulcer_index": round(ulcer_index, 3),
+        "martin_ratio": round(martin_ratio, 3),
+        "max_time_under_water_days": int(max_tuw_days),
         "calmar_ratio": round(calmar, 3),
+        "omega_ratio": round(omega_ratio, 3),
+        "tail_ratio": round(tail_ratio, 3),
         "win_rate_pct": round(win_rate * 100.0, 2),
         "profit_factor": round(profit_factor, 3),
         "avg_winning_trade_usd": round(avg_win_usd, 2),
@@ -253,8 +358,15 @@ def calculate_performance_metrics(
         "annualised_turnover": round(annualised_turnover, 2),
         "trade_count": n_trades,
         "benchmark_return_pct": round(spy_ret * 100.0, 2),
+        "benchmark_cagr_pct": round(spy_cagr * 100.0, 2),
         "excess_return_vs_spy_pct": round((total_return - spy_ret) * 100.0, 2),
         "benchmark_sharpe": round(spy_sharpe, 3),
+        "alpha_annualised_pct": round(alpha_ann_pct, 2),
+        "beta_vs_spy": round(beta_vs_spy, 3),
+        "information_ratio": round(info_ratio, 3),
+        "upside_capture_pct": round(upside_capture_pct, 2),
+        "downside_capture_pct": round(downside_capture_pct, 2),
+        "capture_ratio": round(capture_ratio, 3),
         "final_equity": round(final_equity, 2),
     }
 

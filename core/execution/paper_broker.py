@@ -868,7 +868,7 @@ class PaperTradingEngine:
             if ind_prev is None:
                 continue
             recent_ev = self.market_data.get_point_in_time_earnings(
-                ticker, prev_bar.bar_date, lookback_days=10
+                ticker, prev_bar.bar_date, lookback_days=95
             )
             ticker_context[ticker] = (today_bar, prev_bar, ind_prev, recent_ev)
             t_meta = universe_meta.get(ticker)
@@ -877,7 +877,7 @@ class PaperTradingEngine:
 
         sorted_sectors = sorted(
             sector_rs_lists.keys(),
-            key=lambda s: sum(sector_rs_lists[s]) / len(sector_rs_lists[s]),
+            key=lambda s: sum(sorted(sector_rs_lists[s], reverse=True)[:2]) / min(2, len(sector_rs_lists[s])),
             reverse=True,
         )
         sector_rank_map = {sec_name: idx + 1 for idx, sec_name in enumerate(sorted_sectors)}
@@ -1667,8 +1667,9 @@ class LiveTradingCopilotEngine:
                 ind_latest = inds.get(latest_bar.bar_date)
                 if ind_latest is None:
                     continue
+                pead_lookback = max(20, int(strat.entry_rules.get("max_days_since_earnings", 10)) + 5)
                 recent_ev = self.market_data.get_point_in_time_earnings(
-                    ticker, latest_bar.bar_date, lookback_days=10
+                    ticker, latest_bar.bar_date, lookback_days=pead_lookback
                 )
                 sig = StrategySignalEngine.evaluate_entry(
                     config=strat,

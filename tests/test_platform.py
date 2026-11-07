@@ -667,6 +667,20 @@ class TestSwingTradingPlatform(unittest.TestCase):
         self.assertIn("tournament_candidates", weekly_res["summary"])
         self.assertIn("deflated_sharpe_pct", weekly_res["summary"]["metrics"])
         self.assertIn("probabilistic_sharpe_pct", weekly_res["summary"]["metrics"])
+        self.assertIn("alpha_annualised_pct", weekly_res["summary"]["metrics"])
+        self.assertIn("ulcer_index", weekly_res["summary"]["metrics"])
+        self.assertIn("martin_ratio", weekly_res["summary"]["metrics"])
+        self.assertIn("omega_ratio", weekly_res["summary"]["metrics"])
+        self.assertIn("capture_ratio", weekly_res["summary"]["metrics"])
+
+        # Verify Golden Baseline Revert (`revert_to_golden_baseline` & `rollback_to_best_champion`)
+        restored_v1 = orch.registry.revert_to_golden_baseline("strat_momentum_trend")
+        self.assertEqual(len(restored_v1), 1)
+        self.assertEqual(restored_v1[0].version, 1)
+        self.assertEqual(restored_v1[0].status, StrategyStatus.PAPER_TRADING.value)
+        champ = orch.registry.rollback_to_best_champion("strat_momentum_trend")
+        self.assertIsNotNone(champ)
+        self.assertEqual(champ.status, StrategyStatus.PAPER_TRADING.value)
 
         # Verify Drawdown De-Gearing scales down position size when portfolio drawdown >= 7.5%
         rm = orch.paper_engine.risk_manager

@@ -145,6 +145,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     p_ide_apply.add_argument("--file", default=None, help="Path to JSON payload file")
     p_ide_apply.add_argument("--date", default=None, help="Optional trading date override")
 
+    p_revert = sub.add_parser(
+        "revert-baseline",
+        help="Revert one or all strategies back to their Golden Base Model (v1)",
+    )
+    p_revert.add_argument("--strategy-id", default=None, help="Optional strategy_id (reverts all if omitted)")
+
     args = parser.parse_args(argv)
     settings = get_settings()
     app = PlatformApplication(settings)
@@ -155,6 +161,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         cmd_daily(app, args.date, args.force)
     elif args.command == "weekly":
         cmd_weekly(app, args.date, args.family, args.force)
+    elif args.command == "revert-baseline":
+        restored = app.orchestrator.registry.revert_to_golden_baseline(args.strategy_id)
+        print(json.dumps({"restored": [s.to_dict() for s in restored]}, indent=2))
     elif args.command == "ide-context":
         res = app.orchestrator.export_ide_ai_context(
             trading_date=args.date, run_daily_first=not args.skip_daily

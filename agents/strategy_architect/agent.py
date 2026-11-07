@@ -154,34 +154,39 @@ class StrategyDiscoveryAgent(BaseAgent):
                 "name": "Bollinger & RSI Short-Term Mean Reversion",
                 "strategy_family": StrategyFamily.MEAN_REVERSION.value,
                 "observable_phenomenon": (
-                    "Liquid large-cap stocks in long-term uptrends (Close > SMA200) experiencing short-term "
-                    "liquidity shocks below their lower 20-day Bollinger Band and RSI(14) <= 35 tend to revert "
-                    "toward their 20-day mean over 3-8 trading days."
+                    "Institutional dip-buying at the 20-day moving average in top relative-strength uptrends "
+                    "creates repeatable mean-reversion swings without catching falling knives."
                 ),
                 "hypothesis": (
-                    "Buying oversold pullbacks (RSI14 <= 35, Close <= 1.01 * LowerBB20) in structurally healthy "
-                    "large-cap equities yields positive risk-adjusted returns with controlled drawdown."
+                    "Buying value-zone pullbacks near SMA20 / Lower Bollinger Band (50 <= RSI14 <= 74, RS20d >= 1.5%) "
+                    "in structurally aligned uptrends (Close > SMA200, SMA20 > SMA50) captures high-win-rate swing rebounds."
                 ),
                 "invalidation_conditions": (
-                    "Structural breakdown below 2.0x ATR stop-loss or persistent negative earnings shock."
+                    "Structural breakdown below 1.9x ATR stop-loss or RSI14 overbought exhaustion >= 78."
                 ),
-                "target_market_regimes": ["SIDEWAYS_CHOPPY", "BULL_LOW_VOL"],
+                "target_market_regimes": ["SIDEWAYS_CHOPPY", "BULL_LOW_VOL", "BULL_TREND"],
                 "holding_period_min_days": 3,
-                "holding_period_max_days": 8,
+                "holding_period_max_days": 12,
                 "universe": universe,
-                "required_indicators": ["rsi_14", "bb_lower_20", "sma_20", "sma_200", "atr_14"],
+                "required_indicators": ["rsi_14", "bb_lower_20", "sma_20", "sma_50", "sma_200", "atr_14", "rs_vs_spy_20d"],
                 "entry_rules": {
-                    "max_rsi_14": 36.0,
+                    "max_rsi_14": 74.0,
+                    "min_rsi_14": 50.0,
+                    "min_rs_vs_spy_20d": 1.5,
+                    "max_dist_above_sma20_pct": 8.0,
                     "require_above_sma200": True,
+                    "require_sma20_above_sma50": True,
+                    "require_spy_above_sma50": True,
                 },
                 "exit_rules": {
-                    "stop_loss_atr_mult": 2.0,
-                    "take_profit_atr_mult": 3.0,
-                    "exit_rsi_above": 62.0,
+                    "stop_loss_atr_mult": 1.9,
+                    "take_profit_atr_mult": 4.0,
+                    "trailing_stop_atr_mult": 2.4,
+                    "exit_rsi_above": 78.0,
                 },
                 "risk_params": {
-                    "risk_per_trade_pct": 0.008,
-                    "max_position_exposure_pct": 0.12,
+                    "risk_per_trade_pct": 0.01,
+                    "max_position_exposure_pct": 0.15,
                 },
             }
 
@@ -195,26 +200,29 @@ class StrategyDiscoveryAgent(BaseAgent):
                     "strongest relative-strength stocks within the top-ranked sectors captures dual tailwinds."
                 ),
                 "hypothesis": (
-                    "Entering equities with 20d RS vs SPY >= 3.0% inside top-2 ranked sectors when SPY > SMA50 "
-                    "outperforms passive SPY exposure on a Sharpe-adjusted basis over 5-14 trading days."
+                    "Entering equities with 20d RS vs SPY >= 2.8% inside top-3 ranked sectors when SPY > SMA50 "
+                    "outperforms passive SPY exposure across both full-period and out-of-sample regimes."
                 ),
                 "invalidation_conditions": (
                     "Sector loses leadership rank or stock closes below SMA20 / 2.0x ATR stop."
                 ),
                 "target_market_regimes": ["BULL_TREND", "SECTOR_ROTATION"],
-                "holding_period_min_days": 5,
-                "holding_period_max_days": 14,
+                "holding_period_min_days": 4,
+                "holding_period_max_days": 12,
                 "universe": universe,
-                "required_indicators": ["rs_vs_spy_20d", "sma_20", "sma_50", "atr_14"],
+                "required_indicators": ["rs_vs_spy_20d", "sma_20", "sma_50", "atr_14", "rsi_14"],
                 "entry_rules": {
-                    "max_sector_rank": 2,
-                    "min_rs_vs_spy_20d": 3.0,
+                    "max_sector_rank": 3,
+                    "min_rs_vs_spy_20d": 2.8,
+                    "min_ret_20d_pct": 2.5,
+                    "min_rsi_14": 50.0,
+                    "max_rsi_14": 76.0,
                     "require_spy_above_sma50": True,
                 },
                 "exit_rules": {
                     "stop_loss_atr_mult": 2.0,
-                    "take_profit_atr_mult": 3.8,
-                    "trailing_stop_atr_mult": 2.3,
+                    "take_profit_atr_mult": 4.0,
+                    "trailing_stop_atr_mult": 2.4,
                     "exit_below_sma20": True,
                 },
                 "risk_params": {

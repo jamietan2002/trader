@@ -187,6 +187,12 @@ def create_http_handler(app: PlatformApplication) -> type[BaseHTTPRequestHandler
                 elif path == "/api/account/reset":
                     res = app.orchestrator.paper_engine.reset_account_to_starting_capital()
                     self._send_json(200, res)
+                elif path == "/api/strategies/revert-baseline":
+                    sid = payload.get("strategy_id")
+                    restored = app.orchestrator.registry.revert_to_golden_baseline(
+                        strategy_id=str(sid) if sid else None
+                    )
+                    self._send_json(200, {"restored": [s.to_dict() for s in restored]})
                 elif path == "/api/copilot/cash":
                     cash = float(payload.get("cash_balance", 25000.0))
                     update_base = bool(payload.get("update_starting_baseline", False))
