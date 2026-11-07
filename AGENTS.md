@@ -49,7 +49,7 @@ This repository implements an autonomous **AI-Powered Swing Trading Research, Ba
 
 | Directory / File | Responsibility | Key Symbols |
 |---|---|---|
-| `main.py` | CLI entrypoint (`demo`, `bootstrap`, `daily`, `weekly`, `serve`) | `main()`, `cmd_demo()` |
+| `main.py` | CLI entrypoint (`demo`, `bootstrap`, `daily`, `weekly`, `ide-context`, `ide-apply`, `serve`) | `main()`, `cmd_demo()` |
 | `infrastructure/configuration/settings.py` | Environment config, risk & promotion defaults, paper-mode lock | `Settings`, `RiskParametersConfig`, `PromotionCriteriaConfig`, `LiveTradingProhibitedError` |
 | `infrastructure/database/db.py` | 16-table SQLite/PostgreSQL relational persistence & API cache | `DatabaseManager`, `SCHEMA_SQL` |
 | `infrastructure/logging/logger.py` | Structured logging with regex & explicit secret redaction | `get_logger()`, `SecretScrubbingFilter` |
@@ -85,4 +85,18 @@ Before completing any task, you must:
 1. Run `.venv/bin/python .agents/skills/maintain-project-context/scripts/verify_context.py` to verify all unit/integration tests and documentation sync checks pass.
 2. Update `AGENTS.md`, `GEMINI.md`, `USER_GUIDE.md`, subdirectory context files (`core/AGENTS.md`, `agents/AGENTS.md`), and the relevant topical Markdown docs (`ARCHITECTURE.md`, `STRATEGY_GUIDE.md`, `DATA_SOURCES.md`, `BACKTESTING_METHODOLOGY.md`, `DEPLOYMENT.md`, `ENVIRONMENT_VARIABLES.md`, `README.md`) to reflect your changes.
 3. Append a concise entry to ` docs/AGENT_CHANGELOG.md` recording the architectural/code changes made.
+
+---
+
+## 5. One-Word `"run"` Trigger (IDE-Native AI Trading & Alpha Optimization Workflow)
+
+Whenever the user types **`run`** (or `run daily` / `run weekly` / `run ai`) in this IDE chat, immediately activate and follow the workspace skill:
+- **`run-ai-cycle`** (`.agents/skills/run-ai-cycle/SKILL.md`)
+
+Execute all 4 steps automatically without asking for confirmation:
+1. Run `.venv/bin/python main.py ide-context` to ingest market bars, execute the deterministic session, and inspect the compact JSON context.
+2. Call `search_web` on the top ranked candidates and pending Copilot BUY setups to verify real-time news, earnings catalysts, and sector risks.
+3. Design 2–3 regime-adapted `candidate_strategies` and apply them alongside your `research_updates` via `.venv/bin/python main.py ide-apply --json '<payload>'` so they compete in the 9-gate Out-of-Sample & Walk-Forward tournament (with Incumbent Champion Protection).
+4. Commit and push `data/swing_trader.db` to `origin/main` and output a concise **Executive AI Trading Briefing & Real-Account Copilot Checklist**.
+
 

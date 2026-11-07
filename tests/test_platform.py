@@ -739,6 +739,44 @@ class TestSwingTradingPlatform(unittest.TestCase):
         self.assertEqual(after_sell["open_positions_count"], 0)
         self.assertAlmostEqual(after_sell["realised_pnl"], (130.0 - 120.0) * 15 - 1.0, places=2)
 
+        # 8. Verify IDE-Native AI Bridge (`export_ide_ai_context` & `apply_ide_ai_cycle`)
+        ide_ctx = orch.export_ide_ai_context(trading_date="2025-05-09", run_daily_first=False)
+        self.assertEqual(ide_ctx["session_date"], "2025-05-09")
+        self.assertTrue(len(ide_ctx["top_research_candidates"]) > 0)
+        top_tkr = ide_ctx["top_research_candidates"][0]["ticker"]
+
+        ide_res = orch.apply_ide_ai_cycle(
+            payload={
+                "research_updates": [
+                    {
+                        "ticker": top_tkr,
+                        "bullish_thesis": "IDE LLM verified strong institutional catalyst and relative strength.",
+                        "bearish_thesis": "Broad sector multiple compression if yields spike.",
+                        "catalyst_assessment": "Positive earnings guidance follow-through.",
+                        "research_confidence_score": 0.89,
+                    }
+                ],
+                "analyst_proposal": {
+                    "target_strategy_id": "strat_momentum_trend",
+                    "market_regime": "BULL_LOW_VOL",
+                    "diagnosis_summary": "IDE AI diagnosis of recent momentum trades.",
+                    "proposed_hypothesis": "Test slightly higher RS filter for momentum entries.",
+                },
+                "candidate_strategies": [
+                    {
+                        "target_strategy_id": "strat_momentum_trend",
+                        "name": "Momentum Trend (IDE AI Tuned)",
+                        "hypothesis": "Tighter relative strength filter improves win rate.",
+                        "entry_rules_patch": {"rs_20d_min": 0.022},
+                        "exit_rules_patch": {"take_profit_atr_mult": 3.6},
+                    }
+                ],
+            },
+            session_date="2025-05-09",
+        )
+        self.assertIn(top_tkr, ide_res["research_tickers_enriched"])
+        self.assertEqual(len(ide_res["tournament_results"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

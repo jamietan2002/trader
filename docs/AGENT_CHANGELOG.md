@@ -4,6 +4,20 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-07] — IDE-Native AI Alpha Workflow (`run` Skill, `ide-context` / `ide-apply` Bridge & Incumbent Champion Protection)
+
+### Summary
+- **IDE-Native AI Bridge (`export_ide_ai_context` & `apply_ide_ai_cycle` in `infrastructure/scheduler/orchestrator.py`, `main.py`)**: Added `python main.py ide-context` and `python main.py ide-apply` CLI commands so the Antigravity IDE LLM can act as the platform's Chief Quantitative Strategist & News Catalyst Analyst with zero external API keys required in `.env`.
+- **One-Word `"run"` Skill (`.agents/skills/run-ai-cycle/SKILL.md`, `AGENTS.md`, `GEMINI.md`)**: Created a dedicated workspace skill triggered whenever the user types `run` in the IDE that (1) exports deterministic market/portfolio context, (2) searches live web news (`search_web`) for earnings/macro catalysts on top setups, (3) runs a multi-candidate AI strategy parameter tournament via `ide-apply`, and (4) syncs `data/swing_trader.db` to GitHub.
+- **Incumbent Champion Protection (`StrategyEvaluationAgent.evaluate_pipeline_results` in `agents/strategy_evaluator/agent.py`)**: Enforced monotonic strategy quality so a challenger version `v+1` is only promoted over an existing `PAPER_TRADING` version `v` if it passes all 9 validation gates AND matches or beats the incumbent's Sharpe/Return/Calmar metrics.
+
+### Modules Added / Modified
+- `.agents/skills/run-ai-cycle/SKILL.md`
+- `infrastructure/scheduler/orchestrator.py`, `main.py`, `agents/strategy_evaluator/agent.py`
+- `AGENTS.md`, `GEMINI.md`, `USER_GUIDE.md`, `docs/AGENT_CHANGELOG.md`, `tests/test_platform.py`
+
+---
+
 ## [2026-11-07] — Institutional Quantitative Upgrades: Deflated Sharpe (DSR), +1.25R Breakeven/Chandelier Stop Ratchet, Drawdown De-Gearing & Multi-Candidate Weekly Tournament
 
 ### Summary

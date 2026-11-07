@@ -448,3 +448,247 @@ class AutonomousWorkflowOrchestrator:
             out.append(d)
         return out
 
+    def export_ide_ai_context(
+        self,
+        trading_date: Optional[str] = None,
+        run_daily_first: bool = True,
+    ) -> Dict[str, Any]:
+        """Run deterministic daily ingestion/execution and export a compact JSON brief for the IDE AI Agent."""
+        from core.indicators.technical import compute_indicator_series
+
+        if not self.registry.list_strategies():
+            self.bootstrap_baseline_system()
+
+        spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker)
+        latest_date = trading_date or (spy_bars[-1].bar_date if spy_bars else date.today().isoformat())
+
+        daily_res = None
+        if run_daily_first:
+            daily_res = self.run_daily_workflow(trading_date=latest_date, force=False)
+
+        spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker, end_date=latest_date)
+        spy_inds = compute_indicator_series(spy_bars) if spy_bars else {}
+        spy_ind = spy_inds.get(latest_date) or (list(spy_inds.values())[-1] if spy_inds else None)
+        regime = self.backtest_engine._classify_regime(spy_ind)
+        if regime == "UNKNOWN":
+            regime = "BULL_LOW_VOL"
+
+        reports = self.research_agent.get_latest_reports(limit=8)
+        compact_candidates = [
+            {
+                "ticker": r["ticker"],
+                "company_name": r["company_name"],
+                "sector": r["market_and_sector_context"]["sector"],
+                "price": r["current_price"],
+                "rs_20d_vs_spy_pct": r["relative_strength_vs_spy_20d"],
+                "volume_ratio_20": r["volume_analysis"]["volume_ratio_20"],
+                "rsi_14": (r.get("relevant_technical_indicators") or {}).get("rsi_14"),
+                "consolidation_10d_pct": (r.get("relevant_technical_indicators") or {}).get("consolidation_range_10d_pct"),
+                "suggested_strategy_family": r["suggested_strategy_family"],
+                "composite_rank_score": r["composite_rank_score"],
+                "current_bullish_thesis": r["bullish_thesis"],
+                "current_bearish_thesis": r["bearish_thesis"],
+            }
+            for r in reports
+        ]
+
+        active_strats = self.registry.list_strategies(status=StrategyStatus.PAPER_TRADING.value)
+        strat_summaries = [
+            {
+                "strategy_id": s.strategy_id,
+                "version": s.version,
+                "name": s.name,
+                "strategy_family": s.strategy_family,
+                "holding_period_max_days": s.holding_period_max_days,
+                "entry_rules": s.entry_rules,
+                "exit_rules": s.exit_rules,
+                "backtest_metrics": {
+                    k: (s.backtest_summary or {}).get(k)
+                    for k in (
+                        "total_return_pct",
+                        "sharpe_ratio",
+                        "deflated_sharpe_pct",
+                        "profit_factor",
+                        "max_drawdown_pct",
+                        "win_rate_pct",
+                        "trade_count",
+                    )
+                },
+            }
+            for s in active_strats
+        ]
+
+        ledger_sells = [
+            t for t in self.paper_engine.get_trade_ledger(limit=30) if t.get("side") == "SELL"
+        ][:8]
+
+        return {
+            "session_date": latest_date,
+            "market_regime": {
+                "regime": regime,
+                "spy_close": round(float(spy_ind.close), 2) if spy_ind else None,
+                "spy_rsi_14": round(float(spy_ind.rsi_14), 2) if (spy_ind and spy_ind.rsi_14) else None,
+                "spy_return_20d_pct": round(float(spy_ind.ret_20d_pct), 2) if (spy_ind and spy_ind.ret_20d_pct is not None) else None,
+                "spy_volatility_20d_pct": round(float(spy_ind.realised_vol_20d_annualised), 2) if (spy_ind and spy_ind.realised_vol_20d_annualised is not None) else None,
+            },
+            "top_research_candidates": compact_candidates,
+            "active_paper_strategies": strat_summaries,
+            "paper_account_summary": self.paper_engine.get_account_summary(),
+            "recent_closed_paper_trades": ledger_sells,
+            "live_copilot_action_plan": self.live_copilot.get_daily_action_plan(as_of_date=latest_date),
+            "daily_workflow_status": daily_res.get("status", "COMPLETED") if isinstance(daily_res, dict) else "COMPLETED",
+        }
+
+    def apply_ide_ai_cycle(
+        self,
+        payload: Dict[str, Any],
+        session_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Apply IDE AI Agent qualitative research updates and run multi-candidate strategy tournament."""
+        import uuid
+        from infrastructure.database.db import utc_now_iso
+
+        spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker)
+        dt_str = session_date or payload.get("session_date") or (spy_bars[-1].bar_date if spy_bars else date.today().isoformat())
+        now_iso = utc_now_iso()
+
+        # 1. Enrich candidate research reports with IDE LLM's live web-search catalyst analysis
+        research_updates = payload.get("research_updates") or []
+        updated_tickers: List[str] = []
+        for upd in research_updates:
+            tkr = str(upd.get("ticker", "")).strip().upper()
+            if not tkr:
+                continue
+            row = self.db.fetch_one(
+                "SELECT report_id, report_json FROM research_reports WHERE ticker = ? ORDER BY as_of_date DESC, created_at DESC LIMIT 1",
+                (tkr,),
+            )
+            if not row:
+                continue
+            rep = json.loads(row["report_json"])
+            if upd.get("bullish_thesis"):
+                rep["bullish_thesis"] = str(upd["bullish_thesis"])
+            if upd.get("bearish_thesis"):
+                rep["bearish_thesis"] = str(upd["bearish_thesis"])
+            if upd.get("catalyst_assessment"):
+                rep["catalyst_assessment"] = str(upd["catalyst_assessment"])
+            if upd.get("main_risks") and isinstance(upd["main_risks"], list):
+                rep["main_risks"] = [str(x) for x in upd["main_risks"]]
+            if upd.get("research_confidence_score") is not None:
+                rep["research_confidence_score"] = round(
+                    max(0.1, min(0.95, float(upd["research_confidence_score"]))), 2
+                )
+            self.db.execute(
+                "UPDATE research_reports SET report_json = ? WHERE report_id = ?",
+                (json.dumps(rep), row["report_id"]),
+            )
+            updated_tickers.append(tkr)
+
+        # 2. Record optional AI Performance Analyst proposal
+        prop_in = payload.get("analyst_proposal")
+        recorded_proposal_id: Optional[str] = None
+        if isinstance(prop_in, dict) and prop_in.get("proposed_hypothesis"):
+            recorded_proposal_id = f"prop_ide_{dt_str.replace('-', '')}_{uuid.uuid4().hex[:6]}"
+            target_sid = str(prop_in.get("target_strategy_id", "strat_momentum_trend"))
+            self.db.execute(
+                """
+                INSERT INTO experiment_proposals (
+                    proposal_id, session_date, target_strategy_id, identified_weakness,
+                    market_regime, proposed_hypothesis, proposed_changes_json,
+                    status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'PROPOSED', ?)
+                """,
+                (
+                    recorded_proposal_id,
+                    dt_str,
+                    target_sid,
+                    str(prop_in.get("diagnosis_summary", "IDE LLM catalyst and attribution diagnosis.")),
+                    str(prop_in.get("market_regime", "IDE_AI_ANALYSIS")),
+                    str(prop_in["proposed_hypothesis"]),
+                    json.dumps(prop_in.get("parameter_adjustments") or {}),
+                    now_iso,
+                ),
+            )
+
+        # 3. Evaluate AI-proposed StrategyConfig candidates in a 9-Gate Backtest & Walk-Forward Tournament
+        candidate_specs = payload.get("candidate_strategies") or []
+        tournament_results: List[Dict[str, Any]] = []
+        for spec in candidate_specs:
+            base_sid = str(spec.get("target_strategy_id", "strat_momentum_trend"))
+            existing_versions = self.registry.list_strategies(strategy_id=base_sid)
+            if not existing_versions:
+                continue
+            cand_strat = self.registry.create_new_version(
+                base_strategy_id=base_sid,
+                entry_rules_updates=spec.get("entry_rules_patch") or spec.get("entry_rules_updates") or {},
+                exit_rules_updates=spec.get("exit_rules_patch") or spec.get("exit_rules_updates") or {},
+                hypothesis_note=str(spec.get("hypothesis") or "IDE AI parameter hypothesis to maximize risk-adjusted P&L."),
+            )
+            self.registry.update_status(
+                cand_strat.strategy_id,
+                cand_strat.version,
+                StrategyStatus.BACKTESTING,
+                reason=f"IDE AI Tournament ({dt_str})",
+            )
+            pipeline = self.backtest_engine.run_in_sample_validation_oos_pipeline(cand_strat)
+            full_bt = pipeline["full_period"]
+            eval_rep = self.evaluator_agent.evaluate_pipeline_results(
+                strategy=cand_strat,
+                pipeline_results=pipeline,
+                dataset_version=f"ds_ide_ai_{dt_str}",
+                auto_transition=True,
+            )
+            self.registry.record_experiment(
+                experiment_id=full_bt["experiment_id"],
+                strategy_id=cand_strat.strategy_id,
+                version=cand_strat.version,
+                experiment_type="IDE_AI_TOURNAMENT",
+                dataset_version=f"ds_ide_ai_{dt_str}",
+                start_date=full_bt["start_date"],
+                end_date=full_bt["end_date"],
+                parameters={
+                    "entry_rules": cand_strat.entry_rules,
+                    "exit_rules": cand_strat.exit_rules,
+                },
+                metrics=full_bt["metrics"],
+                equity_curve=full_bt["equity_curve"],
+                trades=full_bt["trades"],
+                evaluation_report=eval_rep.to_dict(),
+                passed_promotion=eval_rep.promoted,
+            )
+            tournament_results.append(
+                {
+                    "strategy_id": cand_strat.strategy_id,
+                    "version": cand_strat.version,
+                    "hypothesis": cand_strat.hypothesis,
+                    "promoted": eval_rep.promoted,
+                    "new_status": eval_rep.new_status,
+                    "decision_summary": eval_rep.decision_summary,
+                    "metrics": {
+                        k: full_bt["metrics"].get(k)
+                        for k in (
+                            "total_return_pct",
+                            "sharpe_ratio",
+                            "deflated_sharpe_pct",
+                            "profit_factor",
+                            "max_drawdown_pct",
+                            "trade_count",
+                        )
+                    },
+                }
+            )
+
+        if recorded_proposal_id and tournament_results:
+            any_promoted = any(r["promoted"] for r in tournament_results)
+            self.analyst_agent.mark_proposal_status(
+                recorded_proposal_id, "PROMOTED" if any_promoted else "REJECTED"
+            )
+
+        return {
+            "session_date": dt_str,
+            "research_tickers_enriched": updated_tickers,
+            "recorded_proposal_id": recorded_proposal_id,
+            "tournament_results": tournament_results,
+            "updated_copilot_action_plan": self.live_copilot.get_daily_action_plan(as_of_date=dt_str),
+        }
+

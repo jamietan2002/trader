@@ -130,6 +130,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     p_serve.add_argument("--host", default=None, help="Bind host (default 127.0.0.1)")
     p_serve.add_argument("--port", type=int, default=None, help="Bind port (default 8080)")
 
+    p_ide_ctx = sub.add_parser(
+        "ide-context",
+        help="Run deterministic daily ingestion/execution and output compact JSON context for the IDE AI Agent",
+    )
+    p_ide_ctx.add_argument("--date", default=None, help="Optional trading date override (YYYY-MM-DD)")
+    p_ide_ctx.add_argument("--skip-daily", action="store_true", help="Skip running daily workflow first")
+
+    p_ide_apply = sub.add_parser(
+        "ide-apply",
+        help="Apply IDE AI Agent qualitative research updates and run multi-candidate strategy tournament",
+    )
+    p_ide_apply.add_argument("--json", default=None, help="Inline JSON payload string")
+    p_ide_apply.add_argument("--file", default=None, help="Path to JSON payload file")
+    p_ide_apply.add_argument("--date", default=None, help="Optional trading date override")
+
     args = parser.parse_args(argv)
     settings = get_settings()
     app = PlatformApplication(settings)
@@ -140,6 +155,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         cmd_daily(app, args.date, args.force)
     elif args.command == "weekly":
         cmd_weekly(app, args.date, args.family, args.force)
+    elif args.command == "ide-context":
+        res = app.orchestrator.export_ide_ai_context(
+            trading_date=args.date, run_daily_first=not args.skip_daily
+        )
+        print(json.dumps(res, indent=2))
+    elif args.command == "ide-apply":
+        if args.file:
+            with open(args.file, "r", encoding="utf-8") as fh:
+                payload = json.load(fh)
+        elif args.json:
+            payload = json.loads(args.json)
+        else:
+            payload = json.load(sys.stdin)
+        res = app.orchestrator.apply_ide_ai_cycle(payload=payload, session_date=args.date)
+        print(json.dumps(res, indent=2))
     elif args.command == "serve":
         run_server(host=args.host, port=args.port, bootstrap=True)
     else:

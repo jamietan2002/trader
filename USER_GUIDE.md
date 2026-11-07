@@ -71,6 +71,13 @@ The platform implements 5 specialized agent classes (`MarketResearchAgent`, `Str
      - **SEC 8-K / 10-Q & Earnings Transcript Sentiment**: Feed quarterly earnings call transcripts and SEC filings into `MarketResearchAgent` so Gemini scores management guidance tone before `strat_pead_drift` enters.
      - **News Catalyst Filtering**: Have Gemini classify breaking news headlines to distinguish genuine fundamental catalysts from noise before taking a breakout trade.
      - **Adaptive Hypothesis Generation**: Let `StrategyDiscoveryAgent` use Gemini to analyze all losing trades from the past month and propose targeted multi-indicator entry/exit filters for `v+1`.
+3. **Using ONLY This IDE's Built-In LLM (Zero External API Keys Needed — Just Type `run`)**:
+   - Even without an external `GEMINI_API_KEY` or `OPENAI_API_KEY` in `.env`, you can run full AI research and strategy optimization directly through **this Antigravity IDE conversation** by simply typing **`run`** in the chat (powered by `.agents/skills/run-ai-cycle/SKILL.md`, `python main.py ide-context`, and `python main.py ide-apply`):
+     1. **Step 1 (`ide-context`)**: Runs deterministic market ingestion and exports a compact JSON brief of the current `SPY` market regime, top technical candidates, open paper/Copilot holdings, and active strategy parameters.
+     2. **Step 2 (Live Web News Catalyst Audit via `search_web`)**: The IDE AI agent searches real-time financial news, earnings call reactions, and macro catalysts for the top candidates and writes enriched `bullish_thesis`, `bearish_thesis`, and `catalyst_assessment` analyses directly into `data/swing_trader.db`.
+     3. **Step 3 (Multi-Candidate AI Strategy Tournament via `ide-apply`)**: The IDE AI agent designs 2–3 regime-tuned strategy parameter improvements and tests them through the **9-Gate Out-of-Sample & Walk-Forward Backtest Tournament** with **Incumbent Champion Protection** (a new version `v+1` is only promoted to `PAPER_TRADING` if it passes all 9 validation gates *and* beats or matches the active champion's Sharpe/Return/Calmar metrics).
+     4. **Step 4 (Cloud Sync & Copilot Briefing)**: Automatically pushes `data/swing_trader.db` to GitHub so your 24/7 Streamlit Cloud dashboard updates immediately, and prints your daily **Real-Account Copilot Checklist** in chat.
+   - **Want it 100% hands-free on a schedule inside the IDE?** You can also type `/schedule` (or ask the agent to set up a scheduled automation) so Antigravity automatically runs this `run` workflow in the background every weekday after market close!
 
 ---
 

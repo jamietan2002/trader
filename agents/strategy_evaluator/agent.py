@@ -117,6 +117,26 @@ class StrategyEvaluationAgent(BaseAgent):
             and (max_single_trade_pnl / total_net_pnl) > 0.65
         )
 
+        # Incumbent Champion Protection: If an active PAPER_TRADING version of this strategy already exists,
+        # only promote v+1 if it beats or matches the incumbent's Sharpe, Net Return, or Drawdown-Adjusted Return.
+        beats_incumbent = True
+        if strategy.version > 1:
+            incumbents = [
+                s
+                for s in self.registry.list_strategies(status=StrategyStatus.PAPER_TRADING.value)
+                if s.strategy_id == strategy.strategy_id and s.version < strategy.version and s.backtest_summary
+            ]
+            if incumbents:
+                inc = sorted(incumbents, key=lambda x: x.version)[-1]
+                inc_m = inc.backtest_summary or {}
+                inc_sharpe = float(inc_m.get("sharpe_ratio", 0.0))
+                inc_ret = float(inc_m.get("total_return_pct", 0.0))
+                inc_calmar = float(inc_m.get("calmar_ratio", 0.0))
+                curr_ret = float(full_m.get("total_return_pct", 0.0))
+                curr_calmar = float(full_m.get("calmar_ratio", 0.0))
+                if inc_sharpe > 0 and sharpe < (inc_sharpe - 0.03) and curr_ret < inc_ret and curr_calmar < inc_calmar:
+                    beats_incumbent = False
+
         checks: Dict[str, bool] = {
             "positive_oos_net_return": oos_net_ret > self.criteria.min_oos_net_return,
             "sharpe_above_threshold": sharpe >= self.criteria.min_sharpe_ratio,
@@ -126,10 +146,11 @@ class StrategyEvaluationAgent(BaseAgent):
             "walk_forward_consistency": wf_consistency >= self.criteria.min_walk_forward_consistency,
             "positive_after_transaction_costs": survives_costs if self.criteria.require_positive_after_costs else True,
             "competitive_vs_spy_risk_adjusted": (
-                sharpe >= spy_sharpe * 0.85 or float(full_m.get("total_return_pct", 0.0)) >= float(full_m.get("benchmark_return_pct", 0.0))
+                (sharpe >= spy_sharpe * 0.85 or float(full_m.get("total_return_pct", 0.0)) >= float(full_m.get("benchmark_return_pct", 0.0)))
+                and beats_incumbent
             )
             if self.criteria.require_beat_benchmark_risk_adjusted
-            else True,
+            else beats_incumbent,
             "no_extreme_return_concentration": not concentrated_returns,
         }
 
