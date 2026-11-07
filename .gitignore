@@ -1,0 +1,22 @@
+# Python & Virtualenvs
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Secrets & Environment
+.env
+.env.local
+
+# Runtime SQLite Databases & Logs
+data/*.db
+data/*.db-shm
+data/*.db-wal
+*.log
+
+# OS
+.DS_Store
+
