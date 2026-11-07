@@ -11,8 +11,7 @@ env/
 .env
 .env.local
 
-# Runtime SQLite Databases & Logs
-data/*.db
+# Runtime SQLite Databases & Logs (allow data/swing_trader.db to be tracked for GitHub Actions + Streamlit Cloud sync; ignore WAL/SHM & test DBs)
 data/*.db-shm
 data/*.db-wal
 *.log

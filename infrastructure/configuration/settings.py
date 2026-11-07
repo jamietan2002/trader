@@ -71,7 +71,7 @@ class Settings:
     operator_timezone: str = "Asia/Singapore"
 
     database_url: str = ""
-    market_data_provider: str = "local_seeded"  # local_seeded | alpaca | polygon | fmp | finnhub
+    market_data_provider: str = "alpaca"  # alpaca | local_seeded | polygon | fmp | finnhub
     llm_provider: str = "deterministic_research"  # deterministic_research | openai | gemini | anthropic
     llm_model: str = "gemini-2.5-pro"
 
@@ -178,7 +178,7 @@ def get_settings(env_path: Path | None = None) -> Settings:
         market_timezone=os.environ.get("MARKET_TIMEZONE", "America/New_York"),
         operator_timezone=os.environ.get("OPERATOR_TIMEZONE", "Asia/Singapore"),
         database_url=os.environ.get("DATABASE_URL", ""),
-        market_data_provider=os.environ.get("MARKET_DATA_PROVIDER", "local_seeded"),
+        market_data_provider=os.environ.get("MARKET_DATA_PROVIDER", "alpaca"),
         llm_provider=os.environ.get("LLM_PROVIDER", "deterministic_research"),
         llm_model=os.environ.get("LLM_MODEL", "gemini-2.5-pro"),
         alpaca_api_key=os.environ.get("ALPACA_API_KEY", ""),

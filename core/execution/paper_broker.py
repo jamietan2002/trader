@@ -520,6 +520,18 @@ class PaperTradingEngine:
             ),
         )
 
+        # 8. Optional Alpaca Paper Brokerage Order Mirroring (when ALPACA_API_KEY is configured)
+        if self.settings.alpaca_api_key and self.settings.alpaca_secret_key:
+            self._mirror_order_to_alpaca_paper(
+                ticker=ticker,
+                side=side_u,
+                qty=filled_qty,
+                order_type=order_type_u,
+                limit_price=limit_price,
+                stop_price=stop_price,
+                client_order_id=idem_key,
+            )
+
         return OrderSubmissionResult(
             order_id=order_id,
             idempotency_key=idem_key,
@@ -529,6 +541,58 @@ class PaperTradingEngine:
             commission_usd=commission_usd,
             slippage_usd=slippage_usd,
         )
+
+    def _mirror_order_to_alpaca_paper(
+        self,
+        ticker: str,
+        side: str,
+        qty: int,
+        order_type: str,
+        limit_price: Optional[float],
+        stop_price: Optional[float],
+        client_order_id: str,
+    ) -> None:
+        """Mirror approved paper orders to Alpaca's paper-api.alpaca.markets endpoint when credentials exist."""
+        import urllib.request
+        base_url = self.settings.alpaca_paper_base_url.rstrip("/")
+        if "paper-api.alpaca.markets" not in base_url:
+            raise LiveTradingProhibitedError(
+                f"Refusing to mirror order to non-paper Alpaca URL: {base_url}"
+            )
+        url = f"{base_url}/v2/orders"
+        type_map = {
+            "MARKET": "market",
+            "LIMIT": "limit",
+            "STOP_LOSS": "stop",
+            "TAKE_PROFIT": "limit",
+        }
+        payload: Dict[str, Any] = {
+            "symbol": ticker,
+            "qty": str(qty),
+            "side": side.lower(),
+            "type": type_map.get(order_type, "market"),
+            "time_in_force": "day",
+            "client_order_id": client_order_id[:48],
+        }
+        if payload["type"] == "limit" and limit_price is not None:
+            payload["limit_price"] = str(round(limit_price, 2))
+        if payload["type"] == "stop" and stop_price is not None:
+            payload["stop_price"] = str(round(stop_price, 2))
+        try:
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "APCA-API-KEY-ID": self.settings.alpaca_api_key,
+                    "APCA-API-SECRET-KEY": self.settings.alpaca_secret_key,
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                resp.read()
+        except Exception as exc:
+            logger.warning(f"Alpaca paper order mirror skipped/failed ({exc}); internal paper ledger remains authoritative.")
 
     def mark_to_market_and_snapshot(self, trading_date: str) -> Dict[str, Any]:
         """Mark all open positions to `trading_date` market close, process dividends, and save snapshot."""

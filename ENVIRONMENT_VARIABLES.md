@@ -13,7 +13,7 @@ All environment variables are loaded via `infrastructure/configuration/settings.
 | `MARKET_TIMEZONE` | `America/New_York` | US equity market timezone (`NYSE`/`NASDAQ`). |
 | `OPERATOR_TIMEZONE` | `Asia/Singapore` | Operator reporting timezone. |
 | `DATABASE_URL` | `sqlite:///data/swing_trader.db` | Relational database connection URL (SQLite or PostgreSQL). |
-| `MARKET_DATA_PROVIDER` | `local_seeded` | Active provider: `local_seeded`, `alpaca`, `polygon`, `fmp`, or `finnhub`. |
+| `MARKET_DATA_PROVIDER` | `alpaca` | Active provider: `alpaca` (with automatic `local_seeded` fallback), `local_seeded`, `polygon`, `fmp`, or `finnhub`. |
 | `ALPACA_API_KEY` | *(empty)* | Alpaca API key ID (redacted in logs). |
 | `ALPACA_SECRET_KEY` | *(empty)* | Alpaca secret key (redacted in logs). |
 | `ALPACA_PAPER_BASE_URL` | `https://paper-api.alpaca.markets` | Alpaca paper trading endpoint. |

@@ -70,6 +70,8 @@ This repository implements an autonomous **AI-Powered Swing Trading Research, Ba
 | `agents/risk_manager/agent.py` | Portfolio health & kill-switch governance agent | `RiskManagerAgent` |
 | `api/server.py` | HTTP REST API & 7-tab Web Dashboard server | `PlatformApplication`, `run_server()` |
 | `dashboard/ui_template.py` | Interactive 7-tab HTML/SVG/JS frontend | `DASHBOARD_HTML` |
+| `dashboard/streamlit_app.py` | Streamlit Community Cloud 24/7 hosted dashboard & Weekly Digest | `main()` |
+| `.github/workflows/autonomous_trading.yml` | Scheduled Daily & Weekly GitHub Actions automation | `autonomous-trading-cycle` |
 | `tests/test_platform.py` | 10-suite unit & end-to-end integration test runner | `TestSwingTradingPlatform` |
 
 ---

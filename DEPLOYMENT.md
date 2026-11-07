@@ -1,6 +1,34 @@
-# Deployment Guide
+# Deployment & Zero-Cost Autonomous Hosting Guide
 
-## 1. Local Standalone Execution (Recommended for Development)
+## 1. Zero-Cost Autonomous Cloud Architecture (Recommended)
+
+This repository is pre-configured for **100% free, zero-maintenance autonomous operation** combining:
+1. **GitHub Actions (`.github/workflows/autonomous_trading.yml`)**:
+   - **Daily Run (Mon–Fri, 21:30 UTC / after US Market Close)**: Automatically ingests daily market bars (via Alpaca Markets or built-in fallback), scans the US equity universe (`MarketResearchAgent`), executes approved `PAPER_TRADING` strategy signals in your `$100,000` paper account (`PaperTradingEngine`), reconciles P&L, runs the `PerformanceAnalystAgent`, and commits the updated SQLite state (`data/swing_trader.db`) back to the repository.
+   - **Weekly Self-Improvement Loop (Saturday, 02:00 UTC / 10:00 AM SGT)**: Reviews post-session attribution and weaknesses, generates new falsifiable `StrategyConfig` hypotheses (`StrategyDiscoveryAgent`), runs the 3-split Backtest + 4-Window Walk-Forward + Cost Stress Test pipeline, and automatically promotes or rejects candidates via the 9-gate `StrategyEvaluationAgent`.
+2. **Streamlit Community Cloud (`dashboard/streamlit_app.py`)**:
+   - Connects directly to your GitHub repo (`jamietan2002/trader`) and hosts your **7-Tab Web Dashboard + Weekly Operator Digest** 24/7 for free. Every time GitHub Actions commits updated state to `data/swing_trader.db`, your live dashboard refreshes automatically.
+
+### One-Time Setup Steps (Takes ~3 Minutes)
+1. **Merge PR #1 into `main`** on GitHub (`https://github.com/jamietan2002/trader/pull/1`).
+2. **Add Your Free Alpaca Paper API Keys (Optional but Recommended)**:
+   - Sign up for a free Paper Trading account at [https://app.alpaca.markets](https://app.alpaca.markets).
+   - Generate your **Paper API Key ID** and **Secret Key**.
+   - In your GitHub repo, go to **Settings $\rightarrow$ Secrets and variables $\rightarrow$ Actions $\rightarrow$ New repository secret** and add:
+     - `ALPACA_API_KEY`
+     - `ALPACA_SECRET_KEY`
+   - *(Note: Even before you add these secrets, the workflow runs seamlessly using the deterministic `local_seeded` fallback dataset.)*
+3. **Connect Streamlit Community Cloud (Free 24/7 Dashboard)**:
+   - Go to [https://share.streamlit.io](https://share.streamlit.io) and sign in with GitHub.
+   - Click **Create app**:
+     - **Repository**: `jamietan2002/trader`
+     - **Branch**: `main`
+     - **Main file path**: `dashboard/streamlit_app.py`
+   - Click **Deploy**. You will get a permanent public/private URL where you can check your portfolio once a week.
+
+---
+
+## 2. Local Standalone Execution (Development)
 
 ```bash
 # 1. Create virtual environment
