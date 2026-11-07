@@ -54,6 +54,9 @@ Open **`http://127.0.0.1:8080`** in your browser to inspect:
 
 ## Documentation Index
 
+- [AGENTS.md](AGENTS.md) & [GEMINI.md](GEMINI.md) — Agent context, architectural invariants, codebase map, and mandatory maintenance rules.
+- [`maintain-project-context` Skill](.agents/skills/maintain-project-context/SKILL.md) — Workspace skill & automated verification script (`verify_context.py`) ensuring agents keep context and docs synchronized on every implementation.
+- [docs/AGENT_CHANGELOG.md](docs/AGENT_CHANGELOG.md) — Chronological agent implementation and architectural changelog.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — Modular monolith design, deterministic vs AI boundaries, and database schema.
 - [STRATEGY_GUIDE.md](STRATEGY_GUIDE.md) — Specification of the 5 strategy families, entry/exit rules, and ATR risk sizing.
 - [DATA_SOURCES.md](DATA_SOURCES.md) — Evaluation of Alpaca, Polygon, FMP, Finnhub, SEC EDGAR, and point-in-time normalization.
