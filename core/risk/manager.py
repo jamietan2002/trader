@@ -311,6 +311,29 @@ class PortfolioRiskManager:
         )
         est_risk_usd = round(shares * max(0.0, risk_per_share), 2)
 
+        # 10. Portfolio Heat Cap (Maximum Total Open Stop-Loss Risk Across All Positions)
+        existing_open_risk_usd = 0.0
+        for pos in open_positions.values():
+            pos_qty = float(pos.get("quantity", 0))
+            pos_curr = float(pos.get("current_price", pos.get("avg_entry_price", 0.0)))
+            pos_stop = pos.get("stop_loss_price")
+            if pos_stop is not None and float(pos_stop) < pos_curr:
+                existing_open_risk_usd += pos_qty * (pos_curr - float(pos_stop))
+            else:
+                existing_open_risk_usd += pos_qty * pos_curr * 0.03
+
+        max_open_risk_usd = portfolio_equity * getattr(self.config, "max_total_open_risk_pct", 0.05)
+        if existing_open_risk_usd + est_risk_usd > max_open_risk_usd + 1e-6:
+            return self._veto(
+                account_id,
+                eval_date,
+                ticker,
+                strategy_id,
+                "MAX_TOTAL_OPEN_RISK",
+                f"Total open portfolio stop-loss risk (${existing_open_risk_usd + est_risk_usd:,.2f}) "
+                f"would exceed {getattr(self.config, 'max_total_open_risk_pct', 0.05) * 100:.1f}% limit (${max_open_risk_usd:,.2f}).",
+            )
+
         return RiskDecision(
             approved=True,
             veto_reason=None,

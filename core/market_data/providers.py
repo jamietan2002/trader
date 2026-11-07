@@ -584,6 +584,34 @@ class MarketDataService:
             universe = [u for u in universe if u.ticker in allowed]
 
         now_iso = utc_now_iso()
+
+        # Check if the provider switched (e.g., from local_seeded to alpaca) and purge mixed-provider bars
+        existing_sources = [
+            r["provider_source"]
+            for r in self.db.fetch_all("SELECT DISTINCT provider_source FROM market_bars_daily")
+        ]
+        if existing_sources and any(s != self.provider.provider_name for s in existing_sources):
+            logger.info(
+                f"Data provider changed from {existing_sources} to {self.provider.provider_name}; "
+                "re-normalizing market_bars_daily and resetting paper positions to prevent mixed price scales."
+            )
+            self.db.execute("DELETE FROM market_bars_daily")
+            self.db.execute("DELETE FROM paper_positions")
+            self.db.execute("DELETE FROM paper_orders")
+            self.db.execute("DELETE FROM trade_ledger")
+            self.db.execute("DELETE FROM portfolio_snapshots")
+            self.db.execute("DELETE FROM risk_alerts")
+            self.db.execute("DELETE FROM job_executions")
+            self.db.execute(
+                """
+                UPDATE paper_accounts
+                SET cash_balance = starting_cash, realised_pnl = 0.0,
+                    peak_equity = starting_cash, kill_switch_engaged = 0,
+                    kill_switch_reason = NULL, updated_at = ?
+                """,
+                (now_iso,),
+            )
+
         universe_rows = [
             (
                 u.ticker,
@@ -835,6 +863,13 @@ class MarketDataService:
             params.append(end_date)
         sql = f"SELECT * FROM market_bars_daily WHERE {' AND '.join(clauses)} ORDER BY bar_date ASC"
         rows = self.db.fetch_all(sql, tuple(params))
+
+        # Guardrail against mixed-provider price corruption: if more than one provider_source exists
+        # for the same ticker, keep only the active provider's bars.
+        sources = {r["provider_source"] for r in rows}
+        if len(sources) > 1 and self.provider.provider_name in sources:
+            rows = [r for r in rows if r["provider_source"] == self.provider.provider_name]
+
         return [
             DailyBar(
                 ticker=r["ticker"],

@@ -18,6 +18,7 @@ class RiskParametersConfig:
     """Default conservative portfolio risk limits."""
 
     max_risk_per_trade_pct: float = 0.01  # 1% of portfolio equity
+    max_total_open_risk_pct: float = 0.05  # 5% max aggregate open stop-loss risk across all positions
     max_simultaneous_positions: int = 10
     max_single_stock_exposure_pct: float = 0.15  # 15% of portfolio equity
     max_sector_exposure_pct: float = 0.30  # 30% of portfolio equity

@@ -65,9 +65,14 @@ jobs:
               end_date=today_str,
           )
 
-          # Determine latest valid US trading day
-          trading_days = USTradingCalendar.get_trading_days("2025-01-02", today_str)
-          session_date = trading_days[-1] if trading_days else "2025-06-27"
+          # Determine latest actual bar_date ingested for SPY
+          spy_bars = app.orchestrator.market_data.get_bars("SPY")
+          session_date = spy_bars[-1].bar_date if spy_bars else "2025-06-27"
+
+          # If paper account has no snapshots yet (e.g. fresh provider reset), replay the last 10 trading sessions
+          if not app.orchestrator.paper_engine.get_portfolio_snapshots() and len(spy_bars) >= 12:
+              for hist_b in spy_bars[-10:-1]:
+                  app.orchestrator.run_daily_workflow(trading_date=hist_b.bar_date, force=True)
 
           if mode == "demo":
               from main import cmd_demo

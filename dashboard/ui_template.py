@@ -183,49 +183,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </header>
 
   <nav id="main-nav">
-    <button class="active" onclick="switchTab('eli5', this)">🧸 Start Here (Explain Like I'm 5)</button>
-    <button onclick="switchTab('overview', this)">1. Overview &amp; P&amp;L</button>
-    <button onclick="switchTab('research', this)">2. Market Research</button>
-    <button onclick="switchTab('strategies', this)">3. Strategy Rulebooks</button>
-    <button onclick="switchTab('backtesting', this)">4. Historical Backtests</button>
-    <button onclick="switchTab('paper', this)">5. Paper Trading Ledger</button>
-    <button onclick="switchTab('analytics', this)">6. Risk &amp; Sector Analytics</button>
-    <button onclick="switchTab('monitoring', this)">7. System Logs</button>
+    <button class="active" onclick="switchTab('overview', this)">Overview &amp; P&amp;L</button>
+    <button onclick="switchTab('research', this)">Market Research</button>
+    <button onclick="switchTab('strategies', this)">Strategies</button>
+    <button onclick="switchTab('backtesting', this)">Backtesting</button>
+    <button onclick="switchTab('paper', this)">Paper Ledger</button>
+    <button onclick="switchTab('analytics', this)">Risk &amp; Analytics</button>
+    <button onclick="switchTab('monitoring', this)">System Logs</button>
+    <button onclick="switchTab('guide', this)">Platform Guide</button>
   </nav>
 
   <main>
     <div class="disclaimer">
-      <strong>Quantitative Governance Notice:</strong> Deterministic software handles all price/indicator calculations,
-      signal generation, ATR position sizing, risk vetoes, and P&amp;L accounting. Historical backtest returns or LLM
+      <strong>Governance Notice:</strong> Deterministic software handles all price/indicator calculations,
+      signal generation, ATR position sizing, risk vetoes, and P&amp;L accounting. Historical backtest returns or AI
       research confidence scores do not guarantee future profitability.
     </div>
 
-    <!-- 0. EXPLAIN LIKE I'M 5 -->
-    <section id="tab-eli5" class="tab-section active">
-      <div class="card">
-        <div class="card-header"><span class="card-title">🧸 Explain Like I'm 5: How Does This App Actually Work?</span></div>
-        <p style="font-size:0.92rem;color:#cbd5e1;margin-bottom:14px;">
-          Imagine you have a <strong>toy piggy bank with $100,000 of pretend money</strong> (called <strong>Paper Money</strong>).
-          This app tests whether strict math rulebooks can grow that piggy bank by buying shares of big US companies, holding them for
-          <strong>3 to 15 days</strong> (Swing Trading), and selling them. We split the work into two strict teams:
-          <strong>1) The AI Detective Team</strong> (finds stock ideas and suggests rules, but is <em>never</em> allowed to touch the money) and
-          <strong>2) The Strict Calculator &amp; Safety Guard</strong> (tests the rules on past history, checks 6 safety seatbelts, and tracks every penny).
-        </p>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
-          <button class="btn btn-secondary" onclick="showEli5('loop')">🔄 1. The Daily &amp; Weekly Loop</button>
-          <button class="btn btn-secondary" onclick="showEli5('agents')">🤖 2. Meet the 5 AI Helpers</button>
-          <button class="btn btn-secondary" onclick="showEli5('strategies')">📏 3. The 3 Trading Rulebooks</button>
-          <button class="btn btn-secondary" onclick="showEli5('safety')">🛡️ 4. The 6 Safety Seatbelts</button>
-          <button class="btn btn-secondary" onclick="showEli5('pnl')">💰 5. How P&amp;L Math Works</button>
-        </div>
-        <div id="eli5-detail-box" style="background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.3);padding:14px 16px;border-radius:8px;font-size:0.88rem;">
-          <strong>🔄 The Daily &amp; Weekly Loop:</strong> Every weekday after the US market closes, the app downloads fresh stock prices, sells any pretend stock that hit its goal or safety stop-loss, and buys new stocks that pass all rules. Every Saturday morning, the AI Coach reviews any mistakes, proposes an improved rulebook version, and tests it against a 9-part exam before promoting it!
-        </div>
-      </div>
-    </section>
-
     <!-- 1. OVERVIEW -->
-    <section id="tab-overview" class="tab-section">
+    <section id="tab-overview" class="tab-section active">
+      <p style="font-size:0.86rem;color:#94a3b8;margin-bottom:12px;">
+        <strong>Overview &amp; P&amp;L</strong> — Tracks daily account equity, open holdings, and exact profit attribution for the simulated $100,000 portfolio.
+      </p>
       <div class="disclaimer" id="overview-pnl-explainer"></div>
       <div class="kpi-grid" id="overview-kpis"></div>
       <div class="grid-2">
@@ -242,6 +221,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- 2. RESEARCH -->
     <section id="tab-research" class="tab-section">
+      <p style="font-size:0.86rem;color:#94a3b8;margin-bottom:12px;">
+        <strong>Market Research</strong> — Ranks liquid US large-cap equities daily by relative strength vs. SPY, volume expansion, and earnings catalysts. Research rankings inform discovery and do not place trades directly.
+      </p>
       <div class="card">
         <div class="card-header">
           <span class="card-title">Autonomous Market Research Agent — Ranked Swing Candidates</span>
@@ -263,6 +245,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- 3. STRATEGIES -->
     <section id="tab-strategies" class="tab-section">
+      <p style="font-size:0.86rem;color:#94a3b8;margin-bottom:12px;">
+        <strong>Strategy Registry</strong> — Lists all quantitative rulebooks, version histories, and validation gates. Only strategies in <code>PAPER_TRADING</code> status are permitted to generate simulated orders.
+      </p>
       <div class="card">
         <div class="card-header">
           <span class="card-title">Versioned Strategy Registry &amp; Promotion Lifecycle</span>
@@ -273,6 +258,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- 4. BACKTESTING -->
     <section id="tab-backtesting" class="tab-section">
+      <p style="font-size:0.86rem;color:#94a3b8;margin-bottom:12px;">
+        <strong>Historical Backtesting</strong> — Evaluates strategies across historical market regimes with commissions, bid-ask spreads, and slippage deducted on every trade.
+      </p>
       <div class="card">
         <div class="card-header"><span class="card-title">Launch Quantitative Backtest &amp; Walk-Forward Experiment</span></div>
         <div class="form-row">
@@ -310,6 +298,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- 5. PAPER TRADING -->
     <section id="tab-paper" class="tab-section">
+      <p style="font-size:0.86rem;color:#94a3b8;margin-bottom:12px;">
+        <strong>Paper Trading Ledger</strong> — Records every simulated order, execution fill, transaction cost, and strategy-level P&amp;L contribution.
+      </p>
       <div class="kpi-grid" id="paper-kpis"></div>
       <div class="grid-2">
         <div class="card">
@@ -329,6 +320,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- 6. ANALYTICS -->
     <section id="tab-analytics" class="tab-section">
+      <p style="font-size:0.86rem;color:#94a3b8;margin-bottom:12px;">
+        <strong>Risk &amp; Analytics</strong> — Monitors sector concentration against the 30% limit, multi-window walk-forward stability, and market regime performance.
+      </p>
       <div class="grid-2">
         <div class="card">
           <div class="card-header"><span class="card-title">Performance by Market Regime</span></div>
@@ -347,6 +341,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- 7. SYSTEM MONITORING -->
     <section id="tab-monitoring" class="tab-section">
+      <p style="font-size:0.86rem;color:#94a3b8;margin-bottom:12px;">
+        <strong>System Logs</strong> — Audit trail of scheduled workflow runs, idempotency keys, and risk-veto events.
+      </p>
       <div class="grid-2">
         <div class="card">
           <div class="card-header"><span class="card-title">Autonomous Job &amp; Workflow Execution Log</span></div>
@@ -355,6 +352,29 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="card">
           <div class="card-header"><span class="card-title">Portfolio Risk Alerts &amp; Veto Audit Trail</span></div>
           <div id="monitoring-alerts-table"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 8. PLATFORM GUIDE -->
+    <section id="tab-guide" class="tab-section">
+      <div class="card">
+        <div class="card-header"><span class="card-title">Platform Guide — Architecture, Risk Governance &amp; P&amp;L Methodology</span></div>
+        <p style="font-size:0.9rem;color:#cbd5e1;margin-bottom:14px;">
+          A concise reference covering how the platform researches equities, validates strategies, enforces risk limits, and calculates returns. Select a topic below to inspect its methodology:
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+          <button class="btn btn-secondary" onclick="showGuide('arch')">1. Core Architecture</button>
+          <button class="btn btn-secondary" onclick="showGuide('strategies')">2. Strategy Families</button>
+          <button class="btn btn-secondary" onclick="showGuide('validation')">3. Validation Gates</button>
+          <button class="btn btn-secondary" onclick="showGuide('risk')">4. Risk Controls</button>
+          <button class="btn btn-secondary" onclick="showGuide('pnl')">5. P&amp;L Accounting</button>
+        </div>
+        <div id="guide-detail-box" style="background:rgba(56,189,248,0.06);border:1px solid rgba(56,189,248,0.25);padding:16px 18px;border-radius:8px;font-size:0.88rem;line-height:1.6;">
+          <strong>1. Core Architecture — Separation of AI Reasoning &amp; Quantitative Execution:</strong><br/>
+          • <strong>Deterministic Financial Engine:</strong> All price adjustments, technical indicators, signal triggers, position sizing, risk checks, and accounting are executed by deterministic Python code.<br/>
+          • <strong>AI Research &amp; Governance Layer:</strong> Specialized agents scan the equity universe, diagnose post-session performance, and propose falsifiable strategy revisions.<br/>
+          • <strong>Daily &amp; Weekly Cadence:</strong> Each weekday after US market close, the system updates market data, processes stop-loss/take-profit exits, and evaluates new entries. Every Saturday, it runs walk-forward optimization to test candidate strategy improvements.
         </div>
       </div>
     </section>
@@ -413,15 +433,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       renderMonitoring();
     }
 
-    function showEli5(topic) {
+    function showGuide(topic) {
       const notes = {
-        loop: '<strong>🔄 The Daily &amp; Weekly Loop:</strong> Every weekday after the US market closes, the app downloads fresh stock prices, sells any pretend stock that hit its goal or safety stop-loss, and buys new stocks that pass all rules. Every Saturday morning, the AI Coach reviews any mistakes, proposes an improved rulebook version, and tests it against a 9-part exam before promoting it!',
-        agents: '<strong>🤖 Meet the 5 AI Helpers:</strong> 1) <em>Market Researcher</em> scans 15+ US stocks daily; 2) <em>Strategy Architect</em> writes math rulebooks; 3) <em>Strategy Evaluator</em> grades rulebooks on a 9-part exam and rejects weak ones; 4) <em>Portfolio Risk Manager</em> blocks any trade that breaks safety limits; 5) <em>Performance Analyst</em> reviews closed trades and suggests Saturday upgrades.',
-        strategies: '<strong>📏 The 3 Core Rulebooks:</strong> 1) <em>Momentum Trend</em> buys stocks beating the S&amp;P 500 (SPY) above their 20d/50d averages; 2) <em>Post-Earnings Drift (PEAD)</em> buys companies right after a big quarterly earnings beat; 3) <em>Volatility Breakout</em> buys stocks breaking above their 20-day high on high volume after a quiet 10-day consolidation.',
-        safety: '<strong>🛡️ The 6 Safety Seatbelts:</strong> 1) Max 1% risk per trade ($1,000 max loss on $100k); 2) Max 15% in any single stock; 3) Max 30% in any single sector; 4) Max 10 stocks held at once; 5) Automatic Emergency Kill Switch if portfolio drops -15% from peak; 6) Hardcoded to Paper Mode Only.',
-        pnl: '<strong>💰 Honest P&amp;L Math:</strong> We never mix multi-year Backtest P&amp;L with daily Paper Account P&amp;L. Paper Account Equity = Starting Capital ($100,000) + Locked-In Realised P&amp;L (from closed trades after fees/slippage) + Open Unrealised P&amp;L (from currently held stocks).'
+        arch: '<strong>1. Core Architecture — Separation of AI Reasoning &amp; Quantitative Execution:</strong><br/>• <strong>Deterministic Financial Engine:</strong> All price adjustments, technical indicators, signal triggers, position sizing, risk checks, and accounting are executed by deterministic Python code.<br/>• <strong>AI Research &amp; Governance Layer:</strong> Specialized agents scan the equity universe, diagnose post-session performance, and propose falsifiable strategy revisions.<br/>• <strong>Daily &amp; Weekly Cadence:</strong> Each weekday after US market close, the system updates market data, processes stop-loss/take-profit exits, and evaluates new entries. Every Saturday, it runs walk-forward optimization to test candidate strategy improvements.',
+        strategies: '<strong>2. Strategy Families — Three Uncorrelated Swing Models (3–15 Day Horizon):</strong><br/>• <strong>Momentum &amp; Trend Continuation (<code>strat_momentum_trend</code>):</strong> Enters liquid stocks trading above rising 20/50-day moving averages that outperform the S&amp;P 500 (<code>SPY</code>) over 20 days with volume confirmation.<br/>• <strong>Post-Earnings Announcement Drift (<code>strat_pead_drift</code>):</strong> Captures multi-day institutional follow-through after a company reports a positive earnings surprise (+4% or higher) accompanied by a breakout and 1.3x volume.<br/>• <strong>Volatility Contraction Breakout (<code>strat_vol_breakout</code>):</strong> Identifies stocks consolidating in tight 10-day ranges that break above their 20-day high on 1.35x volume.',
+        validation: '<strong>3. Validation Gates — Nine-Gate Out-of-Sample Promotion Audit:</strong><br/>Before any strategy or weekly revision can trade in the paper account, it must pass nine objective criteria:<br/>1) Positive net return after commissions, spread, and slippage • 2) Sharpe Ratio &gt; 1.0 • 3) Profit Factor &gt; 1.3 • 4) Max Drawdown &lt; 15.0% • 5) Minimum 15 trades • 6) Out-of-sample walk-forward consistency &ge; 60% • 7) Survives +50% higher transaction cost stress test • 8) Beats SPY on a risk-adjusted basis • 9) Parameter stability across variations.',
+        risk: '<strong>4. Risk Controls — Portfolio Protection &amp; Veto Authority:</strong><br/>Every proposed entry is audited by the deterministic Risk Manager before execution:<br/>• <strong>1.0% Maximum Risk Per Trade:</strong> Position size is scaled by stock volatility (ATR) so a stop-loss exit loses at most 1% of equity (~$1,000).<br/>• <strong>5.0% Maximum Total Open Risk (Portfolio Heat Cap):</strong> Combined stop-loss risk across all open positions cannot exceed 5% of total equity.<br/>• <strong>15.0% Single-Stock &amp; 30.0% Sector Caps:</strong> Prevents concentration in any single company or industry.<br/>• <strong>15.0% Drawdown Kill Switch:</strong> Automatically suspends new entries if portfolio equity falls 15% from its peak.',
+        pnl: '<strong>5. P&amp;L Accounting — Transparent Return Attribution:</strong><br/>The platform separates simulated paper trading from multi-year historical backtests:<br/>• <strong>Paper Portfolio Equity:</strong> <code>Starting Capital ($100,000) + Realised P&amp;L (closed trades net of fees) + Unrealised P&amp;L (open positions marked to market)</code>.<br/>• <strong>Attribution:</strong> Every dollar of P&amp;L is linked to the exact strategy version (<code>strategy_id v#</code>) and measurement window.'
       };
-      document.getElementById('eli5-detail-box').innerHTML = notes[topic] || notes.loop;
+      document.getElementById('guide-detail-box').innerHTML = notes[topic] || notes.arch;
     }
 
     function renderOverview() {
@@ -430,10 +450,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const activeStrats = (STATE.strategies || []).filter(s => s.status === 'PAPER_TRADING').map(s => `${s.name} (${s.strategy_id} v${s.version})`).join(', ') || 'None';
       const dateSpan = snaps.length ? `${snaps[0].snapshot_date} to ${snaps[snaps.length - 1].snapshot_date} (${snaps.length} trading days)` : 'Initial session';
       document.getElementById('overview-pnl-explainer').innerHTML = `
-        <strong>💡 Transparent Paper P&amp;L Breakdown:</strong><br/>
-        • <strong>Strategies Used:</strong> ${activeStrats}<br/>
-        • <strong>Exact Date Span:</strong> ${dateSpan}<br/>
-        • <strong>How We Arrived at ${fmtUsd(acc.total_equity)}:</strong> Starting Capital (${fmtUsd(acc.starting_capital)}) + Closed Trade Realised P&amp;L (${fmtUsd(acc.realised_pnl)}) + Open Position Unrealised P&amp;L (${fmtUsd(acc.unrealised_pnl)}) = <strong>${fmtUsd(acc.total_equity)} (${fmtPct(acc.total_return_pct)})</strong>
+        <strong>Profit &amp; Loss Attribution</strong><br/>
+        • <strong>Active Strategies:</strong> ${activeStrats}<br/>
+        • <strong>Measurement Window:</strong> ${dateSpan}<br/>
+        • <strong>Derivation:</strong> Starting Capital (${fmtUsd(acc.starting_capital)}) + Realised P&amp;L (${fmtUsd(acc.realised_pnl)}) + Unrealised P&amp;L (${fmtUsd(acc.unrealised_pnl)}) = <strong>${fmtUsd(acc.total_equity)} (${fmtPct(acc.total_return_pct)})</strong> [Net of commissions, spread &amp; slippage]
       `;
       const latestSnap = snaps[snaps.length - 1] || {};
       const retCls = (acc.total_return_pct >= 0) ? 'pos' : 'neg';

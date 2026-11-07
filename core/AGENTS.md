@@ -12,7 +12,8 @@ Rules for modifying any module inside `core/` (`market_data`, `indicators`, `str
    - Point-in-time earnings (`MarketDataService.get_point_in_time_earnings`) must respect `BMO` vs `AMC` session visibility.
    - Delisted equities must be forcibly liquidated on their `delisted_date` / final bar.
 4. **Portfolio Risk Veto & Paper Execution (`core/risk/manager.py`, `core/execution/paper_broker.py`)**:
-   - Every `BUY` order in `PaperTradingEngine.submit_and_execute_order` must pass through `PortfolioRiskManager.evaluate_proposed_entry`.
+   - Every `BUY` order in `PaperTradingEngine.submit_and_execute_order` must pass through `PortfolioRiskManager.evaluate_proposed_entry` (enforcing 1% per-trade risk, 5% total open portfolio heat cap, 15% single-stock cap, 30% sector cap, and 15% drawdown suspension).
    - Every order must carry a deterministic `idempotency_key` (`PaperTradingEngine.build_idempotency_key`) to prevent duplicate execution.
    - Every fill must write an immutable record to `trade_ledger` and reconcile `paper_accounts.cash_balance` and `paper_positions`.
+   - When switching `provider_source` in `MarketDataService` (e.g., `local_seeded` to `alpaca`), mixed-provider bars must be purged and paper positions reset so positions are never marked-to-market across incompatible price scales.
 

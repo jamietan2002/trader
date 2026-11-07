@@ -4,6 +4,22 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-07] — Minimalist Adult UI Redesign, Provider-Scale Isolation & Portfolio Heat Cap
+
+### Summary
+- **Minimalist Adult Dashboard Redesign**: Replaced all `"Explain Like I'm 5"` / toy analogies in `dashboard/streamlit_app.py` and `dashboard/ui_template.py` with a clean, institutional-yet-accessible design for adults using concise, jargon-free language. Added an interactive 5-topic `Platform Guide` tab (`1. Core Architecture`, `2. Strategy Families`, `3. Validation Gates`, `4. Risk Controls`, `5. P&L Accounting`) and transparent P&L Attribution showing Active Strategies, Measurement Window, and exact step-by-step derivation.
+- **Root-Cause Fix for the 54.66% Mixed-Provider Drawdown**: Enhanced `MarketDataService` (`core/market_data/providers.py`) and `PaperTradingEngine.reset_account_to_starting_capital` (`core/execution/paper_broker.py`) to detect transitions between synthetic `local_seeded` bars and real `alpaca` bars, automatically purging mixed-scale bars and resetting paper state so positions opened at synthetic prices are never marked-to-market against live provider prices.
+- **Total Portfolio Heat Cap (`max_total_open_risk_pct = 5.0%`)**: Added aggregate open stop-loss risk enforcement in `PortfolioRiskManager.evaluate_proposed_entry` (`core/risk/manager.py`) and `RiskParametersConfig` (`infrastructure/configuration/settings.py`) so combined open risk across all active positions cannot exceed 5% of equity.
+
+### Modules Added / Modified
+- `dashboard/streamlit_app.py`, `dashboard/ui_template.py`
+- `core/market_data/providers.py`, `core/execution/paper_broker.py`
+- `core/risk/manager.py`, `infrastructure/configuration/settings.py`
+- `.github/workflows/autonomous_trading.yml`
+- `core/AGENTS.md`, `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-07] — Beginner-Friendly Interactive ELI5 Guide & Transparent P&L Breakdown
 
 ### Summary

@@ -218,6 +218,31 @@ class PaperTradingEngine:
             (1 if engaged else 0, reason if engaged else None, utc_now_iso(), self.account_id),
         )
 
+    def reset_account_to_starting_capital(self) -> Dict[str, Any]:
+        """Reset paper account cash, positions, orders, snapshots, and alerts to a clean $100,000 state."""
+        self.settings.validate_trading_mode()
+        now_iso = utc_now_iso()
+        self.db.execute("DELETE FROM paper_positions WHERE account_id = ?", (self.account_id,))
+        self.db.execute("DELETE FROM paper_orders WHERE account_id = ?", (self.account_id,))
+        self.db.execute("DELETE FROM trade_ledger WHERE account_id = ?", (self.account_id,))
+        self.db.execute("DELETE FROM portfolio_snapshots WHERE account_id = ?", (self.account_id,))
+        self.db.execute("DELETE FROM risk_alerts WHERE account_id = ?", (self.account_id,))
+        self.db.execute(
+            """
+            UPDATE paper_accounts
+            SET cash_balance = ?, realised_pnl = 0.0, peak_equity = ?,
+                kill_switch_engaged = 0, kill_switch_reason = NULL, updated_at = ?
+            WHERE account_id = ?
+            """,
+            (
+                self.settings.initial_capital_usd,
+                self.settings.initial_capital_usd,
+                now_iso,
+                self.account_id,
+            ),
+        )
+        return self.get_account_summary()
+
     def submit_and_execute_order(
         self,
         strategy_id: str,
