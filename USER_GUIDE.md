@@ -1,158 +1,114 @@
-# Swing Trading AI — Operator User Guide & Technical Appendix
+# Swing Trading AI — User Guide, Design Decisions & Roadmap
 
-This guide explains in plain English what the platform does, how it runs on its own, whether it consumes AI tokens, and how you evaluate strategies when deciding to trade real money.
-
----
-
-## Part 1: High-Level User Guide
-
-### 1. What This Platform Does (In One Minute)
-This system manages a simulated **$100,000 US stock portfolio** across liquid large-cap stocks on the NYSE and NASDAQ (`AAPL`, `MSFT`, `NVDA`, `AMD`, `AMZN`, `META`, `TSLA`, `AVGO`, `JPM`, `GS`, `LLY`, `UNH`, `XOM`, `CAT`), benchmarked against the S&P 500 (`SPY`).
-
-- **Trading Style**: **Swing Trading** — holding stocks for **3 to 15 trading days** to capture multi-day price trends, breakouts, and post-earnings moves.
-- **Safety Lock**: The system is hardcoded to **`TRADING_MODE = paper`**. It cannot touch real money.
-- **100% Hands-Off**: It runs automatically in the cloud via GitHub Actions and displays live results on your hosted Streamlit dashboard. **Zero daily or weekly actions are required from you.**
+Welcome to **Swing Trading AI**, an autonomous quantitative research, statistical validation, paper-trading, and real-account copilot platform for US equities (`NYSE` / `NASDAQ`), benchmarked against the S&P 500 (`SPY`).
 
 ---
 
-### 2. How the Two Automated Loops Work
+## 1. What This Project Does (In 60 Seconds)
+
+This platform runs a systematic **swing-trading engine** (holding liquid US large-cap stocks for **3 to 15 trading days**) with two distinct goals:
+1. **Autonomous Forward Validation (`$100,000` Paper Account)**: Automatically tests and runs 5 uncorrelated swing-trading strategies every weekday after the US market close, tracking forward Daily, Weekly, and Total P&L net of realistic brokerage commissions and slippage.
+2. **Air-Gapped Real-Account Execution (`Live Copilot` Tab)**: Generates a daily step-by-step `SELL`, `HOLD / Raise Stop`, and `BUY` checklist sized to your personal brokerage cash and confirmed holdings—**without ever connecting to or having access to your real trading account**.
+
+### Core Operating Modes
+- **100% Hands-Off Cloud Mode**: GitHub Actions runs the Daily loop (`Mon–Fri 21:30 UTC`) and Weekly self-improvement loop (`Sat 10:00 SGT`), committing updated state to `data/swing_trader.db` so the 24/7 Streamlit Cloud dashboard stays current with zero user intervention.
+- **One-Word IDE AI Mode (`run`)**: Type **`run`** in this IDE chat at any time to have the IDE's built-in LLM search live web news catalysts (`search_web`), enrich stock research, run a multi-candidate strategy tournament, and output your daily Copilot briefing—with `$0` external API key cost.
+
+---
+
+## 2. How the System Works
 
 ```text
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ 1. DAILY LOOP (Mon–Fri at 21:30 UTC · After US Market Close)                 │
-│                                                                              │
-│  [Alpaca Market Data] ──► [AI Stock Scan] ──► [Active Strategy Rulebooks]    │
-│                                                        │                     │
-│  [Paper Ledger & P&L] ◄── [Paper Broker Fill] ◄── [7-Rule Risk Gate]         │
-└──────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│ 1. DAILY EXECUTION LOOP (Mon–Fri After Market Close · Forward Paper & Copilot)   │
+│                                                                                  │
+│  [Alpaca Daily Bars] ──► [5 Golden Base Strategies] ──► [7-Rule Risk Manager]    │
+│                                                                 │                │
+│  [Live Copilot Checklist] & [Forward Paper Ledger]  ◄── [Next-Open Fill Model]   │
+└──────────────────────────────────────────────────────────────────────────────────┘
 
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ 2. WEEKLY SELF-IMPROVEMENT LOOP (Saturdays at 10:00 AM SGT)                  │
-│                                                                              │
-│  [Review Week's Closed Trades] ──► [Draft Strategy Upgrade (v+1)]            │
-│                                              │                               │
-│  [Promote v+1 & Retire Old v]  ◄── [9-Gate Historical & Walk-Forward Audit]  │
-└──────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│ 2. WEEKLY SELF-IMPROVEMENT LOOP (Saturdays · Strictly In Backtesting)            │
+│                                                                                  │
+│  [Post-Trade Attribution] ──► [Propose Candidate v+1] ──► [In-Sample/OOS/WF]     │
+│                                                                 │                │
+│  [Keep Champion v1 or Promote v+1] ◄── [9-Gate Audit + SPY Dominance Check]      │
+└──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### A. The Daily Loop (Mon–Fri, After US Market Close)
-- **Purpose**: **Executes your approved strategies in real time** to build a forward paper-trading track record.
-- **How it works**:
-  1. Downloads the latest daily prices from Alpaca.
-  2. Checks any currently held paper positions: if a stock hit its **Stop-Loss**, **Take-Profit**, **Trailing Stop**, or **Maximum Holding Period (10–15 days)**, it sells the stock and locks in **Realised P&L**.
-  3. Checks all currently approved strategies (`PAPER_TRADING` status). Currently, two independent strategy families run every day:
-     - **Momentum & Trend (`strat_momentum_trend`)**: Buys stocks in strong uptrends (above 20-day and 50-day moving averages) beating `SPY` over the last 20 days.
-     - **Volatility Breakout (`strat_volatility_breakout`)**: Buys stocks breaking above their 20-day high on high volume after a quiet 10-day consolidation.
-     - *(Note: A third baseline strategy, `strat_pead_drift`, failed 3 of the 9 historical validation gates and was automatically marked `REJECTED` so it cannot trade).*
-  4. Interleaves buy signals fairly across all active strategies, sizes each position using volatility (`ATR`) so a stop-loss loses at most **1% of portfolio equity (`~$1,000`)**, verifies all **7 Risk Guardrails**, and logs the simulated trade after deducting brokerage commission and slippage.
+### The Five Golden Base (`v1 ★ Base`) Strategies
+Every base strategy (`v1`) has been validated across multi-year history (`2023–2025`), Out-of-Sample (`OOS`) partitions, 4-window Walk-Forward folds (`100%` consistency), and $2\times$ transaction-cost stress tests to outperform `SPY` (`+61.90%` full period, `+9.67%` OOS):
 
-#### B. The Weekly Loop (Saturdays, 10:00 AM SGT)
-- **Purpose**: **Self-improves the strategies.**
-- **How it works**:
-  1. Reviews the week's closed paper trades and market regime.
-  2. Proposes a refined version (`v2`, `v3`, etc.) of a strategy by adjusting quantitative entry/exit thresholds (for example, tightening the RSI filter or volume confirmation ratio).
-  3. Tests the new version across **2.3+ years of historical data**, **4 walk-forward time windows**, and a **2x transaction-cost stress test**.
-  4. If the new version passes **all 9 validation gates**, it is promoted to `PAPER_TRADING` and the older version (`v1`) is automatically marked `RETIRED`. If it fails even 1 gate, it is marked `REJECTED` and ignored.
+| Strategy ID (`v1 ★ Base`) | Family | What It Trades | Full Return (`vs SPY +61.90%`) | OOS Return (`vs SPY +9.67%`) | Sharpe / PF / MaxDD |
+|---|---|---|---|---|---|
+| `strat_volatility_breakout` | `BREAKOUT` | 20-day high breakouts with volume expansion & relative strength vs `SPY` | **`+75.83%`** (`+13.93%` excess) | **`+22.96%`** (`+13.29%` excess) | `2.51` / `2.68` / `-4.83%` |
+| `strat_sector_rotation_leaders` | `SECTOR_ROTATION` | Top relative-strength stocks inside the top-ranked GICS sectors | **`+77.45%`** (`+15.55%` excess) | **`+18.88%`** (`+9.21%` excess) | `2.47` / `2.19` / `-9.58%` |
+| `strat_momentum_trend` | `MOMENTUM_TREND` | Aligned uptrends (`Close > SMA20 > SMA50`) beating `SPY` over 20 days | **`+73.37%`** (`+11.47%` excess) | **`+16.32%`** (`+6.65%` excess) | `2.29` / `2.11` / `-8.53%` |
+| `strat_pead_drift` | `PEAD` | Post-earnings institutional drift following quarterly EPS & revenue beats | **`+73.80%`** (`+11.90%` excess) | **`+17.38%`** (`+7.71%` excess) | `2.15` / `2.08` / `-7.81%` |
+| `strat_mean_reversion_bb` | `MEAN_REVERSION` | Value-zone pullbacks to `SMA20` / Lower Bollinger Band inside structural uptrends | **`+70.68%`** (`+8.78%` excess) | **`+11.52%`** (`+1.85%` excess) | `2.02` / `1.92` / `-9.59%` |
 
 ---
 
-### 3. Why Do We Have "AI Agents" If Zero Tokens Are Used? (And How to Enable Live LLM Tokens)
+## 3. Navigating the Dashboard & Using Live Copilot
 
-The platform implements 5 specialized agent classes (`MarketResearchAgent`, `StrategyDiscoveryAgent`, `StrategyEvaluationAgent`, `PerformanceAnalystAgent`, and `RiskManagerAgent`) that call a pluggable reasoning interface (`self.llm.generate_structured_json()` in `agents/base.py`):
-
-1. **Why `$0` Tokens Are Used by Default (`LLM_PROVIDER = deterministic_research`)**:
-   - Every agent computes exact quantitative metrics first (20d relative strength vs `SPY`, volume ratios, win/loss attribution by market regime, and 9-gate pass/fail scores) and passes a structured `fallback_payload` into `self.llm.generate_structured_json()`.
-   - When `LLM_PROVIDER=deterministic_research` (the default), `DeterministicQuantReasoningProvider` returns that quantitative synthesis directly without making an external LLM API call. This guarantees **zero hallucination, 100% reproducibility, and $0 token cost**.
-2. **When Real AI Tokens *Are* Used (`LLM_PROVIDER = gemini` or `openai`)**:
-   - When you set `LLM_PROVIDER=gemini` and provide a `GEMINI_API_KEY` (from Google AI Studio / Vertex AI) in `.env` or GitHub Actions Secrets, `GeminiLLMProvider` (`agents/base.py`) calls `gemini-2.5-pro` with `responseMimeType: "application/json"` on:
-     - **Daily Run**: `MarketResearchAgent` (synthesizing bullish/bearish theses and risk factors per stock) and `PerformanceAnalystAgent` (diagnosing session attribution and proposing Saturday experiments).
-     - **Weekly Run**: `StrategyDiscoveryAgent` (proposing parameter refinements for `v+1`) and `StrategyEvaluationAgent` (writing the multi-regime evaluation narrative).
-   - **Ways to Expand AI Token Usage for Higher Alpha**:
-     - **SEC 8-K / 10-Q & Earnings Transcript Sentiment**: Feed quarterly earnings call transcripts and SEC filings into `MarketResearchAgent` so Gemini scores management guidance tone before `strat_pead_drift` enters.
-     - **News Catalyst Filtering**: Have Gemini classify breaking news headlines to distinguish genuine fundamental catalysts from noise before taking a breakout trade.
-     - **Adaptive Hypothesis Generation**: Let `StrategyDiscoveryAgent` use Gemini to analyze all losing trades from the past month and propose targeted multi-indicator entry/exit filters for `v+1`.
-3. **Using ONLY This IDE's Built-In LLM (Zero External API Keys Needed — Just Type `run`)**:
-   - Even without an external `GEMINI_API_KEY` or `OPENAI_API_KEY` in `.env`, you can run full AI research and strategy optimization directly through **this Antigravity IDE conversation** by simply typing **`run`** in the chat (powered by `.agents/skills/run-ai-cycle/SKILL.md`, `python main.py ide-context`, and `python main.py ide-apply`):
-     1. **Step 1 (`ide-context`)**: Runs deterministic market ingestion and exports a compact JSON brief of the current `SPY` market regime, top technical candidates, open paper/Copilot holdings, and active strategy parameters.
-     2. **Step 2 (Live Web News Catalyst Audit via `search_web`)**: The IDE AI agent searches real-time financial news, earnings call reactions, and macro catalysts for the top candidates and writes enriched `bullish_thesis`, `bearish_thesis`, and `catalyst_assessment` analyses directly into `data/swing_trader.db`.
-     3. **Step 3 (Multi-Candidate AI Strategy Tournament via `ide-apply`)**: The IDE AI agent designs 2–3 regime-tuned strategy parameter improvements and tests them through the **9-Gate Out-of-Sample & Walk-Forward Backtest Tournament** with **Incumbent Champion Protection** (a new version `v+1` is only promoted to `PAPER_TRADING` if it passes all 9 validation gates *and* beats or matches the active champion's Sharpe/Return/Calmar metrics).
-     4. **Step 4 (Cloud Sync & Copilot Briefing)**: Automatically pushes `data/swing_trader.db` to GitHub so your 24/7 Streamlit Cloud dashboard updates immediately, and prints your daily **Real-Account Copilot Checklist** in chat.
-   - **Want it 100% hands-free on a schedule inside the IDE?** You can also type `/schedule` (or ask the agent to set up a scheduled automation) so Antigravity automatically runs this `run` workflow in the background every weekday after market close!
+1. **`Overview & P&L` (Forward Paper Account)**:
+   - Displays **Total Equity**, **Daily P&L**, **Weekly P&L (5 sessions)**, and **Total P&L (Realised + Unrealised)** starting from a clean `$100,000.00` baseline. Only actual forward daily runs affect this account; all historical testing is isolated in `Backtesting`.
+2. **`Strategies & Readiness`**:
+   - Compares every strategy version against `SPY` (**Full & OOS Excess Return**, **Jensen's Alpha $\alpha$**, **Beta $\beta$**, **Upside/Downside Capture**, **Ulcer Index**, **Martin Ratio**, **Omega Ratio**, and **Deflated Sharpe Ratio**).
+   - Includes **1-Click `Revert All to Golden Base (v1)`** and **`Enforce Best Champion Versions`** buttons so you can always revert if a future experimental version (`v2+`) underperforms.
+3. **`Live Copilot (Real Account)`**:
+   - **Set Your Cash**: Enter your real uninvested broker cash in the single-row cash bar.
+   - **Follow the Daily Action Plan**: View exact `SELL`, `HOLD (with Stop-Ratchet price)`, and `BUY` instructions sized so a stop-loss risks at most **1.0% of your real equity**.
+   - **Confirm Only What You Execute**: The system never assumes you took a trade. Click **`Confirm Bought`** or **`Confirm Sold`** (adjusting fill price/shares if needed), **`Skip`**, or **`Close`** inline on any open holding.
+4. **`Paper Ledger`**:
+   - Filter forward paper executions by **Trading Day**, **Order Side (`BUY`/`SELL`)**, or **Strategy**, with an automatic daily execution summary bar.
 
 ---
 
-### 4. Using the "Live Trading Copilot (Real Account)" Tab
+## 4. Key Architectural & Quantitative Design Decisions
 
-Once a strategy reaches `READY FOR LIVE REVIEW` (or whenever you choose to mirror signals in your personal brokerage account), open the **`Live Copilot (Real Account)`** tab:
-
-1. **100% Air-Gapped Security (Zero Broker Access)**:
-   - The platform never connects to your real brokerage account or asks for trading credentials.
-2. **Set Your Real Cash Balance**:
-   - Expand **"Configure My Real Cash Balance & Active Copilot Strategies"** and enter your actual uninvested cash (for example, `$15,000` or `$25,000`).
-   - All BUY recommendations automatically scale their share count so that hitting a stop-loss risks **at most 1.0% of your real account equity** (e.g., `$150` max risk on `$15,000`).
-3. **Never Assumes Your Positions**:
-   - Each day's **Step-by-Step Action Checklist** shows pending **SELL Orders** (on positions you actually hold that hit their Stop-Loss, Take-Profit, or Max Hold days) and **BUY Candidates**.
-   - Nothing is added to or removed from your real portfolio until you click **`Confirm Bought`** or **`Confirm Sold`** (where you can edit the exact share count and fill price you got at your broker), **`Skip Trade`**, or **`Hold Today`** (to skip a sell signal for the day).
-   - You can also inspect **Signals Filtered Out by Your Risk Caps Today** and manually **Add, Edit, or Close** any position at any time if you traded independently in your broker.
-
----
-
-### 5. What You Need to Know & When to Trade Real Money
-
-1. **What is required from you day-to-day?**
-   - **Nothing.** There are no buttons you need to press.
-2. **How do you read the Profit & Loss (P&L) numbers?**
-   - **Forward Paper Portfolio P&L (`Overview & P&L` and `Paper Ledger` tabs)**: Tracks your simulated `$100,000` account strictly across actual forward daily runs (all historical testing is isolated in `Backtesting`):
-     $$\text{Current Equity} = \$100,000\text{ (Start)} + \text{Realised P\&L (Closed Trades)} + \text{Unrealised P\&L (Open Positions)}$$
-     Displays **Daily P&L** (latest session vs. prior close), **Weekly P&L** (rolling 5-session change), and **Total P&L** (since the `$100,000` baseline reset, split into Realised and Unrealised), net of realistic broker fees and bid-ask slippage. The `Paper Ledger` tab includes interactive **Trading Day**, **Order Side (`BUY`/`SELL`)**, and **Strategy** filters with a daily execution summary bar.
-   - **Historical Backtest P&L (`Strategies & Readiness` and `Backtesting` tabs)**: Shows how a strategy rulebook performed over multi-year past history (`2023–2025`). Backtest numbers are used strictly to test rulebooks and are never mixed into your paper account cash.
-3. **How do you evaluate when a strategy is ready for real trading?**
-   - Open the **`Strategies & Readiness`** tab. Every **Golden Base (`v1 ★ Base`)** strategy has been optimized and validated across all 5 strategy families (`MOMENTUM_TREND`, `PEAD`, `BREAKOUT`, `MEAN_REVERSION`, `SECTOR_ROTATION`) to beat the **S&P 500 (`SPY`)** in both **Full Period Return (`+70.7%` to `+77.5%` vs. SPY `+61.9%`)** and **Out-of-Sample Return (`+11.5%` to `+23.0%` vs. SPY `+9.7%`)** with `100%` (`4/4`) Walk-Forward window consistency.
-   - We evaluate strategy readiness across **Institutional Benchmark & Risk Metrics**:
-     1. **S&P 500 (`SPY`) Benchmark Dominance**: Full-Period & Out-of-Sample **Excess Return vs. SPY**, **Annualised Jensen's Alpha ($\alpha\%/yr$)**, **CAPM Beta ($\beta$)**, **Information Ratio**, **Upside / Downside Capture Ratio** (convex participation capturing upside while limiting downside), and **Annualised Return on Invested Capital (ROIC %)**.
-     2. **Drawdown Depth & Duration**: **Max Drawdown (%)**, **Ulcer Index ($UI$)**, **Martin Ratio / Ulcer Performance Index ($UPI$)**, and **Max Time Under Water (trading days to recover peak)**.
-     3. **Statistical & Out-of-Sample Robustness**: **Sharpe Ratio**, **Sortino Ratio**, **Profit Factor**, **Omega Ratio ($\Omega(0)$)**, **Tail Ratio ($|P_{95}/P_5|$)**, **Probabilistic & Deflated Sharpe Ratio (PSR / DSR %)**, **Walk-Forward Consistency & Efficiency (WFE)**, and **2x Cost Stress Survival**.
-     4. **Forward Paper Track Record (`>= 20` Closed Trades, `PF >= 1.30`, Positive Net Paper P&L)**: Confirms the historical edge persists in live forward sessions.
-   - **Golden Baseline Safeguard & One-Click Revert**:
-     - Future weekly strategy iterations (`v2`, `v3`, ...) must strictly beat or match the active champion's Return, Sharpe, and Calmar to be promoted (`beats_incumbent`).
-     - At any time, you can click **`Revert All to Golden Base (v1)`** (or run `python3 main.py revert-baseline`) to immediately restore the proven `v1` Golden Base Models and retire any experimental `v2+` versions.
+1. **Strict Firewall Between Deterministic Finance and AI Reasoning**:
+   - *Decision*: All price normalization, causal indicators, signal triggers, ATR position sizing, portfolio risk vetoes, and accounting live in deterministic Python (`core/`, `evaluation/`). AI agents (`agents/`) may only rank research candidates, propose structured JSON parameter hypotheses (`StrategyConfig`), and audit promotion gates.
+   - *Why*: Eliminates LLM arithmetic errors, hallucinated orders, and non-reproducible backtests.
+2. **Forward-Only Paper Account vs. Historical Backtest Isolation**:
+   - *Decision*: Startup and cloud workflows never backfill historical trades into `paper_accounts` or `trade_ledger`. All historical experimentation runs strictly in `BacktestEngine` (`strategy_experiments`).
+   - *Why*: Ensures Paper Account P&L (`Daily`, `Weekly`, `Total`) is a 100% clean, uncontaminated forward track record.
+3. **Multi-Dimensional `SPY` Benchmark Dominance & 9-Gate Promotion**:
+   - *Decision*: To be promoted to `PAPER_TRADING`, a strategy must pass 9 objective gates including positive Out-of-Sample net return, Walk-Forward consistency $\ge 60\%$, $2\times$ cost survival, Ulcer Index $\le 6.0$, and **S&P 500 (`SPY`) dominance** (beating `SPY` in Full & OOS return or achieving superior Return on Invested Capital, positive Jensen's Alpha $\alpha$, and Sharpe $\ge$ `SPY` Sharpe).
+   - *Why*: Prevents low-exposure strategies from passing solely on Sharpe ratio while trailing passive `SPY` buy-and-hold returns.
+4. **Immutable Golden Base (`v1`) Pinning & Strict Incumbent Protection**:
+   - *Decision*: `v1` Golden Base models are never overwritten. Future weekly candidates (`v2+`) are automatically rejected unless they beat or match the active champion's Return, Sharpe, and Calmar (`beats_incumbent`), and operators can revert to `v1` in one click (`revert_to_golden_baseline`).
+   - *Why*: Guarantees monotonic strategy quality and an instant safety net if a new parameter regime degrades.
+5. **Profit-Activated Stop Ratchet ($+1.0\text{R}$ Chandelier & $+1.25\text{R}$ Breakeven+Friction) + Drawdown De-Gearing**:
+   - *Decision*: Trailing stops only tighten after a trade reaches $\ge +1.0\text{R}$ unrealized gain (`trail_activation_r`), locking in breakeven plus transaction friction at $+1.25\text{R}$. At the portfolio level, risk-per-trade automatically scales down to `0.65x` if portfolio drawdown exceeds `7.5%` (halfway to the `15%` kill switch).
+   - *Why*: Avoids premature stop-outs during normal day-1 noise while systematically protecting open profits and portfolio equity.
+6. **Zero-Cost Pluggable AI + IDE-Native Bridge (`ide-context` / `ide-apply`)**:
+   - *Decision*: Default scheduled runs use `LLM_PROVIDER=deterministic_research` (`$0` token cost), automatically upgrading to Gemini/OpenAI if API keys are present, while supporting full live-web AI catalyst research and tournament optimization via the IDE's built-in LLM (`run`).
+   - *Why*: Delivers institutional AI alpha without mandatory paid API subscriptions.
 
 ---
 
-## Part 2: Technical Appendix (Engine Component Reference)
+## 5. Future Work & High-Impact Roadmap
 
-### A. Deterministic Quantitative Core (`core/` & `evaluation/`)
-1. **Market Data Service (`core/market_data/providers.py`, `models.py`)**:
-   - Ingests daily OHLCV bars from `AlpacaDataProvider` (`feed=iex`, with automatic fallback to `LocalSeededDataProvider` for offline testing), normalizes split/dividend adjustments (`adj_open`, `adj_high`, `adj_low`, `adj_close`), enforces US market holiday calendars (`USTradingCalendar`), and prevents look-ahead bias on `BMO`/`AMC` earnings releases.
-   - Includes **Provider-Transition Isolation**: automatically detects if the database switches between synthetic (`local_seeded`) and live (`alpaca`) providers, purging incompatible price scales and resetting paper state so positions are never marked-to-market across different price scales.
-2. **Causal Indicator Engine (`core/indicators/technical.py`)**:
-   - Computes strictly causal technical series (`bars[0 : i + 1]`) for every bar: `SMA(20, 50, 200)`, `EMA(12, 26)`, `MACD(12, 26, 9)`, Wilder's `RSI(14)`, Wilder's `ATR(14)`, `Bollinger Bands(20, 2)`, `20-day Volume Ratio`, `10-day Consolidation Range %`, `20-day / 252-day Prior Highs`, and `20-day / 60-day Relative Strength vs. SPY`.
-3. **Strategy Signal Engine & Version Registry (`core/strategies/registry.py`)**:
-   - Evaluates structured JSON entry and exit rules (`StrategyConfig`) without free-form text interpretation.
-   - Includes a **Systematic $+1.25\text{R}$ Breakeven+Friction Ratchet & Chandelier ATR Trailing Stop** (`compute_effective_stop_price()`): once a trade reaches $+1.25\text{R}$ unrealized gain, the stop-loss automatically ratchets to $\text{Entry} + 0.15 \times \text{ATR}$ (covering commissions and slippage), and once it reaches $+1.5\text{R}$, a Chandelier trailing stop ($\text{Highest High Since Entry} - k \times \text{ATR}_{14}$) locks in swing gains.
-   - Enforces immutable versioning (`DRAFT -> BACKTESTING -> VALIDATION -> PAPER_TRADING -> RETIRED / REJECTED`). Promoting `v+1` automatically transitions `v` to `RETIRED`.
-4. **Chronological Backtesting, Walk-Forward Efficiency & Deflated Sharpe (`core/backtesting/engine.py`, `evaluation/metrics/performance.py`)**:
-   - Simulates bar-by-bar trading across **In-Sample (50–60%)**, **Validation (20–25%)**, and **Out-of-Sample (20–25%)** partitions, plus a **4-Window Rolling Walk-Forward** audit, **Walk-Forward Efficiency (WFE) Ratio**, and a **2x Transaction Cost Stress Test**.
-   - Computes **Probabilistic Sharpe Ratio (PSR %)** and **Deflated Sharpe Ratio (DSR %)** (Bailey & López de Prado) adjusted for return skewness, fat tails (kurtosis), sample length, and multiple-testing bias across weekly strategy tournaments.
-   - Signals triggered at Day `T` close fill at Day `T + 1` open (`adj_open` + `2.5 bps` half-spread + `3.0 bps` slippage + `$0.005/sh` commission).
-5. **Portfolio Risk Manager (`core/risk/manager.py`)**:
-   - Sizes every position using `14-day ATR` so entry-to-stop-loss risk is capped at `1.0%` of equity, with **Dynamic Drawdown De-Gearing** (automatically scaling risk per trade down to `0.65x` if portfolio drawdown exceeds `7.5%`, halfway to the `15%` kill switch) and **Volatility-Regime Targeting**.
-   - Exercises hard veto authority over 7 limits: `1.0%` per-trade risk, `5.0%` total open portfolio heat (`MAX_TOTAL_OPEN_RISK`), `15.0%` single-stock cap, `30.0%` sector cap, `10` max positions, `0.80` pairwise return correlation cap, `$20M` minimum daily dollar volume, and a `15.0%` drawdown kill switch.
-6. **Paper Brokerage & Air-Gapped Live Trading Copilot (`core/execution/paper_broker.py`)**:
-   - `PaperTradingEngine`: Manages the `$100,000` virtual account, prevents duplicate orders via SHA-256 `idempotency_key`s, interleaves signals round-robin across active strategies by conviction score, reconciles cash/positions/dividends, and writes an immutable `trade_ledger`.
-   - `LiveTradingCopilotEngine`: Air-gapped shadow portfolio engine (`shadow_accounts`, `shadow_positions`, `shadow_trade_history`, `shadow_dismissed_signals`) that provides daily step-by-step `SELL`, `HOLD` (including live stop-ratchet alerts), and `BUY` instructions sized to your real cash and holdings without ever connecting to your brokerage account.
+1. **Dynamic Liquid Universe Expansion (Top 100 S&P 500 / Nasdaq-100 + Sector ETFs)**:
+   - Expand beyond the 16 core large-cap equities to a dynamic 75–100 stock universe filtered point-in-time by `20-day Average Dollar Volume >= $50M`, providing more uncorrelated breakout and earnings-drift setups each week.
+2. **Partial Profit Scaling (`50%` at $+1.5\text{R}$, Trail Remaining `50%`)**:
+   - Upgrade `PaperTradingEngine` and `LiveTradingCopilotEngine` to support selling half of a position at the initial profit target while trailing the second half with the Chandelier ATR stop.
+3. **Real-Account Equity Curve & Benchmark Comparison in `Live Copilot`**:
+   - Add Daily, Weekly, and Total P&L charting vs. `SPY` inside the `Live Copilot (Real Account)` tab to mirror the Paper Account's analytics on confirmed personal trades.
+4. **Intraday VWAP / Opening-Range Execution Timing**:
+   - Enhance the next-day open execution model with optional 30-minute Opening Range Breakout (`ORB`) confirmation to reduce morning gap-fade risk on earnings and breakout entries.
 
-### B. Autonomous Agent Layer (`agents/`)
-| Agent Class | File | Role & Permitted Scope |
+---
+
+## 6. Technical Appendix (Module Map)
+
+| Layer | File | Responsibility |
 |---|---|---|
-| `MarketResearchAgent` | `agents/market_researcher/agent.py` | Scans the equity universe daily and outputs schema-validated `CandidateResearchReport` rankings. Cannot place orders. |
-| `StrategyDiscoveryAgent` | `agents/strategy_architect/agent.py` | Proposes falsifiable `StrategyConfig` versions (`v+1`) in `DRAFT` status based on research and analyst feedback. |
-| `StrategyEvaluationAgent` | `agents/strategy_evaluator/agent.py` | Audits candidate strategies against all 9 out-of-sample and walk-forward gates; promotes winners to `PAPER_TRADING` or marks them `REJECTED`. |
-| `PerformanceAnalystAgent` | `agents/performance_analyst/agent.py` | Reviews daily post-close attribution and writes `ExperimentProposal` records for the Saturday discovery loop. |
-| `RiskManagerAgent` | `agents/risk_manager/agent.py` | Audits portfolio-level drawdown, concentration, and risk alerts after each session. |
-
-### C. Cloud Persistence & Automation (`infrastructure/` & `.github/workflows/`)
-- **Database (`infrastructure/database/db.py`)**: 16-table SQLite database (`data/swing_trader.db`) storing market bars, strategy versions, backtest experiments, paper orders, trade ledger fills, daily snapshots, risk alerts, and idempotent job logs.
-- **Orchestrator (`infrastructure/scheduler/orchestrator.py`)**: Wraps every daily and weekly step in `run_idempotent_job()` keyed by date so a job never double-executes on the same trading session.
-- **GitHub Actions (`.github/workflows/autonomous_trading.yml`)**: Runs the Daily and Weekly workflows on Ubuntu runners, commits the updated `data/swing_trader.db` back to `main`, and triggers Streamlit Community Cloud (`dashboard/streamlit_app.py`) to refresh automatically.
-
+| **CLI & API** | `main.py`, `api/server.py` | CLI commands (`bootstrap`, `daily`, `weekly`, `ide-context`, `ide-apply`, `revert-baseline`, `serve`) & REST endpoints |
+| **Dashboards** | `dashboard/streamlit_app.py`, `dashboard/ui_template.py` | 8-tab Streamlit Cloud UI & local HTML/JS dashboard |
+| **Market Data & Indicators** | `core/market_data/providers.py`, `core/indicators/technical.py` | Alpaca / Seeded OHLCV ingestion, point-in-time `BMO`/`AMC` earnings, causal indicators (`SMA`, `EMA`, `RSI`, `ATR`, `BB`, `RS vs SPY`) |
+| **Strategies & Signals** | `core/strategies/registry.py` | 5 Golden Base strategy families, `StrategySignalEngine`, version registry, and `revert_to_golden_baseline()` |
+| **Backtesting & Metrics** | `core/backtesting/engine.py`, `evaluation/metrics/performance.py` | Chronological backtester, Walk-Forward folds, 2x cost stress tests, SPY Alpha/Beta/Capture, Ulcer/Martin, PSR/DSR, Monte Carlo |
+| **Risk & Execution** | `core/risk/manager.py`, `core/execution/paper_broker.py` | ATR sizing, drawdown de-gearing, 7 risk vetoes, `$100k` forward `PaperTradingEngine`, and air-gapped `LiveTradingCopilotEngine` |
+| **AI Agents & Orchestration** | `agents/*`, `infrastructure/scheduler/orchestrator.py` | 5 role-scoped agents (`MarketResearch`, `StrategyDiscovery`, `StrategyEvaluation`, `PerformanceAnalyst`, `RiskManager`) & idempotent scheduler |
