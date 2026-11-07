@@ -728,6 +728,10 @@ class TestSwingTradingPlatform(unittest.TestCase):
         )
         self.assertEqual(copilot.get_open_positions()[0]["quantity"], 15)
 
+        # Verify get_daily_action_plan with an open position populates hold_updates or sell_actions cleanly
+        plan_with_open = copilot.get_daily_action_plan(as_of_date="2025-05-09")
+        self.assertTrue(len(plan_with_open["hold_updates"]) + len(plan_with_open["sell_actions"]) >= 1)
+
         # Confirming a SELL execution closes the position and locks in realised P&L
         after_sell = copilot.confirm_sell_execution(
             ticker="NVDA",

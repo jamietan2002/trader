@@ -730,9 +730,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       document.getElementById('copilot-positions-table').innerHTML = holds.length ? `
         <table>
-          <thead><tr><th>Ticker</th><th>Qty</th><th>Avg Entry</th><th>Current</th><th>Unrealised P&amp;L</th><th>Stop / Target</th><th>Status</th></tr></thead>
+          <thead><tr><th>Ticker</th><th>Qty</th><th>Avg Entry</th><th>Current</th><th>Unrealised P&amp;L</th><th>Stop / Target</th><th>Status</th><th>Action</th></tr></thead>
           <tbody>
-            ${holds.map(h => `
+            ${holds.map((h, idx) => `
               <tr>
                 <td><strong>${h.ticker}</strong></td>
                 <td>${h.quantity}</td>
@@ -741,6 +741,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 <td class="${h.unrealised_pnl >= 0 ? 'pos' : 'neg'}">${fmtUsd(h.unrealised_pnl)}</td>
                 <td>${fmtUsd(h.stop_loss_price)} / ${fmtUsd(h.take_profit_price)}</td>
                 <td>${h.status}</td>
+                <td><button class="btn btn-secondary" onclick="confirmCopilotSell(${1000 + idx}, '${h.ticker}', ${h.quantity}, ${h.current_price})">Close</button></td>
               </tr>
             `).join('')}
           </tbody>

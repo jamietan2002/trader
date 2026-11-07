@@ -318,8 +318,10 @@ class StrategySignalEngine:
         entry_price: float,
         highest_price_since_entry: float,
         holding_days: int,
-        initial_stop_price: Optional[float],
-        atr_14: float,
+        initial_stop_price: Optional[float] = None,
+        atr_14: Optional[float] = None,
+        ind: Optional[IndicatorSnapshot] = None,
+        stop_loss_price: Optional[float] = None,
     ) -> Tuple[float, str]:
         """Compute one-way ratcheted stop price combining initial ATR stop, +1.25R breakeven+friction ratchet, and Chandelier trail.
 
@@ -327,10 +329,20 @@ class StrategySignalEngine:
         """
         exits = config.exit_rules
         stop_mult = float(exits.get("stop_loss_atr_mult", 2.0))
+        resolved_stop = initial_stop_price if initial_stop_price is not None else stop_loss_price
+        resolved_atr = (
+            float(atr_14)
+            if (atr_14 is not None and atr_14 > 0)
+            else (
+                float(ind.atr_14)
+                if (ind is not None and ind.atr_14 is not None and ind.atr_14 > 0)
+                else max(0.01, entry_price * 0.02)
+            )
+        )
         base_stop = (
-            float(initial_stop_price)
-            if (initial_stop_price is not None and initial_stop_price > 0)
-            else round(max(0.01, entry_price - stop_mult * atr_14), 2)
+            float(resolved_stop)
+            if (resolved_stop is not None and resolved_stop > 0)
+            else round(max(0.01, entry_price - stop_mult * resolved_atr), 2)
         )
         effective_stop = base_stop
         mode_label = "Initial ATR Stop"
@@ -340,15 +352,15 @@ class StrategySignalEngine:
             # 1. +1.25R Breakeven + Friction Buffer Ratchet
             breakeven_trigger_r = float(exits.get("breakeven_trigger_r", 1.25))
             if (highest_price_since_entry - entry_price) >= breakeven_trigger_r * risk_1r:
-                be_Plus_friction = round(entry_price + 0.15 * atr_14, 2)
-                if be_Plus_friction > effective_stop:
-                    effective_stop = be_Plus_friction
+                be_plus_friction = round(entry_price + 0.15 * resolved_atr, 2)
+                if be_plus_friction > effective_stop:
+                    effective_stop = be_plus_friction
                     mode_label = "Breakeven+Friction Ratchet (+1.25R)"
 
             # 2. Chandelier ATR Trailing Stop Ratchet
             trailing_atr_mult = exits.get("trailing_stop_atr_mult")
             if trailing_atr_mult is not None:
-                trail_stop = round(highest_price_since_entry - float(trailing_atr_mult) * atr_14, 2)
+                trail_stop = round(highest_price_since_entry - float(trailing_atr_mult) * resolved_atr, 2)
                 if trail_stop > effective_stop:
                     effective_stop = trail_stop
                     mode_label = f"Chandelier Trail ({trailing_atr_mult}x ATR)"

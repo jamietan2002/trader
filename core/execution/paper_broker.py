@@ -1585,15 +1585,15 @@ class LiveTradingCopilotEngine:
                 days_left = max(0, max_hold - int(pos["holding_days"]))
                 eff_stop, stop_mode = StrategySignalEngine.compute_effective_stop_price(
                     config=strat,
-                    ind=ind_today,
                     entry_price=float(pos["avg_entry_price"]),
                     highest_price_since_entry=float(pos["highest_price_since_entry"]),
                     holding_days=int(pos["holding_days"]),
-                    stop_loss_price=float(pos["stop_loss_price"]) if pos.get("stop_loss_price") else None,
+                    initial_stop_price=float(pos["stop_loss_price"]) if pos.get("stop_loss_price") else None,
+                    atr_14=float(ind_today.atr_14) if (ind_today and ind_today.atr_14) else float(pos["avg_entry_price"]) * 0.02,
                 )
                 stop_note = ""
-                if stop_mode in ("BREAKEVEN_RATCHET", "CHANDELIER_TRAIL") and eff_stop is not None:
-                    stop_note = f" · Ratchet Broker Stop → ${eff_stop:.2f} ({stop_mode.replace('_', ' ').title()})"
+                if stop_mode != "Initial ATR Stop" and eff_stop is not None:
+                    stop_note = f" · Raise Stop → ${eff_stop:.2f} ({stop_mode})"
                 hold_updates.append(
                     {
                         "ticker": ticker,

@@ -311,7 +311,7 @@ def main() -> None:
     )
 
     app = PlatformApplication()
-    _code_version = "2026-11-07-v5"
+    _code_version = "2026-11-07-v6"
     import api.server as _srv_mod
     if (
         getattr(_srv_mod, "_STREAMLIT_SYNC_VERSION", None) != _code_version
@@ -727,57 +727,56 @@ def main() -> None:
         real_positions = copilot_data.get("positions") or []
         real_history = copilot_data.get("trade_history") or []
 
-        # 1. Real Account Summary Metrics
-        rc1, rc2, rc3, rc4, rc5 = st.columns(5)
+        # 1. Real Account Summary Metrics + Quick Cash Bar
+        total_real_pnl = round(float(real_acc["realised_pnl"]) + float(real_acc["unrealised_pnl"]), 2)
+        rc1, rc2, rc3, rc4 = st.columns(4)
         rc1.metric(
-            "My Real Total Equity",
+            "My Account Value",
             f"${real_acc['total_equity']:,.2f}",
-            f"{real_acc['total_return_pct']:+.2f}% vs ${real_acc['starting_cash']:,.0f} base",
-            help="Your confirmed Real Cash Balance + Market Value of your confirmed Real Positions.",
+            f"{real_acc['total_return_pct']:+.2f}% vs ${real_acc['starting_cash']:,.0f} start",
+            help="Confirmed Uninvested Cash + Market Value of your confirmed Open Holdings.",
         )
         rc2.metric(
-            "My Real Cash Balance",
+            "Available Cash",
             f"${real_acc['cash_balance']:,.2f}",
-            help="Uninvested cash in your real account used by the Copilot to size new BUY recommendations.",
+            help="Uninvested cash used to size today's BUY signals (1.0% max risk per trade).",
         )
         rc3.metric(
-            "Invested Market Value",
-            f"${real_acc['positions_market_value']:,.2f}",
-            f"{real_acc['open_positions_count']} open positions",
-            help="Current market value of the positions you have confirmed holding.",
+            "Open Holdings",
+            f"{real_acc['open_positions_count']} / 10",
+            f"${real_acc['positions_market_value']:,.2f} invested",
+            help="Positions you have confirmed buying or holding.",
         )
         rc4.metric(
-            "Realised P&L (Closed)",
-            f"${real_acc['realised_pnl']:+,.2f}",
-            help="Net profit/loss locked in from real trades you confirmed closing.",
-        )
-        rc5.metric(
-            "Unrealised P&L (Open)",
-            f"${real_acc['unrealised_pnl']:+,.2f}",
-            help="Floating profit/loss on your confirmed open positions at the latest market close.",
+            "Total Real P&L",
+            f"${total_real_pnl:+,.2f}",
+            f"Closed: ${real_acc['realised_pnl']:+,.0f} · Open: ${real_acc['unrealised_pnl']:+,.0f}",
+            help="Combined Realised P&L (closed trades) and Unrealised P&L (open positions).",
         )
 
-        with st.expander("Configure My Real Cash Balance & Active Copilot Strategies", expanded=False):
-            cfg_c1, cfg_c2 = st.columns(2)
-            with cfg_c1:
-                st.markdown("**Update Real Cash Balance**")
-                new_cash_val = st.number_input(
-                    "Current Uninvested Cash in Your Broker ($)",
-                    min_value=0.0,
-                    value=float(real_acc["cash_balance"]),
-                    step=500.0,
-                    key="copilot_cash_input",
-                )
-                reset_base = st.checkbox(
-                    "Also set this (+ current positions) as my Starting Capital baseline",
-                    value=False,
-                    key="copilot_reset_base",
-                )
-                if st.button("Save Real Cash Balance", width="stretch"):
-                    app.orchestrator.live_copilot.update_cash_balance(new_cash_val, reset_base)
-                    st.rerun()
-            with cfg_c2:
-                st.markdown("**Select Strategies Driving Your Copilot**")
+        # Compact 1-Row Cash Update Bar
+        cash_c1, cash_c2, cash_c3, cash_c4 = st.columns([1.6, 1.0, 1.1, 1.3])
+        new_cash_val = cash_c1.number_input(
+            "My Broker Cash Balance ($)",
+            min_value=0.0,
+            value=float(real_acc["cash_balance"]),
+            step=500.0,
+            key="copilot_cash_input",
+            help="Enter your current uninvested cash so BUY share counts scale to your exact account size.",
+        )
+        with cash_c2:
+            st.write("")
+            if st.button("Update Cash", key="btn_upd_cash", width="stretch"):
+                app.orchestrator.live_copilot.update_cash_balance(new_cash_val, False)
+                st.rerun()
+        with cash_c3:
+            st.write("")
+            if st.button("Set as Starting Capital", key="btn_reset_base_cash", width="stretch", help="Sets your current Cash + Open Holdings as your 0% return baseline."):
+                app.orchestrator.live_copilot.update_cash_balance(new_cash_val, True)
+                st.rerun()
+        with cash_c4:
+            st.write("")
+            with st.popover("Active Strategies Filter", width="stretch"):
                 avail_keys = [
                     f"{s['strategy_id']}:{s['version']}"
                     for s in strats
@@ -786,182 +785,205 @@ def main() -> None:
                 default_keys = real_acc.get("enabled_strategies") or avail_keys
                 valid_defaults = [k for k in default_keys if k in avail_keys] or avail_keys
                 chosen_keys = st.multiselect(
-                    "Active Strategies for Real Account Signals",
+                    "Strategies generating your signals",
                     options=avail_keys,
                     default=valid_defaults,
                     key="copilot_strats_select",
                 )
-                if st.button("Save Strategy Selection", width="stretch"):
+                if st.button("Apply Filter", width="stretch"):
                     app.orchestrator.live_copilot.set_enabled_strategies(chosen_keys)
                     st.rerun()
 
-        st.markdown(f"#### 1. Step-by-Step Action Checklist for Next Market Open (Session `{plan['session_date']}`)")
+        st.markdown("---")
+        st.markdown(f"#### 1. Today's Action Checklist (Session `{plan['session_date']}`)")
 
         # A. SELL Actions (Exits on confirmed positions)
         if sell_actions:
-            st.markdown("##### Step A — SELL Orders (Exits Triggered on Positions You Hold)")
+            st.markdown("##### SELL — Exit Signals on Your Holdings")
             for idx, sa in enumerate(sell_actions):
-                with st.container():
+                sc_info, sc_qty, sc_px, sc_btn1, sc_btn2 = st.columns([2.6, 0.8, 0.9, 0.9, 0.7])
+                with sc_info:
                     st.warning(
-                        f"**SELL `{sa['quantity_to_sell']}` shares of `{sa['ticker']}`** at Market Open  ·  "
-                        f"**Reason**: {sa['reason']}  ·  "
-                        f"**Your Entry**: `${sa['avg_entry_price']:.2f}` → **Ref Price**: `${sa['reference_exit_price']:.2f}` "
-                        f"(`Est. P&L: ${sa['estimated_realised_pnl']:+,.2f}`)"
+                        f"**SELL `{sa['quantity_to_sell']}` `{sa['ticker']}`** (`Est. P&L: ${sa['estimated_realised_pnl']:+,.2f}`)\n\n"
+                        f"Entry `${sa['avg_entry_price']:.2f}` → Now `${sa['reference_exit_price']:.2f}` · *{sa['reason']}*"
                     )
-                    sc1, sc2, sc3, sc4, sc5 = st.columns([1.1, 1.1, 1.0, 1.1, 0.9])
-                    s_qty = sc1.number_input(
-                        f"Shares Sold ({sa['ticker']})",
-                        min_value=1,
-                        max_value=int(sa["quantity_to_sell"]),
-                        value=int(sa["quantity_to_sell"]),
-                        key=f"sell_qty_{sa['ticker']}_{idx}",
-                    )
-                    s_price = sc2.number_input(
-                        f"Actual Exit Price ($)",
-                        min_value=0.01,
-                        value=float(sa["reference_exit_price"]),
-                        step=0.10,
-                        key=f"sell_px_{sa['ticker']}_{idx}",
-                    )
-                    s_fee = sc3.number_input(
-                        "Broker Fee ($)",
-                        min_value=0.0,
-                        value=1.00,
-                        step=0.50,
-                        key=f"sell_fee_{sa['ticker']}_{idx}",
-                    )
-                    with sc4:
-                        st.write("")
-                        if st.button(f"Confirm Sold {sa['ticker']}", key=f"btn_sell_{sa['ticker']}_{idx}", width="stretch"):
-                            app.orchestrator.live_copilot.confirm_sell_execution(
-                                ticker=sa["ticker"],
-                                quantity=int(s_qty),
-                                fill_price=float(s_price),
-                                fees_usd=float(s_fee),
-                                notes=sa["reason"],
-                            )
-                            st.rerun()
-                    with sc5:
-                        st.write("")
-                        if st.button("Hold Today", key=f"btn_skip_sell_{sa['ticker']}_{idx}", width="stretch"):
-                            app.orchestrator.live_copilot.dismiss_signal(
-                                signal_date=sa["signal_date"],
-                                strategy_id=sa["strategy_id"],
-                                ticker=sa["ticker"],
-                                action="SELL",
-                            )
-                            st.rerun()
-        else:
-            st.caption("No SELL exit triggers on your current holdings today.")
+                s_qty = sc_qty.number_input(
+                    "Shares",
+                    min_value=1,
+                    max_value=int(sa["quantity_to_sell"]),
+                    value=int(sa["quantity_to_sell"]),
+                    key=f"sell_qty_{sa['ticker']}_{idx}",
+                )
+                s_price = sc_px.number_input(
+                    "Exit Price ($)",
+                    min_value=0.01,
+                    value=float(sa["reference_exit_price"]),
+                    step=0.10,
+                    key=f"sell_px_{sa['ticker']}_{idx}",
+                )
+                with sc_btn1:
+                    st.write("")
+                    if st.button(f"✓ Sold {sa['ticker']}", key=f"btn_sell_{sa['ticker']}_{idx}", width="stretch"):
+                        app.orchestrator.live_copilot.confirm_sell_execution(
+                            ticker=sa["ticker"],
+                            quantity=int(s_qty),
+                            fill_price=float(s_price),
+                            fees_usd=0.0,
+                            notes=sa["reason"],
+                        )
+                        st.rerun()
+                with sc_btn2:
+                    st.write("")
+                    if st.button("Hold", key=f"btn_skip_sell_{sa['ticker']}_{idx}", width="stretch", help="Hide this sell signal for today and keep holding."):
+                        app.orchestrator.live_copilot.dismiss_signal(
+                            signal_date=sa["signal_date"],
+                            strategy_id=sa["strategy_id"],
+                            ticker=sa["ticker"],
+                            action="SELL",
+                        )
+                        st.rerun()
 
         # B. BUY Actions (New entries sized to user's real cash & equity)
         if buy_actions:
-            st.markdown("##### Step B — BUY Candidates (Sized to 1% Risk of Your Real Account)")
+            st.markdown("##### BUY — New Setups Sized to Your Account (1% Max Risk)")
             for idx, ba in enumerate(buy_actions):
-                with st.expander(
-                    f"BUY {ba['recommended_shares']} shares of {ba['ticker']} (~${ba['estimated_cost_usd']:,.2f} · "
-                    f"{ba['portfolio_weight_pct']:.1f}% of your account)  ·  "
-                    f"Strategy: {ba['strategy_id']} v{ba['strategy_version']}  ·  "
-                    f"Stop-Loss: ${ba['stop_loss_price']:.2f} (Max Risk: -${ba['estimated_risk_usd']:,.2f})",
-                    expanded=(idx < 3),
-                ):
+                bc_info, bc_qty, bc_px, bc_btn1, bc_btn2 = st.columns([2.6, 0.8, 0.9, 0.9, 0.7])
+                with bc_info:
                     st.markdown(
-                        f"""
-                        - **Signal Rationale**: {ba['reason']}
-                        - **Bracket Levels to Set in Your Broker**: **Stop-Loss**: `${ba['stop_loss_price']:.2f}` · **Take-Profit**: `${ba['take_profit_price']:.2f}` · **Max Holding Window**: `{ba['holding_horizon_days']}`
-                        """
+                        f"**BUY `{ba['recommended_shares']}` `{ba['ticker']}` @ `~${ba['reference_entry_price']:.2f}`** "
+                        f"(`~${ba['estimated_cost_usd']:,.0f}` · `{ba['portfolio_weight_pct']:.1f}%` of account)  \n"
+                        f"Set Broker Bracket: **Stop-Loss `${ba['stop_loss_price']:.2f}`** (`-${ba['estimated_risk_usd']:,.0f}` max risk) · "
+                        f"**Take-Profit `${ba['take_profit_price']:.2f}`** · *Max Hold `{ba['holding_horizon_days']}`*  \n"
+                        f"<span style='color:#94a3b8;font-size:0.82rem;'>{ba['strategy_id']} v{ba['strategy_version']} — {ba['reason']}</span>",
+                        unsafe_allow_html=True,
                     )
-                    bc1, bc2, bc3, bc4, bc5 = st.columns([1.1, 1.1, 1.0, 1.1, 0.9])
-                    b_qty = bc1.number_input(
-                        f"Shares Bought ({ba['ticker']})",
-                        min_value=1,
-                        value=int(ba["recommended_shares"]),
-                        step=1,
-                        key=f"buy_qty_{ba['ticker']}_{idx}",
-                    )
-                    b_price = bc2.number_input(
-                        "Actual Fill Price ($)",
-                        min_value=0.01,
-                        value=float(ba["reference_entry_price"]),
-                        step=0.10,
-                        key=f"buy_px_{ba['ticker']}_{idx}",
-                    )
-                    b_fee = bc3.number_input(
-                        "Broker Fee ($)",
-                        min_value=0.0,
-                        value=1.00,
-                        step=0.50,
-                        key=f"buy_fee_{ba['ticker']}_{idx}",
-                    )
-                    with bc4:
-                        st.write("")
-                        if st.button(
-                            f"Confirm Bought {ba['ticker']}",
-                            key=f"btn_buy_{ba['ticker']}_{idx}",
-                            width="stretch",
-                        ):
-                            app.orchestrator.live_copilot.confirm_buy_execution(
-                                ticker=ba["ticker"],
-                                strategy_id=ba["strategy_id"],
-                                strategy_version=int(ba["strategy_version"]),
-                                quantity=int(b_qty),
-                                fill_price=float(b_price),
-                                fees_usd=float(b_fee),
-                                stop_loss_price=ba["stop_loss_price"],
-                                take_profit_price=ba["take_profit_price"],
-                                sector=ba["sector"],
-                                notes=ba["reason"],
-                            )
-                            st.rerun()
-                    with bc5:
-                        st.write("")
-                        if st.button(
-                            "Skip Trade",
-                            key=f"btn_skip_{ba['ticker']}_{idx}",
-                            width="stretch",
-                        ):
-                            app.orchestrator.live_copilot.dismiss_signal(
-                                signal_date=ba["signal_date"],
-                                strategy_id=ba["strategy_id"],
-                                ticker=ba["ticker"],
-                                action="BUY",
-                            )
-                            st.rerun()
-        else:
-            st.info("No new BUY signals currently pass your real-account cash and risk caps for this session.")
+                b_qty = bc_qty.number_input(
+                    "Shares",
+                    min_value=1,
+                    value=int(ba["recommended_shares"]),
+                    step=1,
+                    key=f"buy_qty_{ba['ticker']}_{idx}",
+                )
+                b_price = bc_px.number_input(
+                    "Fill Price ($)",
+                    min_value=0.01,
+                    value=float(ba["reference_entry_price"]),
+                    step=0.10,
+                    key=f"buy_px_{ba['ticker']}_{idx}",
+                )
+                with bc_btn1:
+                    st.write("")
+                    if st.button(
+                        f"✓ Bought {ba['ticker']}",
+                        key=f"btn_buy_{ba['ticker']}_{idx}",
+                        width="stretch",
+                    ):
+                        app.orchestrator.live_copilot.confirm_buy_execution(
+                            ticker=ba["ticker"],
+                            strategy_id=ba["strategy_id"],
+                            strategy_version=int(ba["strategy_version"]),
+                            quantity=int(b_qty),
+                            fill_price=float(b_price),
+                            fees_usd=0.0,
+                            stop_loss_price=ba["stop_loss_price"],
+                            take_profit_price=ba["take_profit_price"],
+                            sector=ba["sector"],
+                            notes=ba["reason"],
+                        )
+                        st.rerun()
+                with bc_btn2:
+                    st.write("")
+                    if st.button(
+                        "Skip",
+                        key=f"btn_skip_{ba['ticker']}_{idx}",
+                        width="stretch",
+                    ):
+                        app.orchestrator.live_copilot.dismiss_signal(
+                            signal_date=ba["signal_date"],
+                            strategy_id=ba["strategy_id"],
+                            ticker=ba["ticker"],
+                            action="BUY",
+                        )
+                        st.rerun()
+        elif not sell_actions:
+            st.info("No new BUY or SELL actions required today. All open holdings remain within their target brackets.")
 
         vetoed_sigs = plan.get("vetoed_signals") or []
         if vetoed_sigs:
-            with st.expander(f"View Signals Filtered Out by Your Risk Caps Today ({len(vetoed_sigs)} blocked)", expanded=False):
-                st.caption("These strategy candidates triggered an entry rule today but were blocked by your real-account cash, sector cap, or 5% portfolio heat limit:")
+            with st.expander(f"Signals Filtered Out by Your Risk Caps Today ({len(vetoed_sigs)})", expanded=False):
                 st.dataframe(vetoed_sigs, width="stretch")
 
-        # 2. My Confirmed Real Positions & Manual Position Editor
-        st.markdown("#### 2. My Confirmed Real Positions & Hold Status")
+        st.markdown("---")
+        # 2. My Confirmed Real Positions with 1-Click Inline Close & Smart Pre-Filled Editor
+        st.markdown("#### 2. My Active Holdings & Stop-Loss Ratchet Status")
         if hold_updates:
-            st.dataframe(hold_updates, width="stretch")
+            for h_idx, h in enumerate(hold_updates):
+                hc1, hc2, hc3, hc4 = st.columns([2.8, 1.4, 0.9, 0.9])
+                pnl_sign = f"+${h['unrealised_pnl']:,.2f}" if h["unrealised_pnl"] >= 0 else f"-${abs(h['unrealised_pnl']):,.2f}"
+                hc1.markdown(
+                    f"**`{h['ticker']}`** · `{h['quantity']} shares` · "
+                    f"Entry `${h['avg_entry_price']:.2f}` → Now `${h['current_price']:.2f}` (**`{pnl_sign}`**)  \n"
+                    f"<span style='color:#94a3b8;font-size:0.83rem;'>{h['status']}</span>",
+                    unsafe_allow_html=True,
+                )
+                stop_disp = f"${h['stop_loss_price']:.2f}" if h.get("stop_loss_price") else "-"
+                tp_disp = f"${h['take_profit_price']:.2f}" if h.get("take_profit_price") else "-"
+                hc2.markdown(
+                    f"**Stop**: `{stop_disp}` · **Target**: `{tp_disp}`  \n"
+                    f"<span style='color:#38bdf8;font-size:0.8rem;'>{h.get('stop_mode', 'Initial ATR Stop')}</span>",
+                    unsafe_allow_html=True,
+                )
+                close_px = hc3.number_input(
+                    f"Exit $ ({h['ticker']})",
+                    min_value=0.01,
+                    value=float(h["current_price"]),
+                    step=0.10,
+                    key=f"quick_close_px_{h['ticker']}_{h_idx}",
+                    label_visibility="collapsed",
+                )
+                if hc4.button(f"Close {h['ticker']}", key=f"btn_qclose_{h['ticker']}_{h_idx}", width="stretch", help="Confirm you sold/closed this position at the price on the left."):
+                    app.orchestrator.live_copilot.confirm_sell_execution(
+                        ticker=h["ticker"],
+                        quantity=int(h["quantity"]),
+                        fill_price=float(close_px),
+                        fees_usd=0.0,
+                        notes="Manual position close via Copilot",
+                    )
+                    st.rerun()
         elif real_positions:
             st.dataframe(real_positions, width="stretch")
         else:
-            st.write(
-                "You currently have 0 confirmed real positions. Click **Confirm Bought** on a recommendation above "
-                "or use **Add / Edit / Close a Position** below to log an existing holding."
-            )
+            st.caption("No active holdings logged yet. Click **✓ Bought** on a setup above or log an existing broker holding below.")
 
-        with st.expander("Add, Edit, or Manually Close a Real Position", expanded=False):
-            st.caption(
-                "Use this form if you already hold a stock in your broker, if you adjusted your share count, "
-                "or if you want to remove a position (set Shares = 0 to remove without logging a sale, or use Close Position below)."
-            )
-            ec1, ec2, ec3, ec4, ec5 = st.columns(5)
+        with st.expander("Log an Existing Broker Holding or Edit a Position", expanded=False):
             universe_tickers = sorted({t for s in strats for t in s["universe"]})
+            pos_by_tkr = {p["ticker"]: p for p in real_positions}
+            latest_px_by_tkr = {r["ticker"]: float(r["current_price"]) for r in state["research_reports"]}
+
+            ec1, ec2, ec3, ec4, ec5 = st.columns([1.1, 0.9, 1.0, 1.0, 1.0])
             e_ticker = ec1.selectbox("Ticker", options=universe_tickers, key="edit_pos_ticker")
-            e_qty = ec2.number_input("Shares (0 to delete)", min_value=0, value=10, step=1, key="edit_pos_qty")
-            e_entry = ec3.number_input("Avg Entry Price ($)", min_value=0.01, value=150.0, step=0.50, key="edit_pos_px")
-            e_stop = ec4.number_input("Stop-Loss ($ · 0=Auto ATR)", min_value=0.0, value=0.0, step=0.50, key="edit_pos_sl")
-            e_tp = ec5.number_input("Take-Profit ($ · 0=Auto ATR)", min_value=0.0, value=0.0, step=0.50, key="edit_pos_tp")
-            deduct_chk = st.checkbox("Deduct cost (Shares × Entry Price) from my Real Cash Balance", value=False, key="edit_pos_deduct")
-            if st.button("Save Position Update", width="stretch"):
+            existing_p = pos_by_tkr.get(e_ticker)
+            default_qty = int(existing_p["quantity"]) if existing_p else 10
+            default_px = (
+                float(existing_p["avg_entry_price"])
+                if existing_p
+                else round(latest_px_by_tkr.get(e_ticker, 150.0), 2)
+            )
+            default_sl = float(existing_p["stop_loss_price"]) if (existing_p and existing_p.get("stop_loss_price")) else 0.0
+            default_tp = float(existing_p["take_profit_price"]) if (existing_p and existing_p.get("take_profit_price")) else 0.0
+
+            e_qty = ec2.number_input("Shares (0=Remove)", min_value=0, value=default_qty, step=1, key=f"edit_qty_{e_ticker}")
+            e_entry = ec3.number_input("Entry Price ($)", min_value=0.01, value=default_px, step=0.50, key=f"edit_px_{e_ticker}")
+            e_stop = ec4.number_input("Stop $ (0=Auto)", min_value=0.0, value=default_sl, step=0.50, key=f"edit_sl_{e_ticker}")
+            e_tp = ec5.number_input("Target $ (0=Auto)", min_value=0.0, value=default_tp, step=0.50, key=f"edit_tp_{e_ticker}")
+
+            act_c1, act_c2 = st.columns([1.5, 2.5])
+            deduct_chk = act_c2.checkbox(
+                "Deduct purchase cost from my Available Cash",
+                value=(existing_p is None),
+                key=f"edit_deduct_{e_ticker}",
+            )
+            if act_c1.button(f"Save {e_ticker} Position", width="stretch"):
                 app.orchestrator.live_copilot.edit_or_add_position(
                     ticker=e_ticker,
                     quantity=int(e_qty),
@@ -973,11 +995,9 @@ def main() -> None:
                 st.rerun()
 
         # 3. Confirmed Real Trade History
-        with st.expander(f"3. My Confirmed Real Trade History ({len(real_history)} fills)", expanded=False):
-            if real_history:
+        if real_history:
+            with st.expander(f"3. My Confirmed Real Trade History ({len(real_history)} fills)", expanded=False):
                 st.dataframe(real_history, width="stretch")
-            else:
-                st.write("No real trades confirmed yet.")
 
     # =========================================================================
     # TAB 4: MARKET RESEARCH
