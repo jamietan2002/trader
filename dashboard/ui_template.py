@@ -580,12 +580,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="tab-intro">
         <p><strong>Live Copilot (Real Account)</strong> — Today's trading-day-aware BUY and SELL instructions sized to your real account balance, with zero access to your brokerage account.</p>
         <details class="tab-help">
-          <summary>? How Live Copilot works</summary>
+          <summary>? Daily Order of Operations (By Time, ET &amp; SGT) — What Comes First, When to Set Stop/Target, What If You Forget or Exit Early?</summary>
           <div class="help-body">
-            • <strong>Trading-Day Aware:</strong> Automatically checks today's NYSE/NASDAQ calendar date. On weekends or holidays, it states the market is closed and suppresses trade suggestions.<br/>
-            • <strong>Zero Broker Access:</strong> Never connects to your broker. You execute trades in your own brokerage app.<br/>
-            • <strong>Never Assumes Positions:</strong> Recommendations stay pending until you click <strong>Confirm Bought</strong> or <strong>Confirm Sold</strong>.<br/>
-            • <strong>Adapts to Your Real Account:</strong> Position sizing (1% risk), stop-losses, and exit rules adapt to your actual confirmed cash and holdings.
+            • <strong>Step 1 (Before 9:30 AM ET / 9:30 PM SGT) — Optional AI Check (<code>type run in IDE</code>):</strong> Searches live web news to veto negative-news traps (&le; -0.35) and boost high-catalyst setups (&ge; +0.25). If you skip this, GitHub Actions already updated your checklist automatically at 5:30 AM SGT!<br/>
+            • <strong>Step 2 (9:30–9:35 AM ET / 9:30–9:35 PM SGT) — Priority #1: Execute SELL Exits &amp; Raise Stops First:</strong> Always sell exits first to free up cash, and update any GTC Stop-Loss orders on holdings that reached +1R.<br/>
+            • <strong>Step 3 (9:30–9:45 AM ET or Pre-Submitted Limit) — Priority #2: Place BUY Limit Orders + Attach GTC Bracket Immediately:</strong> Either pre-submit a Regular-Hours Day Limit order at the <code>Max Chase</code> price with an attached OCO Bracket (<code>Stop-Loss</code> + <code>Take-Profit</code>) before 9:30 AM ET, or place it live during 9:30–9:45 AM ET. Set your GTC Stop-Loss &amp; Take-Profit immediately upon buying.<br/>
+            • <strong>Step 4 — What If You Forget a Day or Exit Early?:</strong> If you miss a BUY, never chase it late—wait for tomorrow's checklist. If you exit a position early on your own, sell in your broker (cancel any old GTC bracket) and click <strong>Close</strong> in Section 2 below.
           </div>
         </details>
       </div>
