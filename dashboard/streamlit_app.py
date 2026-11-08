@@ -1273,7 +1273,7 @@ def main() -> None:
             book_acc = acc
             book_positions = positions
             book_ledger = ledger
-            book_snaps = snaps
+            book_snaps = snapshots
             book_title_label = f"Master Combined Portfolio (`$100k` Shared Across: {active_strat_names})"
         else:
             strat_id_for_book = selected_book_id.replace("paper_", "", 1)
@@ -1284,16 +1284,19 @@ def main() -> None:
             book_snaps = book_engine.get_portfolio_snapshots()
             book_title_label = f"Dedicated Strategy Pod: `{strat_id_for_book}` (`$100,000` Isolated Account)"
 
-        book_daily_pnl_usd, book_daily_ret_pct, book_weekly_pnl_usd, book_weekly_ret_pct, book_net_dollar_pnl = _compute_period_pnl(book_acc, book_snaps)
-        book_total_fees = sum(
-            float(l.get("commission_usd", 0.0)) + float(l.get("slippage_usd", 0.0))
-            for l in book_ledger
+        book_net_dollar_pnl = round(
+            float(book_acc.get("total_pnl_usd", float(book_acc["total_equity"]) - float(book_acc["starting_capital"]))),
+            2,
         )
-        book_fill_dates = sorted({str(l.get("fill_date")) for l in book_ledger if l.get("fill_date")})
-        if book_fill_dates:
-            book_date_span = f"{book_fill_dates[0]} → {book_fill_dates[-1]} ({len(book_fill_dates)} active fill days)"
-        else:
-            book_date_span = f"{latest_market_date} (Clean $100k baseline — waiting for next daily session)"
+        book_daily_pnl_usd = float(book_acc.get("daily_pnl_usd", 0.0))
+        book_daily_ret_pct = float(book_acc.get("daily_return_pct", 0.0))
+        book_weekly_pnl_usd = float(book_acc.get("weekly_pnl_usd", 0.0))
+        book_weekly_ret_pct = float(book_acc.get("weekly_return_pct", 0.0))
+        book_total_fees = round(
+            sum(float(l.get("commission_usd", 0.0)) + float(l.get("slippage_usd", 0.0)) for l in book_ledger),
+            2,
+        )
+        book_date_span = _get_paper_date_span(book_snaps, book_ledger)
 
         st.markdown(f"#### 1. Paper Portfolio Profit & Loss Attribution — {book_title_label}")
         st.markdown(
