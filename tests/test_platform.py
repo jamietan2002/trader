@@ -749,6 +749,36 @@ class TestSwingTradingPlatform(unittest.TestCase):
         self.assertEqual(copilot.get_open_positions()[0]["opened_date"], "2025-05-05")
         self.assertAlmostEqual(after_edit["cash_balance"], 20_000.0 - 1_201.0 - 600.0, places=2)
 
+        # Verify edit_or_add_position preserves existing strategy_id when updating a non-default strategy holding
+        copilot.edit_or_add_position(
+            ticker="NVDA",
+            quantity=15,
+            avg_entry_price=120.0,
+            strategy_id="strat_volatility_breakout",
+            strategy_version=1,
+            deduct_from_cash=False,
+        )
+        copilot.edit_or_add_position(
+            ticker="NVDA",
+            quantity=15,
+            avg_entry_price=120.0,
+            stop_loss_price=114.0,
+            deduct_from_cash=False,
+        )
+        nvda_pos_check = [p for p in copilot.get_open_positions() if p["ticker"] == "NVDA"][0]
+        self.assertEqual(nvda_pos_check["strategy_id"], "strat_volatility_breakout")
+
+        # Verify Two-Tier Paper Books summary (1 Master $100k + Dedicated Per-Strategy $100k Pods)
+        all_books = orch.paper_engine.get_all_paper_accounts_summary(
+            [s.to_dict() for s in orch.registry.list_strategies()]
+        )
+        self.assertGreaterEqual(len(all_books), 4)
+        self.assertEqual(all_books[0]["account_id"], "paper_main_100k")
+        self.assertEqual(all_books[0]["book_type"], "MASTER_COMBINED")
+        pod_ids = {b["account_id"] for b in all_books if b["book_type"] == "STRATEGY_DEDICATED"}
+        self.assertIn("paper_strat_volatility_breakout", pod_ids)
+        self.assertIn("paper_strat_momentum_trend", pod_ids)
+
         # Verify get_daily_action_plan with an open position populates hold_updates or sell_actions cleanly
         plan_with_open = copilot.get_daily_action_plan(as_of_date="2025-05-09")
         self.assertTrue(len(plan_with_open["hold_updates"]) + len(plan_with_open["sell_actions"]) >= 1)

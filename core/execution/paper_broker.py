@@ -248,16 +248,122 @@ class PaperTradingEngine:
             (1 if engaged else 0, reason if engaged else None, utc_now_iso(), self.account_id),
         )
 
-    def reset_account_to_starting_capital(self) -> Dict[str, Any]:
+    def get_strategy_account_engine(self, strategy_id: str) -> "PaperTradingEngine":
+        """Return an isolated $100,000 PaperTradingEngine instance dedicated to a single strategy sleeve."""
+        clean_id = str(strategy_id).strip()
+        acc_id = clean_id if clean_id.startswith("paper_") else f"paper_{clean_id}"
+        return PaperTradingEngine(
+            settings=self.settings,
+            db=self.db,
+            market_data=self.market_data,
+            risk_manager=self.risk_manager,
+            account_id=acc_id,
+        )
+
+    def get_all_paper_accounts_summary(self, strategies: Sequence[Any]) -> List[Dict[str, Any]]:
+        """Return account summaries + trade stats for the Master $100k account and each strategy's dedicated $100k account."""
+        best_by_sid: Dict[str, Tuple[str, str, int, int]] = {}
+        for s in strategies:
+            sid = s.strategy_id if hasattr(s, "strategy_id") else str(s.get("strategy_id", ""))
+            if not sid:
+                continue
+            sname = s.name if hasattr(s, "name") else str(s.get("name", sid))
+            sver = int(s.version if hasattr(s, "version") else s.get("version", 1))
+            status = s.status if hasattr(s, "status") else str(s.get("status", "PAPER_TRADING"))
+            prio = 2 if status == "PAPER_TRADING" else (1 if status == "APPROVED_FOR_REVIEW" else 0)
+            prev = best_by_sid.get(sid)
+            if prev is None or (prio, sver) > (prev[3], prev[2]):
+                best_by_sid[sid] = (sid, sname, sver, prio)
+
+        seen_sids: List[Tuple[str, str, int]] = [
+            (sid, sname, sver) for sid, sname, sver, _ in sorted(best_by_sid.values(), key=lambda x: x[0])
+        ]
+
+        accounts_to_check: List[Tuple[str, str, str]] = [
+            (self.DEFAULT_ACCOUNT_ID, "Master Combined Portfolio ($100k — All Active Strategies)", "ALL_ACTIVE")
+        ]
+        for sid, sname, sver in seen_sids:
+            accounts_to_check.append((f"paper_{sid}", f"{sname} ({sid} v{sver} — Dedicated $100k)", sid))
+
+        rows: List[Dict[str, Any]] = []
+        for acc_id, label, strat_key in accounts_to_check:
+            eng = (
+                self
+                if acc_id == self.account_id
+                else PaperTradingEngine(self.settings, self.db, self.market_data, self.risk_manager, account_id=acc_id)
+            )
+            summ = eng.get_account_summary()
+            led = eng.get_trade_ledger(limit=500)
+            sells = [l for l in led if l.get("side") == "SELL"]
+            wins = [l for l in sells if float(l.get("realised_pnl", 0.0)) > 0]
+            losses = [l for l in sells if float(l.get("realised_pnl", 0.0)) <= 0]
+            wr = (len(wins) / len(sells) * 100.0) if sells else 0.0
+            gp = sum(float(l.get("realised_pnl", 0.0)) for l in wins)
+            gl = abs(sum(float(l.get("realised_pnl", 0.0)) for l in losses))
+            pf = (gp / gl) if gl > 1e-9 else (2.5 if gp > 0 else 0.0)
+            is_master = acc_id == self.DEFAULT_ACCOUNT_ID
+            rows.append(
+                {
+                    "account_id": acc_id,
+                    "label": label,
+                    "book_label": label,
+                    "book_type": "MASTER_COMBINED" if is_master else "STRATEGY_DEDICATED",
+                    "strategy_id": strat_key,
+                    "total_equity": summ["total_equity"],
+                    "starting_capital": summ["starting_capital"],
+                    "cash_balance": summ["cash_balance"],
+                    "daily_pnl_usd": summ["daily_pnl_usd"],
+                    "daily_return_pct": summ["daily_return_pct"],
+                    "weekly_pnl_usd": summ["weekly_pnl_usd"],
+                    "weekly_return_pct": summ["weekly_return_pct"],
+                    "total_pnl": summ["total_pnl_usd"],
+                    "total_pnl_usd": summ["total_pnl_usd"],
+                    "total_return_pct": summ["total_return_pct"],
+                    "realised_pnl": summ["realised_pnl"],
+                    "unrealised_pnl": summ["unrealised_pnl"],
+                    "open_positions_count": summ["open_positions_count"],
+                    "closed_sells": len(sells),
+                    "closed_trades_count": len(sells),
+                    "total_fills": len(led),
+                    "total_fills_count": len(led),
+                    "win_rate_pct": round(wr, 1),
+                    "profit_factor": round(pf, 2),
+                    "current_drawdown_pct": summ["current_drawdown_pct"],
+                }
+            )
+        return rows
+
+    def reset_account_to_starting_capital(self, reset_strategy_accounts: bool = True) -> Dict[str, Any]:
         """Reset paper account cash, positions, orders, snapshots, and alerts to a clean $100,000 state."""
         self.settings.validate_trading_mode()
         now_iso = utc_now_iso()
+        if self.account_id == self.DEFAULT_ACCOUNT_ID and reset_strategy_accounts:
+            self.db.execute("DELETE FROM paper_positions WHERE account_id LIKE 'paper_%'")
+            self.db.execute("DELETE FROM paper_orders WHERE account_id LIKE 'paper_%'")
+            self.db.execute("DELETE FROM trade_ledger WHERE account_id LIKE 'paper_%'")
+            self.db.execute("DELETE FROM portfolio_snapshots WHERE account_id LIKE 'paper_%'")
+            self.db.execute("DELETE FROM risk_alerts WHERE account_id LIKE 'paper_%'")
+            self.db.execute("DELETE FROM job_executions WHERE job_name = 'daily_market_execution'")
+            self.db.execute(
+                """
+                UPDATE paper_accounts
+                SET cash_balance = ?, realised_pnl = 0.0, peak_equity = ?,
+                    kill_switch_engaged = 0, kill_switch_reason = NULL, updated_at = ?
+                WHERE account_id LIKE 'paper_%'
+                """,
+                (
+                    self.settings.initial_capital_usd,
+                    self.settings.initial_capital_usd,
+                    now_iso,
+                ),
+            )
+            return self.get_account_summary()
+
         self.db.execute("DELETE FROM paper_positions WHERE account_id = ?", (self.account_id,))
         self.db.execute("DELETE FROM paper_orders WHERE account_id = ?", (self.account_id,))
         self.db.execute("DELETE FROM trade_ledger WHERE account_id = ?", (self.account_id,))
         self.db.execute("DELETE FROM portfolio_snapshots WHERE account_id = ?", (self.account_id,))
         self.db.execute("DELETE FROM risk_alerts WHERE account_id = ?", (self.account_id,))
-        self.db.execute("DELETE FROM job_executions WHERE job_name = 'daily_market_execution'")
         self.db.execute(
             """
             UPDATE paper_accounts
@@ -887,11 +993,15 @@ class PaperTradingEngine:
         signals_by_strategy: Dict[str, List[Tuple[StrategyConfig, str, DailyBar, DailyBar, Any]]] = {}
         for strat in deduped_strategies:
             strat_sigs: List[Tuple[StrategyConfig, str, DailyBar, DailyBar, Any]] = []
+            pead_lookback = max(20, int(strat.entry_rules.get("max_days_since_earnings", 10)) + 5)
             for ticker in strat.universe:
                 ctx = ticker_context.get(ticker)
                 if ctx is None:
                     continue
-                today_bar, prev_bar, ind_prev, recent_ev = ctx
+                today_bar, prev_bar, ind_prev, _ = ctx
+                recent_ev = self.market_data.get_point_in_time_earnings(
+                    ticker, prev_bar.bar_date, lookback_days=pead_lookback
+                )
                 t_meta = universe_meta.get(ticker)
                 sec_rank = sector_rank_map.get(t_meta.sector) if t_meta else None
                 sig = StrategySignalEngine.evaluate_entry(
@@ -921,9 +1031,38 @@ class PaperTradingEngine:
                 if idx < len(bucket):
                     ordered_candidates.append(bucket[idx])
 
+        # Load latest point-in-time AI / news catalyst sentiment per ticker (up to prev_bar date / trading_date)
+        catalyst_rows = self.db.fetch_all(
+            """
+            SELECT ticker, sentiment_score
+            FROM market_catalysts
+            WHERE published_date <= ?
+            ORDER BY published_date DESC, id DESC
+            LIMIT 250
+            """,
+            (trading_date,),
+        )
+        latest_cat_sent: Dict[str, float] = {}
+        for crow in catalyst_rows:
+            tk = str(crow["ticker"]).upper()
+            if tk not in latest_cat_sent and crow.get("sentiment_score") is not None:
+                latest_cat_sent[tk] = float(crow["sentiment_score"])
+
         for strat, ticker, today_bar, prev_bar, sig in ordered_candidates:
+            # Prevent cross-strategy position overwrite on the same ticker in the Master combined account
+            open_tickers_now = {p["ticker"] for p in self.get_open_positions()}
+            if ticker in open_tickers_now:
+                continue
+
+            # AI Bearish Catalyst Veto (<= -0.35)
+            if latest_cat_sent.get(ticker.upper(), 0.0) <= -0.35:
+                continue
+
             summary_now = self.get_account_summary()
             open_gap = today_bar.adj_open - sig.close_at_signal
+            max_gap_atr = float(strat.entry_rules.get("max_entry_gap_atr", 1.25))
+            if sig.atr_at_signal and sig.atr_at_signal > 0 and open_gap > max_gap_atr * sig.atr_at_signal:
+                continue
             adj_stop = (
                 round(max(0.01, sig.stop_loss_price + open_gap), 2)
                 if sig.stop_loss_price is not None
@@ -977,8 +1116,18 @@ class PaperTradingEngine:
             elif res.status == "REJECTED":
                 vetoed_orders.append(res.to_dict())
 
-        # 3. End-of-day mark-to-market & snapshot
+        # 3. End-of-day mark-to-market & snapshot for this account
         updated_summary = self.mark_to_market_and_snapshot(trading_date)
+
+        # 4. When running on the Master Account, also update each strategy's dedicated $100k Paper Account sleeve
+        if self.account_id == self.DEFAULT_ACCOUNT_ID and deduped_strategies:
+            for strat in deduped_strategies:
+                strat_engine = self.get_strategy_account_engine(strat.strategy_id)
+                strat_engine.run_trading_session_for_strategies(
+                    active_strategies=[strat],
+                    trading_date=trading_date,
+                )
+
         return {
             "trading_date": trading_date,
             "exits_executed": exits_executed,
@@ -1524,8 +1673,8 @@ class LiveTradingCopilotEngine:
         avg_entry_price: float,
         stop_loss_price: Optional[float] = None,
         take_profit_price: Optional[float] = None,
-        strategy_id: str = "strat_momentum_trend",
-        strategy_version: int = 1,
+        strategy_id: Optional[str] = None,
+        strategy_version: Optional[int] = None,
         opened_date: Optional[str] = None,
         deduct_from_cash: bool = False,
     ) -> Dict[str, Any]:
@@ -1539,6 +1688,8 @@ class LiveTradingCopilotEngine:
             (self.account_id, ticker_u),
         )
         old_cost = (int(existing["quantity"]) * float(existing["avg_entry_price"])) if existing is not None else 0.0
+        eff_strat_id = str(strategy_id or (existing["strategy_id"] if existing is not None else "strat_momentum_trend"))
+        eff_strat_ver = int(strategy_version if strategy_version is not None else (existing["strategy_version"] if existing is not None else 1))
 
         if quantity <= 0:
             self.db.execute(
@@ -1610,8 +1761,8 @@ class LiveTradingCopilotEngine:
             (
                 self.account_id,
                 ticker_u,
-                strategy_id,
-                int(strategy_version),
+                eff_strat_id,
+                eff_strat_ver,
                 sec,
                 int(quantity),
                 round(avg_entry_price, 4),
@@ -1926,7 +2077,11 @@ class LiveTradingCopilotEngine:
                 m_meta = universe_meta.get(tkr)
                 sec_name = m_meta.sector if m_meta else "Technology"
                 sector_rs_buckets.setdefault(sec_name, []).append(float(ind_dt.rs_vs_spy_20d))
-        sector_avg = {sec: (sum(vals) / len(vals)) for sec, vals in sector_rs_buckets.items() if vals}
+        sector_avg = {
+            sec: (sum(sorted(vals, reverse=True)[:2]) / min(2, len(vals)))
+            for sec, vals in sector_rs_buckets.items()
+            if vals
+        }
         sorted_secs = sorted(sector_avg.items(), key=lambda kv: kv[1], reverse=True)
         sector_rank_map = {sec: idx + 1 for idx, (sec, _) in enumerate(sorted_secs)}
 

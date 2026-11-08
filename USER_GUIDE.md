@@ -85,13 +85,19 @@ To ensure strategies are not curve-fit to a single bull run **and** are optimize
 3. **Dual-Horizon Evaluation (`2.3-Yr Multi-Regime` + `6-Month Recent/Rolling` + `SQN`)**:
    - *Decision*: Strategies are evaluated on 9 gates combining 2.3-year survival, Out-of-Sample `SPY` dominance, **Recent 6-Month (`126d`) Return & Win Rate**, **Rolling 6-Month Win Probability (`86%–98%`)**, and **Van Tharp's System Quality Number (`SQN >= 2.85`)**.
    - *Why*: Prevents promoting strategies that made all their money 2 years ago while ensuring trade-by-trade consistency over a 6-month live horizon.
-4. **Forward-Only Paper Account vs. Historical Backtest Isolation**:
-   - *Decision*: Startup and cloud workflows never backfill historical trades into `paper_accounts`. All historical testing stays in `BacktestEngine`.
-   - *Why*: Guarantees Paper Account P&L (`Daily`, `Weekly`, `Total`) is a 100% clean forward track record from `$100,000.00`.
-5. **Immutable Golden Base (`v1`) Pinning & Strict Incumbent Protection**:
+4. **Two-Tier Forward Paper Book (`1 Master Combined $100k` + `5 Dedicated Per-Strategy $100k Pods`)**:
+   - *Decision*: `PaperTradingEngine` runs **both** (1) a **`$100,000` Master Combined Portfolio (`paper_main_100k`)** enforcing shared cross-strategy heat (`5%`), sector (`30%`), and single-stock (`15%`) caps, **and** (2) **5 Dedicated Per-Strategy `$100,000` Accounts (`paper_strat_*`)** where each strategy trades its own isolated `$100,000` pod.
+   - *Why*: A single master account alone suffers from **cash starvation / first-in bias** (Strategy A uses cash on Monday and blocks Strategy B on Tuesday, masking Strategy B's true edge). Isolated pods alone miss **cross-strategy risk collisions** (3 strategies buying `Technology` simultaneously). Running both tiers gives institutional multi-strategy pod attribution plus real-account portfolio risk simulation.
+5. **Staged Real-Account Strategy Deployment (`Core 2` $\rightarrow$ `Core 3` $\rightarrow$ `All 5`)**:
+   - *Decision*: In `Live Copilot` (`Strategies & Reset`), 1-click deployment presets allow staging real-capital deployment:
+     - **Phase 1 (`★ Core 2: Volatility Breakout + Mean Reversion`, recommended for accounts $< \$30\text{k}$ or Months 1–2)**: Combines two negatively correlated regimes—`strat_volatility_breakout v1` (`SQN 3.55`, `+11.03%` 6M, `67.9%` WR in bull breakouts) + `strat_mean_reversion_bb v1` (`SQN 2.85`, `+10.11%` 6M, `64.7%` WR in pullbacks/dips).
+     - **Phase 2 (`Core 3: + Earnings PEAD`, $\$30\text{k}$–$\$50\text{k}$)**: Adds `strat_pead_drift v1` (`SQN 2.99`) during earnings season.
+     - **Phase 3 (`All 5 Base Strategies`, $\$50\text{k}+$)**: Full 5-sleeve institutional book.
+   - *Why*: Grounded in Grinold & Kahn's Fundamental Law of Active Management ($\text{SR}_{\text{port}} = \text{SR}_{\text{avg}} \sqrt{K / (1 + (K-1)\bar{\rho})}$)—pairing 2–3 low-correlation regime specialists smooths the equity curve without over-fragmenting smaller accounts into tiny ticket sizes.
+6. **Immutable Golden Base (`v1`) Pinning & Strict Incumbent Protection**:
    - *Decision*: `v1` Golden Base models are never overwritten. Weekly candidates (`v2+`) are rejected unless they beat the active champion (`beats_incumbent`), and you can revert to `v1` in one click (`Revert All to Golden Base (v1)`).
    - *Why*: Guarantees monotonic strategy quality and an instant safety net.
-6. **Opening Gap-Chase Cap (`max_entry_gap_atr`) + Profit-Activated `+1R` Stop Ratchet + Drawdown De-Gearing**:
+7. **Opening Gap-Chase Cap (`max_entry_gap_atr`) + Profit-Activated `+1R` Stop Ratchet + Drawdown De-Gearing**:
    - *Decision*: Skips opening gaps $> 1.25 \times \text{ATR}_{14}$ (`+0.50 ATR` in Copilot Buy-Zone), ratchets stops to Breakeven/Chandelier after $+1.0\text{R}$ gain, and scales risk-per-trade down to `0.65x` if portfolio drawdown reaches `7.5%` (with a hard kill-switch at `15.0%`).
    - *Why*: Protects win rate against exhausted morning gaps and locks in open gains before reversals.
 

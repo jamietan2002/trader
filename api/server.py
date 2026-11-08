@@ -37,14 +37,16 @@ class PlatformApplication:
         self.orchestrator = AutonomousWorkflowOrchestrator(self.settings, self.db)
 
     def get_dashboard_state(self) -> Dict[str, Any]:
+        strats_dicts = [s.to_dict() for s in self.orchestrator.registry.list_strategies()]
         return {
             "settings": self.settings.sanitized_dict(),
             "account": self.orchestrator.paper_engine.get_account_summary(),
+            "paper_books": self.orchestrator.paper_engine.get_all_paper_accounts_summary(strats_dicts),
             "positions": self.orchestrator.paper_engine.get_open_positions(),
             "orders": self.orchestrator.paper_engine.get_orders(limit=50),
             "trade_ledger": self.orchestrator.paper_engine.get_trade_ledger(limit=100),
             "snapshots": self.orchestrator.paper_engine.get_portfolio_snapshots(),
-            "strategies": [s.to_dict() for s in self.orchestrator.registry.list_strategies()],
+            "strategies": strats_dicts,
             "experiments": self.orchestrator.registry.list_experiments(),
             "research_reports": self.orchestrator.research_agent.get_latest_reports(limit=15),
             "proposals": self.orchestrator.analyst_agent.list_proposals(limit=15),

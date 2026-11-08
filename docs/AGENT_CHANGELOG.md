@@ -4,6 +4,23 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-08] — Two-Tier Paper Books (1 Master $100k + 5 Per-Strategy $100k Pods), Staged Real-Account Presets & 4 Logical/UI Bug Fixes
+
+### Summary
+- **Two-Tier Forward Paper Book Architecture (`get_strategy_account_engine` & `get_all_paper_accounts_summary` in `core/execution/paper_broker.py`, `api/server.py`, `dashboard/streamlit_app.py`)**: Implemented institutional multi-strategy pod tracking alongside the master portfolio. Every forward daily run now executes **both** (1) the **`$100,000` Master Combined Portfolio (`paper_main_100k`)** enforcing cross-strategy portfolio heat (`5%`), sector (`30%`), and single-stock (`15%`) caps, **and** (2) **5 Dedicated Per-Strategy `$100,000` Accounts (`paper_strat_volatility_breakout`, `paper_strat_mean_reversion_bb`, `paper_strat_momentum_trend`, `paper_strat_pead_drift`, `paper_strat_sector_rotation_leaders`)** so each strategy is evaluated forward with zero cash starvation / first-in bias. Added a Paper Book Selector and a 6-book comparison table in Tab 2 (`Paper Account & Ledger`).
+- **Staged Real-Account Deployment Presets (`Strategies & Reset` popover in `dashboard/streamlit_app.py`)**: Added 1-click presets (`★ Core 2: Breakout + Dip`, `Core 3 (+ Earnings PEAD)`, `All 5 Base Strategies`, `Best Single`) grounded in Grinold & Kahn's Fundamental Law of Active Management and regime cyclicality.
+- **4 Logical & UI Bug Fixes (`core/execution/paper_broker.py`)**:
+  1. **Cross-Strategy Ticker Overwrite Prevention in `PaperTradingEngine`**: Added an open-position ticker guard before submitting new `BUY` orders in `run_trading_session_for_strategies()` so a second strategy signaling the same stock on a later day cannot overwrite the original position's `strategy_id` via `ON CONFLICT(account_id, ticker) DO UPDATE`.
+  2. **Execution Rule Parity in `PaperTradingEngine`**: Enforced `max_entry_gap_atr` opening gap-chase protection, `AI_BEARISH_CATALYST_VETO` (`sentiment_score <= -0.35`), and per-strategy `pead_lookback` inside `PaperTradingEngine.run_trading_session_for_strategies()` to match `BacktestEngine` and `LiveTradingCopilotEngine`.
+  3. **`LiveTradingCopilotEngine.edit_or_add_position` Preserving `strategy_id`**: Changed default `strategy_id` / `strategy_version` parameters to `None` so editing an existing holding's shares, stop-loss, or take-profit preserves its existing `strategy_id` instead of resetting it to `"strat_momentum_trend"`.
+  4. **Sector Relative-Strength Leader Formula Parity in `LiveTradingCopilotEngine`**: Aligned `get_daily_action_plan()` to use the top-2 leader average (`sum(sorted(vals, reverse=True)[:2]) / min(2, len(vals))`), matching `BacktestEngine` and `PaperTradingEngine`.
+
+### Modules Added / Modified
+- `core/execution/paper_broker.py`, `api/server.py`, `dashboard/streamlit_app.py`
+- `data/swing_trader.db`, `USER_GUIDE.md`, `docs/AGENT_CHANGELOG.md`, `tests/test_platform.py`
+
+---
+
 ## [2026-11-08] — 6-Month Deployment Horizon & SQN Metrics, Opening Gap-Chase Protection, AI Catalyst Veto/Booster & Exact Market-Open Buy-Zone Execution Rules
 
 ### Summary

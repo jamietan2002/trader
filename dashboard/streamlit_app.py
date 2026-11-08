@@ -370,7 +370,7 @@ def main() -> None:
     )
 
     app = PlatformApplication()
-    _code_version = "2026-11-08-v12"
+    _code_version = "2026-11-08-v13"
     import api.server as _srv_mod
     if (
         getattr(_srv_mod, "_STREAMLIT_SYNC_VERSION", None) != _code_version
@@ -684,13 +684,39 @@ def main() -> None:
                 ]
                 default_keys = real_acc.get("enabled_strategies") or avail_keys
                 valid_defaults = [k for k in default_keys if k in avail_keys] or avail_keys
+                st.caption("**1-Click Real-Account Deployment Presets:**")
+                pr_c1, pr_c2 = st.columns(2)
+                if pr_c1.button("★ Core 2 (Breakout + Dip)", width="stretch", help="Recommended for accounts <$30k or Phase 1 Live: Volatility Breakout (SQN 3.55) + Mean Reversion (64.7% 6M WR)."):
+                    core2 = [k for k in avail_keys if "volatility_breakout" in k or "mean_reversion" in k] or avail_keys
+                    app.orchestrator.live_copilot.set_enabled_strategies(core2)
+                    st.session_state["copilot_strats_select"] = core2
+                    st.session_state["_copilot_flash_msg"] = "Applied Core 2 Uncorrelated Preset (Volatility Breakout + Mean Reversion)."
+                    st.rerun()
+                if pr_c2.button("All 5 Base Strategies", width="stretch", help="Full institutional diversification across all 5 uncorrelated Golden Base strategy sleeves."):
+                    app.orchestrator.live_copilot.set_enabled_strategies(avail_keys)
+                    st.session_state["copilot_strats_select"] = avail_keys
+                    st.session_state["_copilot_flash_msg"] = "Enabled all 5 Golden Base strategies."
+                    st.rerun()
+                pr_c3, pr_c4 = st.columns(2)
+                if pr_c3.button("Core 3 (+ Earnings PEAD)", width="stretch", help="Core 2 + Post-Earnings Announcement Drift (ideal during quarterly earnings season)."):
+                    core3 = [k for k in avail_keys if any(x in k for x in ("volatility_breakout", "mean_reversion", "pead"))] or avail_keys
+                    app.orchestrator.live_copilot.set_enabled_strategies(core3)
+                    st.session_state["copilot_strats_select"] = core3
+                    st.session_state["_copilot_flash_msg"] = "Applied Core 3 Preset (Breakout + Mean Reversion + PEAD)."
+                    st.rerun()
+                if pr_c4.button("Best Single (Breakout)", width="stretch", help="Single highest SQN (3.55) & 6-month return (+11.03%) strategy only."):
+                    single1 = [k for k in avail_keys if "volatility_breakout" in k] or avail_keys[:1]
+                    app.orchestrator.live_copilot.set_enabled_strategies(single1)
+                    st.session_state["copilot_strats_select"] = single1
+                    st.session_state["_copilot_flash_msg"] = "Enabled Single Best Champion (Volatility Breakout)."
+                    st.rerun()
                 chosen_keys = st.multiselect(
-                    "Strategies generating your signals",
+                    "Or customize active strategies",
                     options=avail_keys,
                     default=valid_defaults,
                     key="copilot_strats_select",
                 )
-                if st.button("Apply Strategy Filter", width="stretch"):
+                if st.button("Apply Custom Selection", width="stretch"):
                     app.orchestrator.live_copilot.set_enabled_strategies(chosen_keys)
                     st.session_state["_copilot_flash_msg"] = f"Active strategy filter saved ({len(chosen_keys)} strategies enabled)."
                     st.rerun()
@@ -1078,65 +1104,119 @@ def main() -> None:
                 st.dataframe(real_history, width="stretch")
 
     # =========================================================================
-    # TAB 1: PAPER ACCOUNT & LEDGER (UNIFIED FORWARD $100K PORTFOLIO + LEDGER)
+    # TAB 1: PAPER ACCOUNT & LEDGER (TWO-TIER: MASTER $100K + 5 PER-STRATEGY $100K BOOKS)
     # =========================================================================
     with tabs[1]:
         _render_tab_header(
             st,
-            "Paper Account & Ledger: Forward-only $100,000 simulated portfolio (Daily, Weekly & Total P&L), open positions, and day-filtered execution ledger.",
-            "How Paper Account & Ledger works",
-            "**Forward-Only `$100,000` Track Record:**\n\n"
-            "- **Strict Forward Isolation**: Only actual daily runs (`21:30 UTC` or `run` in IDE) affect this account. All historical backtests are isolated in Tab 3.\n"
-            "- **Daily, Weekly & Total P&L**: Tracks single-session P&L, rolling 5-session P&L, and cumulative Realised + Unrealised P&L net of brokerage commissions and slippage.\n"
-            "- **Day-Filtered Execution Ledger**: Filter every simulated `BUY` and `SELL` fill by Trading Day, Order Side, or Strategy.",
+            "Paper Account & Ledger: Two-Tier Forward $100k Books (1 Master Combined Portfolio + 5 Dedicated Per-Strategy $100k Accounts) & Day-Filtered Execution Ledger.",
+            "Why We Run Both a Master $100k Book & 5 Dedicated Per-Strategy $100k Books",
+            "**Institutional Multi-Strategy Pod Architecture (Zero Cash Starvation + Real Risk Governance):**\n\n"
+            "- **Tier 1 — Master Combined Portfolio (`$100,000` Shared Book)**: Runs all active strategies together under your real-account risk caps (`5%` portfolio heat, `30%` sector cap, `15%` single-stock cap). Simulates exact multi-strategy execution in a single brokerage account.\n"
+            "- **Tier 2 — 5 Dedicated Per-Strategy `$100,000` Books (`1 Account Per Strategy`)**: Each strategy (`Volatility Breakout`, `Mean Reversion`, `PEAD Drift`, `Momentum Trend`, `Sector Rotation`) also gets its own isolated `$100,000` account. This eliminates **cash starvation / first-in bias** (where Strategy A uses up cash on Monday and blocks Strategy B on Tuesday) so you can measure every strategy's true standalone forward edge.\n"
+            "- **Strict Forward Isolation**: Only actual daily runs (`21:30 UTC` or `run` in IDE) affect these accounts. Historical backtests are isolated in Tab 3.",
         )
 
-        st.markdown("#### 1. Paper Portfolio Profit & Loss Attribution (Forward Runs Only)")
+        all_paper_books = app.orchestrator.paper_engine.get_all_paper_accounts_summary(strats)
+        book_options = [b["account_id"] for b in all_paper_books]
+        book_labels = {
+            b["account_id"]: (
+                f"★ {b['book_label']} — Equity: ${b['total_equity']:,.2f} ({b['total_return_pct']:+.2f}%) · {b['open_positions_count']} Open · {b['total_fills']} Fills"
+                if b["book_type"] == "MASTER_COMBINED"
+                else f"Pod: {b['book_label']} ({b['strategy_id']}) — Equity: ${b['total_equity']:,.2f} ({b['total_return_pct']:+.2f}%) · {b['open_positions_count']} Open · {b['total_fills']} Fills"
+            )
+            for b in all_paper_books
+        }
+
+        sel_book_col1, sel_book_col2 = st.columns([2.2, 1.8])
+        with sel_book_col1:
+            selected_book_id = st.selectbox(
+                "Select Paper Account Book to Inspect",
+                options=book_options,
+                index=0,
+                format_func=lambda aid: book_labels.get(aid, aid),
+                key="paper_book_selector",
+                help="Switch between the Master Combined $100k Portfolio (all active strategies sharing capital and risk caps) and each strategy's dedicated $100k isolated pod.",
+            )
+        with sel_book_col2:
+            st.caption(
+                "**Senior Quant Best Practice**: Use the **Master Combined `$100k` Book** to monitor cross-strategy portfolio risk & drawdown, "
+                "and inspect the **5 Per-Strategy `$100k` Pods** to compare pure unstarved strategy alpha before sizing up your real account."
+            )
+
+        if selected_book_id == app.orchestrator.paper_engine.DEFAULT_ACCOUNT_ID:
+            book_engine = app.orchestrator.paper_engine
+            book_acc = acc
+            book_positions = positions
+            book_ledger = ledger
+            book_snaps = snaps
+            book_title_label = f"Master Combined Portfolio (`$100k` Shared Across: {active_strat_names})"
+        else:
+            strat_id_for_book = selected_book_id.replace("paper_", "", 1)
+            book_engine = app.orchestrator.paper_engine.get_strategy_account_engine(strat_id_for_book)
+            book_acc = book_engine.get_account_summary()
+            book_positions = book_engine.get_open_positions()
+            book_ledger = book_engine.get_trade_ledger(limit=500)
+            book_snaps = book_engine.get_equity_curve()
+            book_title_label = f"Dedicated Strategy Pod: `{strat_id_for_book}` (`$100,000` Isolated Account)"
+
+        book_daily_pnl_usd, book_daily_ret_pct, book_weekly_pnl_usd, book_weekly_ret_pct, book_net_dollar_pnl = _compute_period_pnl(book_acc, book_snaps)
+        book_total_fees = sum(
+            float(l.get("commission_usd", 0.0)) + float(l.get("slippage_usd", 0.0))
+            for l in book_ledger
+        )
+        book_fill_dates = sorted({str(l.get("fill_date")) for l in book_ledger if l.get("fill_date")})
+        if book_fill_dates:
+            book_date_span = f"{book_fill_dates[0]} → {book_fill_dates[-1]} ({len(book_fill_dates)} active fill days)"
+        else:
+            book_date_span = f"{latest_market_date} (Clean $100k baseline — waiting for next daily session)"
+
+        st.markdown(f"#### 1. Paper Portfolio Profit & Loss Attribution — {book_title_label}")
         st.markdown(
             f"""
-            - **Active Daily Strategies**: {active_strat_names}
-            - **Measurement Window**: `{paper_date_span}` *(Forward daily runs only — historical testing is isolated in Tab 3)*
+            - **Selected Book**: {book_title_label}
+            - **Measurement Window**: `{book_date_span}` *(Forward daily runs only — historical testing is isolated in Tab 3)*
             - **Derivation**:
-              `Starting Capital ($100,000.00)` + `Realised P&L (${acc['realised_pnl']:+,.2f})` + `Unrealised P&L (${acc['unrealised_pnl']:+,.2f})` = **`Current Equity (${acc['total_equity']:,.2f})`** *(Net of `${total_fees_paid:,.2f}` in transaction costs)*
+              `Starting Capital ($100,000.00)` + `Realised P&L (${book_acc['realised_pnl']:+,.2f})` + `Unrealised P&L (${book_acc['unrealised_pnl']:+,.2f})` = **`Current Equity (${book_acc['total_equity']:,.2f})`** *(Net of `${book_total_fees:,.2f}` in transaction costs)*
             """
         )
 
         k1, k2, k3, k4, k5 = st.columns(5)
         k1.metric(
             "Total Equity",
-            f"${acc['total_equity']:,.2f}",
-            f"Start: ${acc['starting_capital']:,.0f} ({acc['total_return_pct']:+.2f}%)",
+            f"${book_acc['total_equity']:,.2f}",
+            f"Start: ${book_acc['starting_capital']:,.0f} ({book_acc['total_return_pct']:+.2f}%)",
             help="Cash Balance + Market Value of Open Positions. Equals Starting Capital ($100k) + Realised P&L + Unrealised P&L.",
         )
         k2.metric(
             "Daily P&L (Latest Session)",
-            f"${daily_pnl_usd:+,.2f}",
-            f"{daily_ret_pct:+.2f}% today",
+            f"${book_daily_pnl_usd:+,.2f}",
+            f"{book_daily_ret_pct:+.2f}% today",
             help="Single-session change in Total Equity from the prior trading session close to the latest session close.",
         )
         k3.metric(
             "Weekly P&L (Last 5 Sessions)",
-            f"${weekly_pnl_usd:+,.2f}",
-            f"{weekly_ret_pct:+.2f}% (5d)",
+            f"${book_weekly_pnl_usd:+,.2f}",
+            f"{book_weekly_ret_pct:+.2f}% (5d)",
             help="Rolling 5-session (1 trading week) change in Total Equity across actual forward paper runs.",
         )
         k4.metric(
             "Total P&L (Since Reset)",
-            f"${net_dollar_pnl:+,.2f}",
-            f"Realised ${acc['realised_pnl']:+,.0f} | Unrealised ${acc['unrealised_pnl']:+,.0f}",
+            f"${book_net_dollar_pnl:+,.2f}",
+            f"Realised ${book_acc['realised_pnl']:+,.0f} | Unrealised ${book_acc['unrealised_pnl']:+,.0f}",
             help="Cumulative net P&L since the $100,000 baseline reset (Realised P&L from closed trades + Unrealised P&L on open positions, net of fees).",
         )
         k5.metric(
             "Available Cash",
-            f"${acc['cash_balance']:,.2f}",
-            f"{acc['open_positions_count']} open | DD -{acc['current_drawdown_pct']:.2f}%",
+            f"${book_acc['cash_balance']:,.2f}",
+            f"{book_acc['open_positions_count']} open | DD -{book_acc['current_drawdown_pct']:.2f}%",
             help="Uninvested cash available for new swing entries. Drawdown measures the drop from the portfolio's highest equity peak.",
         )
 
-        p_col1, p_col2 = st.columns([1.1, 1.1])
+        p_col1, p_col2 = st.columns([1.05, 1.15])
         with p_col1:
-            st.markdown("#### 2. Open Paper Positions")
-            if positions:
+            st.markdown("#### 2. Open Paper Positions (Selected Book)")
+            if book_positions:
                 clean_pos = [
                     {
                         "Ticker": p["ticker"],
@@ -1149,25 +1229,37 @@ def main() -> None:
                         "Stop / Target": f"${p['stop_loss_price']:.2f} / ${p['take_profit_price']:.2f}" if p.get("stop_loss_price") else "-",
                         "Unrealised P&L": f"${p['unrealised_pnl']:+,.2f} ({p['unrealised_return_pct']:+.2f}%)",
                     }
-                    for p in positions
+                    for p in book_positions
                 ]
                 st.dataframe(clean_pos, width="stretch", hide_index=True)
             else:
-                st.info("No open paper positions currently held (100% cash at `$100,000.00`).")
+                st.info("No open paper positions currently held in this book (100% cash at `$100,000.00`).")
 
         with p_col2:
-            st.markdown("#### 3. Strategy-Level Paper Attribution")
-            strat_pnl_rows = _summarize_pnl_by_strategy(ledger, positions, strats)
+            st.markdown("#### 3. Master vs. Per-Strategy `$100k` Paper Books Comparison")
+            book_comparison_rows = [
+                {
+                    "Paper Book": "★ Master Combined ($100k)" if b["book_type"] == "MASTER_COMBINED" else f"Pod: {b['book_label']}",
+                    "Account ID": b["account_id"],
+                    "Equity": f"${b['total_equity']:,.2f}",
+                    "Total P&L": f"${b['total_pnl']:+,.2f} ({b['total_return_pct']:+.2f}%)",
+                    "Realised / Unrealised": f"${b['realised_pnl']:+,.0f} / ${b['unrealised_pnl']:+,.0f}",
+                    "Win Rate": f"{b['win_rate_pct']:.1f}% ({b['closed_sells']} closed)" if b["closed_sells"] > 0 else "— (0 closed)",
+                    "Open / Cash": f"{b['open_positions_count']} open · ${b['cash_balance']:,.0f}",
+                }
+                for b in all_paper_books
+            ]
+            st.dataframe(book_comparison_rows, width="stretch", hide_index=True)
+            strat_pnl_rows = _summarize_pnl_by_strategy(book_ledger, book_positions, strats)
             if strat_pnl_rows:
-                st.dataframe(strat_pnl_rows, width="stretch", hide_index=True)
-            else:
-                st.info("No forward paper trades executed yet since reset.")
+                with st.expander("View Strategy Attribution Inside Selected Book", expanded=False):
+                    st.dataframe(strat_pnl_rows, width="stretch", hide_index=True)
 
         st.markdown("---")
-        st.markdown(f"#### 4. Day-Filtered Paper Execution Ledger (`{paper_date_span}`)")
-        if ledger:
-            unique_days = sorted({str(l["fill_date"]) for l in ledger if l.get("fill_date")}, reverse=True)
-            unique_strats = sorted({f"{l['strategy_id']} v{l['strategy_version']}" for l in ledger})
+        st.markdown(f"#### 4. Day-Filtered Paper Execution Ledger (`{book_date_span}`)")
+        if book_ledger:
+            unique_days = sorted({str(l["fill_date"]) for l in book_ledger if l.get("fill_date")}, reverse=True)
+            unique_strats = sorted({f"{l['strategy_id']} v{l['strategy_version']}" for l in book_ledger})
 
             f_col1, f_col2, f_col3 = st.columns([2, 1.5, 2])
             with f_col1:
@@ -1194,7 +1286,7 @@ def main() -> None:
 
             filtered_ledger = [
                 l
-                for l in ledger
+                for l in book_ledger
                 if (selected_day == "All Trading Days" or str(l.get("fill_date")) == selected_day)
                 and (
                     selected_side == "All Sides (BUY & SELL)"
@@ -1244,7 +1336,7 @@ def main() -> None:
             st.dataframe(clean_ledger, width="stretch", hide_index=True)
         else:
             st.info(
-                "Paper Account is clean at $100,000.00 cash with 0 trades executed. "
+                "This Paper Book is clean at $100,000.00 cash with 0 trades executed. "
                 "New trades will appear here automatically after each forward daily run (`21:30 UTC` or `run` in IDE)."
             )
 
