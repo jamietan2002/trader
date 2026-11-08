@@ -1565,34 +1565,35 @@ def main() -> None:
 
         step_info = {
             "step_daily_vs_weekly": (
-                "**1. Daily Run vs. Weekly Run — How They Work Together**\n\n"
-                "- **Daily Run (Mon–Fri 21:30 UTC)**: Ingests the latest US market bars, evaluates exits and stop-loss ratchets on open holdings, and generates `1.0%`-risk-sized entry signals across the active `PAPER_TRADING` strategies.\n"
-                "- **Weekly Run (Saturday 10:00 SGT)**: Reviews closed trade attribution, drafts candidate strategy versions (`v+1`), and tests them in the 9-gate Out-of-Sample & Walk-Forward tournament."
+                "**1. Daily Run, Weekly Run & Exact Order Execution Timing**\n\n"
+                "- **Daily Run (`Mon–Fri >16:00 ET / 21:30 UTC`)**: Computes signals from completed daily closing bars (eliminating intraday look-ahead bias), evaluates exits and `+1.0R` stop-loss ratchets on open holdings, and filters new `BUY` candidates through the AI Catalyst Veto (`sentiment <= -0.35`) & 7-rule Risk Manager.\n"
+                "- **When & How to Execute Orders (`9:30–9:45 AM ET Open Limit`)**: Place **Limit Orders inside the Buy-Zone (`$Low – $MaxChase`, i.e., `Ref - 0.25 ATR` to `Ref + 0.50 ATR`)** during regular market open (`9:30–9:45 AM ET`). Never chase opening gaps above `Max Chase`, and never trade illiquid pre-market/after-hours.\n"
+                "- **Weekly Run (`Saturday 10:00 SGT`)**: Reviews closed trade attribution, drafts candidate strategy versions (`v+1`), and tests them in the 9-gate Out-of-Sample & Walk-Forward tournament."
             ),
             "step_multi_strategy": (
-                "**2. Five Uncorrelated Golden Base (`v1 ★ Base`) Strategy Families**\n\n"
-                "- **`strat_volatility_breakout` (`+75.83%` Full, `+22.96%` OOS)**: 20-day high breakouts from tight consolidations on expanding volume.\n"
-                "- **`strat_sector_rotation_leaders` (`+77.45%` Full, `+18.88%` OOS)**: Top relative-strength leaders inside the #1 and #2 ranked GICS sectors.\n"
-                "- **`strat_pead_drift` (`+73.80%` Full, `+17.38%` OOS)**: Post-earnings announcement drift following quarterly EPS & revenue beats.\n"
-                "- **`strat_momentum_trend` (`+73.37%` Full, `+16.32%` OOS)**: Aligned uptrends (`Close > SMA20 > SMA50`) beating `SPY` over 20 days.\n"
-                "- **`strat_mean_reversion_bb` (`+70.68%` Full, `+11.52%` OOS)**: Pullbacks to value zones (`SMA20` / Lower Bollinger Band) in structural uptrends (`Close > SMA200`)."
+                "**2. Five Uncorrelated Golden Base (`v1 ★ Base`) Models — 2.3-Yr, Recent 6M & `SQN` Evidence**\n\n"
+                "- **`strat_volatility_breakout`**: `+77.54%` Full · `+21.96%` OOS · **`+11.03%` Recent 6M (`67.9%` WR)** · `98.3%` Rolling 6M Win · **`SQN 3.55`**\n"
+                "- **`strat_mean_reversion_bb`**: `+74.07%` Full · `+10.17%` OOS · **`+10.11%` Recent 6M (`64.7%` WR)** · `86.1%` Rolling 6M Win · **`SQN 2.85`**\n"
+                "- **`strat_momentum_trend`**: `+71.44%` Full · `+16.32%` OOS · **`+7.49%` Recent 6M (`61.5%` WR)** · `91.1%` Rolling 6M Win · **`SQN 3.29`**\n"
+                "- **`strat_pead_drift`**: `+73.80%` Full · `+17.75%` OOS · **`+4.73%` Recent 6M (`51.5%` WR)** · `96.1%` Rolling 6M Win · **`SQN 2.99`**\n"
+                "- **`strat_sector_rotation_leaders`**: `+67.32%` Full · `+18.49%` OOS · **`+6.87%` Recent 6M (`57.7%` WR)** · `91.7%` Rolling 6M Win · **`SQN 2.91`**"
             ),
             "step_risk": (
-                "**3. ATR Position Sizing, Profit Ratchets & 7 Risk Guardrails**\n\n"
-                "- **1.0% Risk Per Trade**: Share count is sized from `ATR(14)` so a stop-loss exit risks at most `1.0%` of equity (auto-scaling down to `0.65%` if portfolio drawdown exceeds `7.5%`).\n"
-                "- **Profit-Activated Stop Ratchet**: Once a position reaches `+1.0R` unrealized profit, the Chandelier trailing stop activates; at `+1.25R`, the stop locks in breakeven plus transaction friction.\n"
-                "- **Hard Portfolio Caps**: Max `5.0%` total open portfolio heat, max `15.0%` single stock, max `30.0%` single sector, max `0.80` return correlation, and a `15.0%` drawdown circuit breaker."
+                "**3. What Happens If Target Is Not Hit? (4-Way Exit Bracket & 7 Risk Guardrails)**\n\n"
+                "- **`+1.0R` to `+1.25R` Stop Ratchet**: Once a trade reaches `+1.0R` unrealized profit (`breakeven_ratchet_price` on your BUY card), raise your Stop-Loss to Breakeven / Chandelier trail (`Highest High - k * ATR`). Even if the full Take-Profit is not hit, a reversal locks in a winning trade.\n"
+                "- **Momentum Stall & `Day N` Time-Stop (`8–15` days)**: Exits early if trend alignment breaks (`Close < SMA20` or `RSI >= 68`), or exits on Day $N_{\\max}$ if neither Target nor Stop is hit.\n"
+                "- **Hard Portfolio Caps**: `1.0%` max risk per trade (`0.65%` if drawdown $\\ge 7.5\\%$), `5.0%` max open portfolio heat, `15.0%` single stock, `30.0%` single sector, and `15.0%` drawdown circuit breaker."
             ),
             "step_readiness": (
-                "**4. S&P 500 (`SPY`) Benchmark Dominance & Golden Base Revert**\n\n"
-                "- Every active strategy must pass 9 validation gates **and** beat `SPY` (`+61.90%` Full, `+9.67%` OOS) with positive Jensen's Alpha ($\\alpha > 0$) and Ulcer Index $\\le 6.0$.\n"
-                "- **Incumbent Protection & 1-Click Revert**: A new candidate (`v2+`) never replaces an active strategy unless it beats or matches the champion's Return, Sharpe, and Calmar—and you can click **`Revert All to Golden Base (v1)`** in Tab 3 anytime."
+                "**4. Dual-Horizon Validation (`2.3-Yr` + `6-Month` + `SQN`) & What to Monitor Weekly**\n\n"
+                "- **Dual-Horizon + `SPY` Dominance**: Every strategy must survive 2.3 years (`4/4` Walk-Forward folds), beat `SPY` (`+61.90%` Full, `+9.67%` OOS, `+3.39%` Recent 6M), and achieve high trade consistency (`SQN >= 2.85`).\n"
+                "- **Weekly Monitoring Checklist**: (1) Forward Win Rate (`50%–68%`) & Profit Factor (`>= 1.30`); (2) Broker fill prices staying inside the `Buy-Zone Limit`; (3) Portfolio heat `<= 5.0%` & sector `<= 30.0%`; (4) `Last IDE AI Run` freshness in sidebar; (5) If any experimental `v2+` model drops below `45%` WR after 10+ trades, click **`Revert All to Golden Base (v1)`** in Tab 3."
             ),
             "step_user_role": (
-                "**5. Your Optimal Workflow to Maximize Paper & Real Profit**\n\n"
-                "1. **Type `run` in Antigravity IDE** (or paste JSON in Tab 4) on trading days to enrich top candidates with live web news catalysts and test AI parameter upgrades.\n"
-                "2. **Check Tab 1 (`Live Copilot`)**: If today is a US trading day, review any `SELL` exits, `HOLD` stop-loss ratchets, or `BUY` setups sized to your real account.\n"
-                "3. **Confirm Only What You Execute**: Click `✓ Bought` or `✓ Sold` after placing orders in your brokerage app."
+                "**5. Your Optimal Workflow & Future Roadmap**\n\n"
+                "1. **Type `run` in Antigravity IDE** (or paste JSON in Tab 4) on trading days so live web news catalysts (`search_web`) automatically veto bearish traps (`<= -0.35`) and boost high-catalyst setups (`>= +0.25`).\n"
+                "2. **Execute at Market Open (`9:30–9:45 AM ET`)**: Place Limit Orders inside the `Buy-Zone Limit ($Low – $MaxChase)` and click `✓ Bought` / `✓ Sold` in Tab 1 after broker execution.\n"
+                "3. **Future Upgrades Roadmap**: Dynamic Top-100 S&P/Nasdaq liquid universe expansion, `50%` partial profit scaling at `+1.5R`, and 30-minute Opening Range Breakout (`ORB`) confirmation."
             ),
         }
         st.info(step_info[st.session_state["walkthrough_step"]])
