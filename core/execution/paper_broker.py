@@ -1852,7 +1852,6 @@ class LiveTradingCopilotEngine:
             proceeds = round(qty * fill_price - fees_usd, 2)
             new_cash = max(0.0, round(cur_cash - proceeds, 2))
             new_realised = round(cur_realised - realised_delta, 2)
-            # Reconstruct original avg_entry_price from realised_delta = (fill_price - avg_entry) * qty - fees_usd
             inferred_entry = round(fill_price - ((realised_delta + fees_usd) / max(1, qty)), 4)
             if existing is not None:
                 new_q = int(existing["quantity"]) + qty
@@ -2322,6 +2321,7 @@ class LiveTradingCopilotEngine:
                     {
                         "ticker": ticker,
                         "strategy": f"{pos['strategy_id']} v{pos['strategy_version']}",
+                        "strategy_name": strat.name,
                         "quantity": int(pos["quantity"]),
                         "avg_entry_price": float(pos["avg_entry_price"]),
                         "current_price": float(pos["current_price"]),

@@ -4,6 +4,23 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-08] — Minimalist Classy Institutional UI Redesign & Full Ledger-Replay `undo_last_trade` / `adjust_cash_deposit_withdrawal`
+
+### Summary
+- **Minimalist, Classy Institutional UI (`CLASSY_MINIMAL_CSS` in `dashboard/streamlit_app.py`)**:
+  - Added refined institutional CSS (`CLASSY_MINIMAL_CSS`) featuring bordered dark-slate metric cards (`tabular-nums`), uppercase label hierarchy, compact vertical rhythm, clean navigation tab pills, and zero emoji clutter across tabs, headers, and action buttons.
+  - Replaced redundant top-of-page expanders and duplicate trade forms with a single sleek masthead (`Date · Market Open/Closed · Next Open · Active Champion`), a compact 4-popover control bar in `Live Copilot` (`Cash Transfer`, `+ Log Trade`, `Reset`, `? Rules`), inline non-trading-day preview toggle, and per-holding entry-strategy attribution in `Active Holdings`.
+- **Full Ledger-Replay Consistency in `undo_last_trade` & `adjust_cash_deposit_withdrawal` (`core/execution/paper_broker.py`)**:
+  - Simplified `LiveTradingCopilotEngine.undo_last_trade()` to delete the most recent fill from `shadow_trade_history` and invoke `reconcile_from_trade_ledger()`, restoring exact historical `avg_entry_price`, `opened_date`, `holding_days`, `cash_balance`, and `realised_pnl` without inverse-math approximation.
+  - Updated `adjust_cash_deposit_withdrawal()` to invoke `reconcile_from_trade_ledger()` after shifting `starting_cash` so historical `cash_after` balances and `cash_balance` remain 100% synchronized.
+
+### Modules Added / Modified
+- `dashboard/streamlit_app.py`
+- `core/execution/paper_broker.py`
+- `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-08] — Automatic #1 Champion Strategy Selection (`BUY`), Per-Position Entry-Strategy Binding (`SELL`/`HOLD`) & Headless Streamlit Runtime Verification
 
 ### Summary
