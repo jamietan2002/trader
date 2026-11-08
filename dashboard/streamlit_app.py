@@ -370,7 +370,7 @@ def main() -> None:
     )
 
     app = PlatformApplication()
-    _code_version = "2026-11-08-v13"
+    _code_version = "2026-11-08-v14"
     import api.server as _srv_mod
     if (
         getattr(_srv_mod, "_STREAMLIT_SYNC_VERSION", None) != _code_version
@@ -684,31 +684,31 @@ def main() -> None:
                 ]
                 default_keys = real_acc.get("enabled_strategies") or avail_keys
                 valid_defaults = [k for k in default_keys if k in avail_keys] or avail_keys
-                st.caption("**1-Click Real-Account Deployment Presets:**")
+                st.caption("**1-Click Real-Account Strategy Presets:**")
                 pr_c1, pr_c2 = st.columns(2)
-                if pr_c1.button("★ Core 2 (Breakout + Dip)", width="stretch", help="Recommended for accounts <$30k or Phase 1 Live: Volatility Breakout (SQN 3.55) + Mean Reversion (64.7% 6M WR)."):
+                if pr_c1.button("★ $10k Starter: 1 Strategy", width="stretch", help="Best for $10k starter accounts: Runs ONLY Volatility Breakout v1 (SQN 3.55, +11.19% 6M on $10k, 67% WR). Zero cross-strategy crowding and 100% identical to its standalone backtest & paper pod."):
+                    single1 = [k for k in avail_keys if "volatility_breakout" in k] or avail_keys[:1]
+                    app.orchestrator.live_copilot.set_enabled_strategies(single1)
+                    st.session_state["copilot_strats_select"] = single1
+                    st.session_state["_copilot_flash_msg"] = "Applied $10k Starter Preset: 1 Strategy Only (Volatility Breakout v1) — 100% identical to standalone backtest & paper pod."
+                    st.rerun()
+                if pr_c2.button("★ Core 2 (Breakout + Dip)", width="stretch", help="Pairs Volatility Breakout v1 + Mean Reversion v1 (+14.62% 6M on $10k, 64.1% WR). Uses idle cash during market pullbacks when breakouts pause."):
                     core2 = [k for k in avail_keys if "volatility_breakout" in k or "mean_reversion" in k] or avail_keys
                     app.orchestrator.live_copilot.set_enabled_strategies(core2)
                     st.session_state["copilot_strats_select"] = core2
                     st.session_state["_copilot_flash_msg"] = "Applied Core 2 Uncorrelated Preset (Volatility Breakout + Mean Reversion)."
                     st.rerun()
-                if pr_c2.button("All 5 Base Strategies", width="stretch", help="Full institutional diversification across all 5 uncorrelated Golden Base strategy sleeves."):
-                    app.orchestrator.live_copilot.set_enabled_strategies(avail_keys)
-                    st.session_state["copilot_strats_select"] = avail_keys
-                    st.session_state["_copilot_flash_msg"] = "Enabled all 5 Golden Base strategies."
-                    st.rerun()
                 pr_c3, pr_c4 = st.columns(2)
-                if pr_c3.button("Core 3 (+ Earnings PEAD)", width="stretch", help="Core 2 + Post-Earnings Announcement Drift (ideal during quarterly earnings season)."):
+                if pr_c3.button("Core 3 (+ Earnings PEAD)", width="stretch", help="Core 2 + Post-Earnings Announcement Drift (recommended for $25k-$50k accounts or earnings season)."):
                     core3 = [k for k in avail_keys if any(x in k for x in ("volatility_breakout", "mean_reversion", "pead"))] or avail_keys
                     app.orchestrator.live_copilot.set_enabled_strategies(core3)
                     st.session_state["copilot_strats_select"] = core3
                     st.session_state["_copilot_flash_msg"] = "Applied Core 3 Preset (Breakout + Mean Reversion + PEAD)."
                     st.rerun()
-                if pr_c4.button("Best Single (Breakout)", width="stretch", help="Single highest SQN (3.55) & 6-month return (+11.03%) strategy only."):
-                    single1 = [k for k in avail_keys if "volatility_breakout" in k] or avail_keys[:1]
-                    app.orchestrator.live_copilot.set_enabled_strategies(single1)
-                    st.session_state["copilot_strats_select"] = single1
-                    st.session_state["_copilot_flash_msg"] = "Enabled Single Best Champion (Volatility Breakout)."
+                if pr_c4.button("All 5 Base ($50k+)", width="stretch", help="Full 5-sleeve diversification (recommended only for $50k+ accounts to avoid signal crowding and fee drag)."):
+                    app.orchestrator.live_copilot.set_enabled_strategies(avail_keys)
+                    st.session_state["copilot_strats_select"] = avail_keys
+                    st.session_state["_copilot_flash_msg"] = "Enabled all 5 Golden Base strategies."
                     st.rerun()
                 chosen_keys = st.multiselect(
                     "Or customize active strategies",
@@ -1157,7 +1157,7 @@ def main() -> None:
             book_acc = book_engine.get_account_summary()
             book_positions = book_engine.get_open_positions()
             book_ledger = book_engine.get_trade_ledger(limit=500)
-            book_snaps = book_engine.get_equity_curve()
+            book_snaps = book_engine.get_portfolio_snapshots()
             book_title_label = f"Dedicated Strategy Pod: `{strat_id_for_book}` (`$100,000` Isolated Account)"
 
         book_daily_pnl_usd, book_daily_ret_pct, book_weekly_pnl_usd, book_weekly_ret_pct, book_net_dollar_pnl = _compute_period_pnl(book_acc, book_snaps)

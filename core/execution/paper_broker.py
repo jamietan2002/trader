@@ -706,8 +706,12 @@ class PaperTradingEngine:
             ),
         )
 
-        # 8. Optional Alpaca Paper Brokerage Order Mirroring (when ALPACA_API_KEY is configured)
-        if self.settings.alpaca_api_key and self.settings.alpaca_secret_key:
+        # 8. Optional Alpaca Paper Brokerage Order Mirroring (when ALPACA_API_KEY is configured, Master account only)
+        if (
+            self.account_id == self.DEFAULT_ACCOUNT_ID
+            and self.settings.alpaca_api_key
+            and self.settings.alpaca_secret_key
+        ):
             self._mirror_order_to_alpaca_paper(
                 ticker=ticker,
                 side=side_u,
@@ -2178,8 +2182,21 @@ class LiveTradingCopilotEngine:
                 )
                 continue
 
-            # Use Temporary RiskManager without DB alert logging so previewing recommendations doesn't spam paper risk_alerts
-            preview_rm = PortfolioRiskManager(self.settings.risk, db=None)
+            # Use Temporary RiskManager without DB alert logging so previewing recommendations doesn't spam paper risk_alerts.
+            # For small accounts (<= $15k, e.g. $10k starter account), allow up to 25% single-stock ($2,500) and 50% sector
+            # exposure while keeping 1.0% stop-loss risk ($100) unchanged, preventing whole-share quantization truncation on $400-$800 stocks.
+            if total_eq <= 15_000.0:
+                import dataclasses as _dc
+                eff_risk_cfg = _dc.replace(
+                    self.settings.risk,
+                    max_single_stock_exposure_pct=max(self.settings.risk.max_single_stock_exposure_pct, 0.25),
+                    max_sector_exposure_pct=max(self.settings.risk.max_sector_exposure_pct, 0.50),
+                )
+                strat_max_exp = max(float(strat.risk_params.get("max_position_exposure_pct") or 0.15), 0.25)
+            else:
+                eff_risk_cfg = self.settings.risk
+                strat_max_exp = strat.risk_params.get("max_position_exposure_pct")
+            preview_rm = PortfolioRiskManager(eff_risk_cfg, db=None)
             decision = preview_rm.evaluate_proposed_entry(
                 account_id=self.account_id,
                 eval_date=session_date,
@@ -2195,7 +2212,7 @@ class LiveTradingCopilotEngine:
                 available_cash=sim_cash,
                 open_positions=sim_open_map,
                 strategy_risk_pct=strat.risk_params.get("risk_per_trade_pct"),
-                strategy_max_exp_pct=strat.risk_params.get("max_position_exposure_pct"),
+                strategy_max_exp_pct=strat_max_exp,
             )
             if decision.approved and decision.recommended_shares > 0:
                 shares = decision.recommended_shares
