@@ -604,27 +604,32 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
       <div class="grid-2">
         <div class="card">
-          <div class="card-header"><span class="card-title">2. My Confirmed Real Positions &amp; Hold Status</span></div>
+          <div class="card-header"><span class="card-title">2. My Active Holdings (Calculated from Trades)</span></div>
           <div id="copilot-positions-table"></div>
         </div>
         <div class="card">
-          <div class="card-header"><span class="card-title">Update Real Cash or Add / Edit a Position</span></div>
+          <div class="card-header"><span class="card-title">3. Deposit / Withdraw Cash &amp; Add / Edit / Remove Trades</span></div>
           <div class="form-row">
             <div class="form-group">
-              <label>My Real Uninvested Cash ($)</label>
-              <input type="number" id="cop-cash-input" value="25000" step="500" />
+              <label>Cash Transfer Amount ($)</label>
+              <input type="number" id="cop-dw-input" value="1000" step="250" />
             </div>
-            <button class="btn btn-secondary" onclick="saveCopilotCash(false)">Update Cash</button>
-            <button class="btn btn-secondary" onclick="saveCopilotCash(true)" title="Sets Cash + Open Holdings as your 0% return baseline">Set as Baseline</button>
+            <button class="btn" onclick="depositWithdrawCopilotCash(1)">+ Deposit Cash</button>
+            <button class="btn btn-secondary" onclick="depositWithdrawCopilotCash(-1)">- Withdraw Cash</button>
           </div>
           <hr style="border:none;border-top:1px solid var(--border);margin:12px 0;" />
           <div class="form-row">
-            <div class="form-group"><label>Ticker</label><input type="text" id="cop-edit-ticker" value="AAPL" style="width:80px;" /></div>
-            <div class="form-group"><label>Shares (0=Del)</label><input type="number" id="cop-edit-qty" value="10" style="width:90px;" /></div>
-            <div class="form-group"><label>Avg Entry ($)</label><input type="number" id="cop-edit-px" value="180.00" step="0.5" style="width:95px;" /></div>
-            <div class="form-group"><label>Entry Date</label><input type="text" id="cop-edit-dt" placeholder="YYYY-MM-DD" style="width:105px;" /></div>
-            <button class="btn" onclick="saveCopilotPosition()">Save Position</button>
+            <div class="form-group">
+              <label>Side</label>
+              <select id="cop-tr-side" style="width:75px;"><option value="BUY">BUY</option><option value="SELL">SELL</option></select>
+            </div>
+            <div class="form-group"><label>Ticker</label><input type="text" id="cop-edit-ticker" value="AAPL" style="width:75px;" /></div>
+            <div class="form-group"><label>Shares</label><input type="number" id="cop-edit-qty" value="10" min="1" style="width:75px;" /></div>
+            <div class="form-group"><label>Fill Price ($)</label><input type="number" id="cop-edit-px" value="180.00" step="0.5" style="width:90px;" /></div>
+            <div class="form-group"><label>Trade Date</label><input type="text" id="cop-edit-dt" placeholder="YYYY-MM-DD" style="width:105px;" /></div>
+            <button class="btn" onclick="addCopilotTrade()">+ Add Trade</button>
           </div>
+          <div id="copilot-trades-table" style="margin-top:12px;"></div>
         </div>
       </div>
     </section>
@@ -795,22 +800,52 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             `).join('')}
           </tbody>
         </table>
-      ` : '<div style="font-size:0.84rem;color:var(--muted);">0 confirmed real positions. Click "Confirm Bought" above or add a holding on the right.</div>';
+      ` : '<div style="font-size:0.84rem;color:var(--muted);">0 active holdings. Click "Confirm Bought" above or add a trade on the right.</div>';
+
+      const trHist = (STATE.copilot && STATE.copilot.trade_history) || [];
+      const trTblEl = document.getElementById('copilot-trades-table');
+      if (trTblEl) {
+        trTblEl.innerHTML = trHist.length ? `
+          <table>
+            <thead><tr><th>Date</th><th>Side</th><th>Ticker</th><th>Shares</th><th>Price</th><th>P&amp;L</th><th>Action</th></tr></thead>
+            <tbody>
+              ${trHist.slice(0, 15).map(t => `
+                <tr>
+                  <td>${t.fill_date}</td>
+                  <td><span class="badge ${t.side === 'BUY' ? 'badge-info' : 'badge-warn'}">${t.side}</span></td>
+                  <td><strong>${t.ticker}</strong></td>
+                  <td>${t.quantity}</td>
+                  <td>${fmtUsd(t.fill_price)}</td>
+                  <td class="${t.side === 'SELL' ? (t.realised_pnl >= 0 ? 'pos' : 'neg') : ''}">${t.side === 'SELL' ? fmtUsd(t.realised_pnl) : '—'}</td>
+                  <td><button class="btn btn-secondary" onclick="deleteCopilotTrade('${t.trade_id}')">Remove</button></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        ` : '<div style="font-size:0.8rem;color:var(--muted);">No trades placed yet (0 fills).</div>';
+      }
     }
 
-    async function saveCopilotCash(updateBaseline = false) {
-      const cash = Number(document.getElementById('cop-cash-input').value || 0);
-      await fetch('/api/copilot/cash', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({cash_balance: cash, update_starting_baseline: updateBaseline})});
+    async function depositWithdrawCopilotCash(sign = 1) {
+      const amt = Number(document.getElementById('cop-dw-input').value || 0) * sign;
+      await fetch('/api/copilot/deposit-withdraw', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({delta_cash: amt})});
       await loadDashboardState();
     }
 
-    async function saveCopilotPosition() {
+    async function addCopilotTrade() {
+      const side = document.getElementById('cop-tr-side').value;
       const ticker = document.getElementById('cop-edit-ticker').value;
-      const qty = Number(document.getElementById('cop-edit-qty').value || 0);
-      const px = Number(document.getElementById('cop-edit-px').value || 100);
+      const quantity = Number(document.getElementById('cop-edit-qty').value || 1);
+      const fill_price = Number(document.getElementById('cop-edit-px').value || 100);
       const dtEl = document.getElementById('cop-edit-dt');
-      const opened_date = dtEl && dtEl.value ? dtEl.value.trim() : null;
-      await fetch('/api/copilot/edit-position', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ticker, quantity: qty, avg_entry_price: px, opened_date})});
+      const fill_date = dtEl && dtEl.value ? dtEl.value.trim() : null;
+      const ep = side === 'SELL' ? '/api/copilot/confirm-sell' : '/api/copilot/confirm-buy';
+      await fetch(ep, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ticker, strategy_id: 'strat_volatility_breakout', strategy_version: 1, quantity, fill_price, fill_date, fees_usd: 0.0})});
+      await loadDashboardState();
+    }
+
+    async function deleteCopilotTrade(trade_id) {
+      await fetch('/api/copilot/trade/delete', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({trade_id})});
       await loadDashboardState();
     }
 

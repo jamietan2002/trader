@@ -601,82 +601,122 @@ def main() -> None:
         real_positions = copilot_data.get("positions") or []
         real_history = copilot_data.get("trade_history") or []
         latest_bar_date = str(plan.get("session_date") or today_iso)
+        universe_tickers = sorted({t for s in strats for t in s["universe"]} | {p["ticker"] for p in real_positions})
+        latest_px_by_tkr = {r["ticker"]: float(r["current_price"]) for r in state["research_reports"]}
 
-        # Synchronize st.session_state["copilot_cash_input"] whenever database cash_balance changes
-        db_cash_val = round(float(real_acc["cash_balance"]), 2)
-        if st.session_state.get("_synced_copilot_db_cash") != db_cash_val:
-            st.session_state["copilot_cash_input"] = db_cash_val
-            st.session_state["_synced_copilot_db_cash"] = db_cash_val
-
-        # 1. Real Account Summary Metrics + Quick Cash Bar
+        # 1. Real Account Summary Metrics (100% Calculated from Net Deposits/Withdrawals + Trades Placed)
         total_real_pnl = round(float(real_acc["realised_pnl"]) + float(real_acc["unrealised_pnl"]), 2)
         rc1, rc2, rc3, rc4 = st.columns(4)
         rc1.metric(
             "My Account Value",
             f"${real_acc['total_equity']:,.2f}",
-            f"{real_acc['total_return_pct']:+.2f}% vs ${real_acc['starting_cash']:,.0f} baseline",
-            help="Confirmed Uninvested Cash + Market Value of your confirmed Open Holdings.",
+            f"{real_acc['total_return_pct']:+.2f}% vs ${real_acc['starting_cash']:,.0f} Net Deposited",
+            help="Automatically calculated as Available Cash + Market Value of Open Holdings.",
         )
         rc2.metric(
-            "Available Cash",
+            "Available Cash (Calculated)",
             f"${real_acc['cash_balance']:,.2f}",
-            help="Uninvested cash used to size BUY signals (1.0% max risk per trade).",
+            f"Net Deposits: ${real_acc['starting_cash']:,.0f}",
+            help="Automatically calculated from Net Deposits/Withdrawals minus BUY trade costs plus SELL trade proceeds.",
         )
         rc3.metric(
-            "Open Holdings",
+            "Open Holdings (Calculated)",
             f"{real_acc['open_positions_count']} / 10",
-            f"${real_acc['positions_market_value']:,.2f} invested",
-            help="Positions you have confirmed buying or holding.",
+            f"${real_acc['positions_market_value']:,.2f} market value",
+            help="Automatically derived from your confirmed BUY and SELL trades.",
         )
         rc4.metric(
             "Total Real P&L",
             f"${total_real_pnl:+,.2f}",
             f"Closed: ${real_acc['realised_pnl']:+,.0f} · Open: ${real_acc['unrealised_pnl']:+,.0f}",
-            help="Combined Realised P&L (closed trades) and Unrealised P&L (open positions).",
+            help="Combined Realised P&L (from closed SELL trades) and Unrealised P&L (from open holdings).",
         )
 
-        # Compact 1-Row Cash & Account Controls Bar
-        cash_c1, cash_c2, cash_c3, cash_c4, cash_c5 = st.columns([1.5, 0.9, 1.1, 1.1, 1.1])
-        new_cash_val = cash_c1.number_input(
-            "My Broker Cash Balance ($)",
-            min_value=0.0,
-            value=db_cash_val,
-            step=500.0,
-            key="copilot_cash_input",
-            help="Enter your current uninvested cash so BUY share counts scale to your exact account size.",
-        )
-        with cash_c2:
-            st.write("")
-            if st.button("Update Cash", key="btn_upd_cash", width="stretch", help="Updates your uninvested cash balance while keeping your starting capital baseline intact."):
-                app.orchestrator.live_copilot.update_cash_balance(float(new_cash_val), False)
-                st.session_state["_copilot_flash_msg"] = f"Updated Available Cash to ${float(new_cash_val):,.2f}."
-                st.rerun()
-        with cash_c3:
-            st.write("")
-            if st.button("Set as Starting Capital", key="btn_reset_base_cash", width="stretch", help="Sets your current Cash + Open Holdings cost basis as your 0% P&L baseline."):
-                app.orchestrator.live_copilot.update_cash_balance(float(new_cash_val), True)
-                st.session_state["_copilot_flash_msg"] = f"Updated Cash to ${float(new_cash_val):,.2f} and reset 0% Starting Capital baseline."
-                st.rerun()
-        with cash_c4:
-            st.write("")
-            with st.popover("Deposit / Withdraw", width="stretch"):
-                st.caption("Adjust cash & starting capital together so deposits/withdrawals don't distort your P&L %.")
-                dw_amt = st.number_input("Amount ($)", min_value=1.0, value=1000.0, step=250.0, key="copilot_dw_amt")
+        # Clean 3-Action Ledger Control Bar (Deposit/Withdraw Cash, + Log Trade, Strategy & Reset)
+        ctrl_c1, ctrl_c2, ctrl_c3, ctrl_c4 = st.columns([2.2, 1.15, 1.15, 1.25])
+        with ctrl_c1:
+            st.caption(
+                f"**Ledger Accounting**: `Net Deposited (${real_acc['starting_cash']:,.2f})` + `Realised P&L (${real_acc['realised_pnl']:+,.2f})` "
+                f"- `Open Cost Basis` = **`Available Cash (${real_acc['cash_balance']:,.2f})`** *(All cash & holdings are 100% calculated from deposits/withdrawals & trades)*"
+            )
+        with ctrl_c2:
+            with st.popover("💰 Deposit / Withdraw Cash", width="stretch"):
+                st.markdown("**Deposit or Withdraw Broker Cash**")
+                st.caption(
+                    f"Current Net Deposited Capital: **`${real_acc['starting_cash']:,.2f}`**  \n"
+                    f"Current Available Cash: **`${real_acc['cash_balance']:,.2f}`**"
+                )
+                dw_amt = st.number_input("Cash Transfer Amount ($)", min_value=1.0, value=1000.0, step=250.0, key="copilot_dw_amt")
                 dw_c1, dw_c2 = st.columns(2)
-                if dw_c1.button("+ Deposit", width="stretch"):
+                if dw_c1.button("+ Deposit Cash", width="stretch"):
                     app.orchestrator.live_copilot.adjust_cash_deposit_withdrawal(float(dw_amt))
-                    st.session_state["_copilot_flash_msg"] = f"Deposited +${float(dw_amt):,.2f} into broker cash & baseline."
+                    st.session_state["_copilot_flash_msg"] = f"Deposited +${float(dw_amt):,.2f} (Net Deposited Capital & Available Cash updated)."
                     st.rerun()
-                if dw_c2.button("- Withdraw", width="stretch"):
+                if dw_c2.button("- Withdraw Cash", width="stretch"):
                     try:
                         app.orchestrator.live_copilot.adjust_cash_deposit_withdrawal(-float(dw_amt))
-                        st.session_state["_copilot_flash_msg"] = f"Withdrew -${float(dw_amt):,.2f} from broker cash & baseline."
+                        st.session_state["_copilot_flash_msg"] = f"Withdrew -${float(dw_amt):,.2f} (Net Deposited Capital & Available Cash updated)."
                         st.rerun()
                     except ValueError as err:
                         st.error(str(err))
-        with cash_c5:
-            st.write("")
-            with st.popover("Strategies & Reset", width="stretch"):
+        with ctrl_c3:
+            with st.popover("➕ Log a Trade (BUY / SELL)", width="stretch"):
+                st.markdown("**Log Any Broker Trade (`BUY` or `SELL`)**")
+                st.caption("Automatically updates your Available Cash, Open Holdings, and Realised P&L.")
+                lt_c1, lt_c2 = st.columns(2)
+                lt_side = lt_c1.selectbox("Order Side", options=["BUY", "SELL"], key="lt_side_sel")
+                lt_tkr_opts = (
+                    [p["ticker"] for p in real_positions] or universe_tickers
+                    if lt_side == "SELL"
+                    else universe_tickers + ["+ Custom Ticker..."]
+                )
+                lt_tkr_sel = lt_c2.selectbox("Ticker", options=lt_tkr_opts, key="lt_tkr_sel")
+                if lt_tkr_sel == "+ Custom Ticker...":
+                    lt_tkr = st.text_input("Custom Symbol", value="TSLA", key="lt_custom_tkr").strip().upper() or "TSLA"
+                else:
+                    lt_tkr = lt_tkr_sel
+                lt_default_px = round(latest_px_by_tkr.get(lt_tkr, 150.0), 2)
+                lt_c3, lt_c4, lt_c5 = st.columns(3)
+                lt_qty = lt_c3.number_input("Shares", min_value=1, value=10, step=1, key="lt_qty_inp")
+                lt_px = lt_c4.number_input("Fill Price ($)", min_value=0.01, value=lt_default_px, step=0.50, key=f"lt_px_inp_{lt_tkr}")
+                lt_fee = lt_c5.number_input("Fees ($)", min_value=0.0, value=0.0, step=0.50, key="lt_fee_inp")
+                lt_c6, lt_c7, lt_c8 = st.columns(3)
+                lt_date = lt_c6.text_input("Trade Date", value=latest_bar_date, key="lt_date_inp")
+                lt_sl = lt_c7.number_input("Stop $ (0=Auto)", min_value=0.0, value=0.0, step=0.50, key="lt_sl_inp")
+                lt_tp = lt_c8.number_input("Target $ (0=Auto)", min_value=0.0, value=0.0, step=0.50, key="lt_tp_inp")
+                if st.button(f"Record {lt_side} {int(lt_qty)} {lt_tkr}", width="stretch", key="btn_record_manual_trade"):
+                    if lt_side == "BUY":
+                        active_s = (real_acc.get("enabled_strategies") or ["strat_volatility_breakout:1"])[0].split(":")
+                        app.orchestrator.live_copilot.confirm_buy_execution(
+                            ticker=lt_tkr,
+                            strategy_id=active_s[0],
+                            strategy_version=int(active_s[1]) if len(active_s) > 1 else 1,
+                            quantity=int(lt_qty),
+                            fill_price=float(lt_px),
+                            fees_usd=float(lt_fee),
+                            stop_loss_price=float(lt_sl) if lt_sl > 0 else None,
+                            take_profit_price=float(lt_tp) if lt_tp > 0 else None,
+                            fill_date=lt_date.strip() or latest_bar_date,
+                            notes="Logged via Copilot Trade Entry",
+                        )
+                        st.session_state["_copilot_flash_msg"] = f"Logged BUY {int(lt_qty)} {lt_tkr} @ ${float(lt_px):.2f} (Cash & Holdings updated)."
+                        st.rerun()
+                    else:
+                        try:
+                            app.orchestrator.live_copilot.confirm_sell_execution(
+                                ticker=lt_tkr,
+                                quantity=int(lt_qty),
+                                fill_price=float(lt_px),
+                                fees_usd=float(lt_fee),
+                                fill_date=lt_date.strip() or latest_bar_date,
+                                notes="Logged via Copilot Trade Entry",
+                            )
+                            st.session_state["_copilot_flash_msg"] = f"Logged SELL {int(lt_qty)} {lt_tkr} @ ${float(lt_px):.2f} (Cash, Holdings & P&L updated)."
+                            st.rerun()
+                        except KeyError as err:
+                            st.error(str(err))
+        with ctrl_c4:
+            with st.popover("⚙️ Strategy & Reset", width="stretch"):
                 avail_keys = [
                     f"{s['strategy_id']}:{s['version']}"
                     for s in strats
@@ -721,14 +761,11 @@ def main() -> None:
                     st.session_state["_copilot_flash_msg"] = f"Active strategy filter saved ({len(chosen_keys)} strategies enabled)."
                     st.rerun()
                 st.markdown("---")
-                if real_history and st.button("Undo Last Confirmed Trade", width="stretch", help="Reverses your most recent BUY or SELL confirmation and restores cash/positions."):
-                    last_t = real_history[0]
-                    app.orchestrator.live_copilot.undo_last_trade()
-                    st.session_state["_copilot_flash_msg"] = f"Undid last {last_t['side']} of {last_t['quantity']} {last_t['ticker']} @ ${float(last_t['fill_price']):.2f}."
-                    st.rerun()
-                if st.button("Reset Real Account Ledger", width="stretch", help="Clears all confirmed holdings and trade history in Live Copilot."):
-                    app.orchestrator.live_copilot.reset_copilot_account()
-                    st.session_state["_copilot_flash_msg"] = "Reset Live Copilot ledger to clean starting cash."
+                st.caption("**Start Fresh / Reset Account Ledger:**")
+                reset_dep = st.number_input("Initial Cash Deposit ($)", min_value=100.0, value=float(real_acc["starting_cash"]), step=1000.0, key="reset_init_dep_inp")
+                if st.button("Reset Account to Initial Deposit", width="stretch", help="Clears all trades and holdings and starts fresh with this initial deposit."):
+                    app.orchestrator.live_copilot.reset_copilot_account(starting_cash=float(reset_dep))
+                    st.session_state["_copilot_flash_msg"] = f"Reset Live Copilot ledger to ${float(reset_dep):,.2f} initial cash deposit (0 trades)."
                     st.rerun()
 
         st.markdown("---")
@@ -968,17 +1005,16 @@ def main() -> None:
                     st.dataframe(vetoed_sigs, width="stretch")
 
         st.markdown("---")
-        # 2. My Confirmed Real Positions with 1-Click Partial/Full Close & Smart Pre-Filled Editor
-        st.markdown("#### 2. My Active Holdings, Stop-Loss Ratchets & Early Exit Controls")
+        # 2. My Active Holdings (100% Calculated from BUY/SELL Trades) + Quick Exit & Stop/Target Update
+        st.markdown("#### 2. My Active Holdings (Calculated from Trades) — Stop/Target Brackets & Quick Exit")
         st.caption(
-            "**Want to exit a position early (or log a Stop-Loss / Take-Profit fill)?** "
-            "1) Sell in your broker & cancel any leftover GTC bracket for that stock → "
-            "2) Enter the **Shares** & **Exit Price ($)** on that row below → "
-            "3) Click **`Close`** (or **`Sell N`** for a partial exit) to immediately credit your Cash and log Realised P&L."
+            "**Holdings & Cash are 100% derived from your Trades:** "
+            "To exit a position (full or partial), enter the **Shares** & **Exit Price ($)** on that row and click **`Close` / `Sell N`** (which records a `SELL` trade, credits your Available Cash, and locks in Realised P&L). "
+            "To edit or remove a past trade, use **Section 3 (`My Trade Ledger`)** below."
         )
         if hold_updates:
             for h_idx, h in enumerate(hold_updates):
-                hc1, hc2, hc3, hc4, hc5 = st.columns([2.5, 1.3, 0.7, 0.8, 0.8])
+                hc1, hc2, hc3, hc4, hc5, hc6 = st.columns([2.3, 1.25, 0.65, 0.75, 0.75, 0.65])
                 h_sig = f"{h['ticker']}_{h['quantity']}_{h['avg_entry_price']}"
                 pnl_sign = f"+${h['unrealised_pnl']:,.2f}" if h["unrealised_pnl"] >= 0 else f"-${abs(h['unrealised_pnl']):,.2f}"
                 hc1.markdown(
@@ -1013,14 +1049,14 @@ def main() -> None:
                     label_visibility="collapsed",
                     help="Actual broker sale price per share.",
                 )
-                btn_lbl = f"Sell {close_qty} {h['ticker']}" if int(close_qty) < int(h["quantity"]) else f"Close {h['ticker']}"
+                btn_lbl = f"Sell {close_qty}" if int(close_qty) < int(h["quantity"]) else f"Close {h['ticker']}"
                 if hc5.button(btn_lbl, key=f"btn_qclose_{h_sig}_{h_idx}", width="stretch", help="Confirm you sold these shares in your brokerage account."):
                     app.orchestrator.live_copilot.confirm_sell_execution(
                         ticker=h["ticker"],
                         quantity=int(close_qty),
                         fill_price=float(close_px),
                         fees_usd=0.0,
-                        notes="Manual position exit via Copilot",
+                        notes="Position exit via Copilot",
                     )
                     est_p = round((float(close_px) - float(h["avg_entry_price"])) * int(close_qty), 2)
                     st.session_state["_copilot_flash_msg"] = (
@@ -1028,80 +1064,168 @@ def main() -> None:
                         f"(Realised P&L: ${est_p:+,.2f})."
                     )
                     st.rerun()
+                with hc6:
+                    with st.popover("Bracket", width="stretch"):
+                        st.caption(f"Update `{h['ticker']}` Broker Stop-Loss / Target (does not alter shares or cash):")
+                        new_sl = st.number_input(
+                            "Stop-Loss ($)",
+                            min_value=0.01,
+                            value=float(h.get("stop_loss_price") or round(float(h["avg_entry_price"]) * 0.95, 2)),
+                            step=0.25,
+                            key=f"brk_sl_{h_sig}_{h_idx}",
+                        )
+                        new_tp = st.number_input(
+                            "Take-Profit ($)",
+                            min_value=0.01,
+                            value=float(h.get("take_profit_price") or round(float(h["avg_entry_price"]) * 1.08, 2)),
+                            step=0.25,
+                            key=f"brk_tp_{h_sig}_{h_idx}",
+                        )
+                        if st.button("Save Stop / Target", key=f"btn_brk_{h_sig}_{h_idx}", width="stretch"):
+                            app.orchestrator.live_copilot.update_position_brackets(h["ticker"], float(new_sl), float(new_tp))
+                            st.session_state["_copilot_flash_msg"] = f"Updated {h['ticker']} Stop-Loss to ${float(new_sl):.2f} and Target to ${float(new_tp):.2f}."
+                            st.rerun()
         elif real_positions:
             st.dataframe(real_positions, width="stretch")
         else:
-            st.caption("No active holdings logged yet. Click **✓ Bought** on a setup above or log an existing broker holding below.")
+            st.caption("No active holdings currently open. Click **✓ Bought** on a setup above or log a trade in **Section 3 (`My Trade Ledger`)** below.")
 
-        with st.expander("Log an Existing Broker Holding or Edit a Position (Any Ticker, Shares, Entry Date, Stop/Target)", expanded=False):
-            universe_tickers = sorted({t for s in strats for t in s["universe"]} | {p["ticker"] for p in real_positions})
-            ticker_options = universe_tickers + ["+ Custom Ticker..."]
-            pos_by_tkr = {p["ticker"]: p for p in real_positions}
-            latest_px_by_tkr = {r["ticker"]: float(r["current_price"]) for r in state["research_reports"]}
-
-            ec1, ec2, ec3, ec4, ec5, ec6 = st.columns([1.15, 0.85, 0.95, 0.95, 0.95, 1.05])
-            sel_tkr_opt = ec1.selectbox("Ticker", options=ticker_options, key="edit_pos_ticker")
-            if sel_tkr_opt == "+ Custom Ticker...":
-                e_ticker = ec1.text_input("Custom Symbol", value="TSLA", key="edit_pos_custom_tkr").strip().upper() or "TSLA"
-            else:
-                e_ticker = sel_tkr_opt
-
-            existing_p = pos_by_tkr.get(e_ticker)
-            pos_sig = (
-                f"{e_ticker}_{existing_p['quantity']}_{existing_p['avg_entry_price']}_"
-                f"{existing_p.get('stop_loss_price')}_{existing_p.get('take_profit_price')}_{existing_p.get('opened_date')}"
-                if existing_p
-                else f"{e_ticker}_new"
-            )
-            default_qty = int(existing_p["quantity"]) if existing_p else 10
-            default_px = (
-                float(existing_p["avg_entry_price"])
-                if existing_p
-                else round(latest_px_by_tkr.get(e_ticker, 150.0), 2)
-            )
-            default_sl = float(existing_p["stop_loss_price"]) if (existing_p and existing_p.get("stop_loss_price")) else 0.0
-            default_tp = float(existing_p["take_profit_price"]) if (existing_p and existing_p.get("take_profit_price")) else 0.0
-            default_dt = str(existing_p["opened_date"]) if existing_p else latest_bar_date
-
-            e_qty = ec2.number_input("Shares (0=Remove)", min_value=0, value=default_qty, step=1, key=f"edit_qty_{pos_sig}")
-            e_entry = ec3.number_input("Avg Entry ($)", min_value=0.01, value=default_px, step=0.50, key=f"edit_px_{pos_sig}")
-            e_stop = ec4.number_input("Stop $ (0=Auto)", min_value=0.0, value=default_sl, step=0.50, key=f"edit_sl_{pos_sig}")
-            e_tp = ec5.number_input("Target $ (0=Auto)", min_value=0.0, value=default_tp, step=0.50, key=f"edit_tp_{pos_sig}")
-            e_date = ec6.text_input("Entry Date (YYYY-MM-DD)", value=default_dt, key=f"edit_dt_{pos_sig}")
-
-            act_c1, act_c2 = st.columns([1.5, 2.5])
-            deduct_label = (
-                "Adjust my Available Cash by the net share change"
-                if existing_p is not None
-                else "Deduct purchase cost from my Available Cash (leave unchecked if your cash balance above already excludes this holding)"
-            )
-            deduct_chk = act_c2.checkbox(
-                deduct_label,
-                value=False,
-                key=f"edit_deduct_{pos_sig}",
-            )
-            btn_save_label = f"Remove {e_ticker}" if int(e_qty) == 0 else (f"Update {e_ticker} Holding" if existing_p else f"Add {e_ticker} Holding")
-            if act_c1.button(btn_save_label, key=f"btn_save_{pos_sig}", width="stretch"):
-                app.orchestrator.live_copilot.edit_or_add_position(
-                    ticker=e_ticker,
-                    quantity=int(e_qty),
-                    avg_entry_price=float(e_entry),
-                    stop_loss_price=float(e_stop) if e_stop > 0 else None,
-                    take_profit_price=float(e_tp) if e_tp > 0 else None,
-                    opened_date=e_date.strip() or latest_bar_date,
-                    deduct_from_cash=deduct_chk,
-                )
-                st.session_state["_copilot_flash_msg"] = (
-                    f"Removed {e_ticker} from holdings."
-                    if int(e_qty) == 0
-                    else f"Saved {e_ticker}: {int(e_qty)} shares @ ${float(e_entry):.2f} (Entry Date: {e_date.strip()})."
-                )
-                st.rerun()
-
-        # 3. Confirmed Real Trade History
+        st.markdown("---")
+        # 3. My Trade Ledger — Add, Edit, or Remove Any Trade (Single Source of Truth for Cash, Holdings & P&L)
+        st.markdown(f"#### 3. My Trade Ledger — Add, Edit, or Remove Trades ({len(real_history)} fills)")
+        st.caption(
+            "**Single Source of Truth**: Every `BUY` and `SELL` trade you placed is recorded below. "
+            "Whenever you **Add**, **Edit**, or **Remove** a trade here, your **Available Cash**, **Open Holdings**, and **Realised P&L** are recalculated automatically."
+        )
         if real_history:
-            with st.expander(f"3. My Confirmed Real Trade History ({len(real_history)} fills)", expanded=False):
-                st.dataframe(real_history, width="stretch")
+            clean_real_trades = [
+                {
+                    "Trade ID": t["trade_id"],
+                    "Date": t["fill_date"],
+                    "Side": "🟢 BUY" if t["side"] == "BUY" else "🔴 SELL",
+                    "Ticker": t["ticker"],
+                    "Shares": int(t["quantity"]),
+                    "Fill Price": f"${float(t['fill_price']):.2f}",
+                    "Fees": f"${float(t.get('fees_usd') or 0.0):.2f}",
+                    "Total Amount": f"${int(t['quantity']) * float(t['fill_price']):,.2f}",
+                    "Realised P&L": f"${float(t.get('realised_pnl') or 0.0):+,.2f}" if t["side"] == "SELL" else "— (Entry)",
+                    "Cash After": f"${float(t.get('cash_after') or 0.0):,.2f}",
+                    "Strategy": f"{t.get('strategy_id', '')} v{t.get('strategy_version', 1)}",
+                    "Notes": t.get("notes", ""),
+                }
+                for t in real_history
+            ]
+            st.dataframe(clean_real_trades, width="stretch", hide_index=True)
+        else:
+            st.info("No trades placed yet (`0` fills). Confirm a trade on Today's Checklist above or add a trade below.")
+
+        with st.expander("✏️ Add, Edit, or Remove a Trade (Automatically Recalculates Cash, Holdings & P&L)", expanded=not bool(real_history)):
+            trade_by_id = {t["trade_id"]: t for t in real_history}
+            trade_select_opts = ["+ Add a New Trade (BUY or SELL)"] + [t["trade_id"] for t in real_history]
+            trade_select_labels = {
+                "+ Add a New Trade (BUY or SELL)": "➕ Add a New Trade (BUY or SELL)",
+                **{
+                    t["trade_id"]: (
+                        f"{t['fill_date']} · {t['side']} {t['quantity']} {t['ticker']} @ ${float(t['fill_price']):.2f} "
+                        f"(Fees: ${float(t.get('fees_usd') or 0.0):.2f}) [{t['trade_id']}]"
+                    )
+                    for t in real_history
+                },
+            }
+            sel_trade_id = st.selectbox(
+                "Select Trade to Edit / Remove (or Add a New Trade)",
+                options=trade_select_opts,
+                format_func=lambda tid: trade_select_labels.get(tid, tid),
+                key="copilot_trade_editor_select",
+            )
+            editing_trade = trade_by_id.get(sel_trade_id)
+            tr_sig = (
+                f"{editing_trade['trade_id']}_{editing_trade['side']}_{editing_trade['ticker']}_{editing_trade['quantity']}_{editing_trade['fill_price']}_{editing_trade.get('fees_usd')}_{editing_trade['fill_date']}"
+                if editing_trade
+                else "new_trade"
+            )
+
+            te_c1, te_c2, te_c3, te_c4, te_c5, te_c6 = st.columns([0.9, 1.15, 0.85, 0.95, 0.85, 1.05])
+            default_side_idx = 1 if (editing_trade and editing_trade["side"] == "SELL") else 0
+            te_side = te_c1.selectbox("Side", options=["BUY", "SELL"], index=default_side_idx, key=f"te_side_{tr_sig}")
+
+            if editing_trade:
+                tkr_list = sorted(set(universe_tickers) | {editing_trade["ticker"]}) + ["+ Custom Ticker..."]
+                default_tkr_idx = tkr_list.index(editing_trade["ticker"]) if editing_trade["ticker"] in tkr_list else 0
+            else:
+                tkr_list = universe_tickers + ["+ Custom Ticker..."]
+                default_tkr_idx = 0
+
+            te_tkr_opt = te_c2.selectbox("Ticker", options=tkr_list, index=default_tkr_idx, key=f"te_tkr_{tr_sig}")
+            if te_tkr_opt == "+ Custom Ticker...":
+                te_ticker = te_c2.text_input("Custom Symbol", value="TSLA", key=f"te_custom_tkr_{tr_sig}").strip().upper() or "TSLA"
+            else:
+                te_ticker = te_tkr_opt
+
+            def_tr_qty = int(editing_trade["quantity"]) if editing_trade else 10
+            def_tr_px = float(editing_trade["fill_price"]) if editing_trade else round(latest_px_by_tkr.get(te_ticker, 150.0), 2)
+            def_tr_fee = float(editing_trade.get("fees_usd") or 0.0) if editing_trade else 0.0
+            def_tr_dt = str(editing_trade["fill_date"]) if editing_trade else latest_bar_date
+
+            te_qty = te_c3.number_input("Shares", min_value=1, value=def_tr_qty, step=1, key=f"te_qty_{tr_sig}")
+            te_px = te_c4.number_input("Fill Price ($)", min_value=0.01, value=def_tr_px, step=0.50, key=f"te_px_{tr_sig}")
+            te_fee = te_c5.number_input("Fees ($)", min_value=0.0, value=def_tr_fee, step=0.50, key=f"te_fee_{tr_sig}")
+            te_dt = te_c6.text_input("Trade Date (YYYY-MM-DD)", value=def_tr_dt, key=f"te_dt_{tr_sig}")
+
+            btn_col1, btn_col2, btn_col3 = st.columns([1.4, 1.4, 2.2])
+            if editing_trade is None:
+                if btn_col1.button(f"➕ Add {te_side} {int(te_qty)} {te_ticker}", key=f"btn_add_tr_{tr_sig}", width="stretch"):
+                    if te_side == "BUY":
+                        active_s = (real_acc.get("enabled_strategies") or ["strat_volatility_breakout:1"])[0].split(":")
+                        app.orchestrator.live_copilot.confirm_buy_execution(
+                            ticker=te_ticker,
+                            strategy_id=active_s[0],
+                            strategy_version=int(active_s[1]) if len(active_s) > 1 else 1,
+                            quantity=int(te_qty),
+                            fill_price=float(te_px),
+                            fees_usd=float(te_fee),
+                            fill_date=te_dt.strip() or latest_bar_date,
+                            notes="Added via Trade Ledger",
+                        )
+                        st.session_state["_copilot_flash_msg"] = f"Added BUY {int(te_qty)} {te_ticker} @ ${float(te_px):.2f} (Cash & Holdings recalculated)."
+                        st.rerun()
+                    else:
+                        try:
+                            app.orchestrator.live_copilot.confirm_sell_execution(
+                                ticker=te_ticker,
+                                quantity=int(te_qty),
+                                fill_price=float(te_px),
+                                fees_usd=float(te_fee),
+                                fill_date=te_dt.strip() or latest_bar_date,
+                                notes="Added via Trade Ledger",
+                            )
+                            st.session_state["_copilot_flash_msg"] = f"Added SELL {int(te_qty)} {te_ticker} @ ${float(te_px):.2f} (Cash, Holdings & P&L recalculated)."
+                            st.rerun()
+                        except KeyError as err:
+                            st.error(str(err))
+            else:
+                if btn_col1.button("💾 Save Trade Changes", key=f"btn_save_tr_{tr_sig}", width="stretch"):
+                    app.orchestrator.live_copilot.edit_trade(
+                        trade_id=editing_trade["trade_id"],
+                        ticker=te_ticker,
+                        side=te_side,
+                        quantity=int(te_qty),
+                        fill_price=float(te_px),
+                        fees_usd=float(te_fee),
+                        fill_date=te_dt.strip() or latest_bar_date,
+                    )
+                    st.session_state["_copilot_flash_msg"] = (
+                        f"Updated Trade {editing_trade['trade_id']}: {te_side} {int(te_qty)} {te_ticker} @ ${float(te_px):.2f} "
+                        "(Cash, Holdings & P&L recalculated)."
+                    )
+                    st.rerun()
+                if btn_col2.button("🗑️ Remove / Delete Trade", key=f"btn_del_tr_{tr_sig}", width="stretch"):
+                    app.orchestrator.live_copilot.delete_trade(editing_trade["trade_id"])
+                    st.session_state["_copilot_flash_msg"] = (
+                        f"Deleted Trade {editing_trade['trade_id']} ({editing_trade['side']} {editing_trade['quantity']} {editing_trade['ticker']}) "
+                        "— Cash, Holdings & P&L recalculated."
+                    )
+                    st.rerun()
 
     # =========================================================================
     # TAB 1: PAPER ACCOUNT & LEDGER (TWO-TIER: MASTER $100K + 5 PER-STRATEGY $100K BOOKS)

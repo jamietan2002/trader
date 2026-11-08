@@ -262,6 +262,32 @@ def create_http_handler(app: PlatformApplication) -> type[BaseHTTPRequestHandler
                 elif path == "/api/copilot/undo":
                     res = app.orchestrator.live_copilot.undo_last_trade()
                     self._send_json(200, res)
+                elif path == "/api/copilot/trade/edit":
+                    res = app.orchestrator.live_copilot.edit_trade(
+                        trade_id=str(payload["trade_id"]),
+                        ticker=str(payload["ticker"]),
+                        side=str(payload.get("side", "BUY")),
+                        quantity=int(payload["quantity"]),
+                        fill_price=float(payload["fill_price"]),
+                        fees_usd=float(payload.get("fees_usd", 0.0)),
+                        fill_date=str(payload["fill_date"]) if payload.get("fill_date") else None,
+                        stop_loss_price=float(payload["stop_loss_price"]) if payload.get("stop_loss_price") else None,
+                        take_profit_price=float(payload["take_profit_price"]) if payload.get("take_profit_price") else None,
+                        notes=str(payload["notes"]) if payload.get("notes") is not None else None,
+                    )
+                    self._send_json(200, res)
+                elif path == "/api/copilot/trade/delete":
+                    res = app.orchestrator.live_copilot.delete_trade(
+                        trade_id=str(payload["trade_id"]),
+                    )
+                    self._send_json(200, res)
+                elif path == "/api/copilot/position/brackets":
+                    res = app.orchestrator.live_copilot.update_position_brackets(
+                        ticker=str(payload["ticker"]),
+                        stop_loss_price=float(payload["stop_loss_price"]) if payload.get("stop_loss_price") else None,
+                        take_profit_price=float(payload["take_profit_price"]) if payload.get("take_profit_price") else None,
+                    )
+                    self._send_json(200, res)
                 elif path == "/api/copilot/reset":
                     start_c = float(payload["starting_cash"]) if payload.get("starting_cash") is not None else None
                     res = app.orchestrator.live_copilot.reset_copilot_account(starting_cash=start_c)

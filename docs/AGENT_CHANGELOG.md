@@ -4,6 +4,22 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-08] — Ledger-Driven Real-Account UI (Deposits/Withdrawals + Editable Trade Ledger as Single Source of Truth)
+
+### Summary
+- **Event-Sourced / Ledger-Driven Real-Account Reconciliation (`reconcile_from_trade_ledger`, `edit_trade`, `delete_trade`, `update_position_brackets` in `core/execution/paper_broker.py`, `api/server.py`, `dashboard/streamlit_app.py`, `dashboard/ui_template.py`)**:
+  - Removed the redundant manual `"Update Cash"` and `"Set as Starting Capital"` inputs from `Live Copilot` so users never have to manually reconcile cash balances against positions.
+  - **Available Cash (`cash_balance`)**, **Open Holdings (`shadow_positions`)**, and **Realised P&L (`realised_pnl`)** are now 100% deterministically calculated from **Net Deposited Capital (`+ Deposit Cash` / `- Withdraw Cash`)** and **Trades Placed (`BUY` & `SELL` fills in `shadow_trade_history`)**.
+  - Added an interactive **Trade Ledger Manager (`Add, Edit, or Remove a Trade`)** in Section 3 of `Live Copilot` allowing users to add new `BUY`/`SELL` trades, edit any past trade's side/ticker/shares/fill price/fees/date (`/api/copilot/trade/edit`), or remove a trade (`/api/copilot/trade/delete`), automatically replaying the chronological ledger to recompute cash, holdings, and P&L.
+  - Added inline `Bracket` stop-loss/take-profit editors (`/api/copilot/position/brackets`) on open holdings in Section 2 so trailing a broker stop-loss updates the bracket cleanly without altering shares or cash.
+
+### Modules Added / Modified
+- `core/execution/paper_broker.py`, `api/server.py`
+- `dashboard/streamlit_app.py`, `dashboard/ui_template.py`
+- `tests/test_platform.py`, `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-08] — Two-Tier Paper Books (1 Master $100k + 5 Per-Strategy $100k Pods), Staged Real-Account Presets & 4 Logical/UI Bug Fixes
 
 ### Summary

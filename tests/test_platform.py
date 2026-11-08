@@ -832,6 +832,43 @@ class TestSwingTradingPlatform(unittest.TestCase):
         self.assertAlmostEqual(float(msft_pos["stop_loss_price"]), 142.0, places=2)
         self.assertAlmostEqual(float(msft_pos["take_profit_price"]), 167.0, places=2)
 
+        # Verify Ledger-Driven Trade Editing & Deletion (edit_trade, delete_trade, update_position_brackets)
+        copilot.reset_copilot_account(starting_cash=10_000.0)
+        copilot.confirm_buy_execution(
+            ticker="AAPL",
+            strategy_id="strat_volatility_breakout",
+            strategy_version=1,
+            quantity=10,
+            fill_price=200.0,
+            fees_usd=1.0,
+            fill_date="2025-05-05",
+        )
+        tr_list = copilot.get_trade_history(limit=10)
+        self.assertEqual(len(tr_list), 1)
+        aapl_tid = tr_list[0]["trade_id"]
+        # Edit the BUY trade from 10 shares @ $200 to 20 shares @ $190 ($3,801 cost -> $6,199 cash)
+        edited_sum = copilot.edit_trade(
+            trade_id=aapl_tid,
+            ticker="AAPL",
+            side="BUY",
+            quantity=20,
+            fill_price=190.0,
+            fees_usd=1.0,
+            fill_date="2025-05-05",
+            stop_loss_price=182.0,
+            take_profit_price=215.0,
+        )
+        self.assertAlmostEqual(edited_sum["cash_balance"], 10_000.0 - 3_801.0, places=2)
+        aapl_pos = copilot.get_open_positions()[0]
+        self.assertEqual(aapl_pos["quantity"], 20)
+        self.assertAlmostEqual(float(aapl_pos["avg_entry_price"]), 190.0, places=2)
+        self.assertAlmostEqual(float(aapl_pos["stop_loss_price"]), 182.0, places=2)
+
+        # Delete the trade -> cash returns to $10,000.00 and open positions become 0
+        deleted_sum = copilot.delete_trade(aapl_tid)
+        self.assertAlmostEqual(deleted_sum["cash_balance"], 10_000.0, places=2)
+        self.assertEqual(deleted_sum["open_positions_count"], 0)
+
         # Verify non-trading day (Saturday 2025-05-10) check_calendar_today=True suppresses trade suggestions
         sat_plan = copilot.get_daily_action_plan(as_of_date="2025-05-10", check_calendar_today=True)
         self.assertFalse(sat_plan["is_trading_day"])

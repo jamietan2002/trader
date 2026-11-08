@@ -1898,6 +1898,256 @@ class LiveTradingCopilotEngine:
         )
         return self.get_account_summary()
 
+    def update_position_brackets(
+        self,
+        ticker: str,
+        stop_loss_price: Optional[float] = None,
+        take_profit_price: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Update only the stop-loss and take-profit bracket prices on an existing open holding without altering cash or shares."""
+        ticker_u = ticker.strip().upper()
+        self.db.execute(
+            """
+            UPDATE shadow_positions
+            SET stop_loss_price = COALESCE(?, stop_loss_price),
+                take_profit_price = COALESCE(?, take_profit_price),
+                updated_at = ?
+            WHERE account_id = ? AND ticker = ?
+            """,
+            (
+                round(float(stop_loss_price), 2) if stop_loss_price and stop_loss_price > 0 else None,
+                round(float(take_profit_price), 2) if take_profit_price and take_profit_price > 0 else None,
+                utc_now_iso(),
+                self.account_id,
+                ticker_u,
+            ),
+        )
+        return self.get_account_summary()
+
+    def reconcile_from_trade_ledger(self) -> Dict[str, Any]:
+        """Deterministically recompute cash_balance, open shadow_positions, and realised_pnl by replaying all trades from starting_cash."""
+        acc = self.ensure_initialized()
+        start_cash = round(float(acc["starting_cash"]), 2)
+        now_iso = utc_now_iso()
+
+        # Preserve any custom stop-loss / take-profit brackets set on existing positions
+        existing_pos_rows = self.db.fetch_all(
+            "SELECT * FROM shadow_positions WHERE account_id = ?",
+            (self.account_id,),
+        )
+        saved_brackets: Dict[str, Tuple[Optional[float], Optional[float], str]] = {
+            str(r["ticker"]).upper(): (
+                float(r["stop_loss_price"]) if r.get("stop_loss_price") is not None else None,
+                float(r["take_profit_price"]) if r.get("take_profit_price") is not None else None,
+                str(r.get("sector") or "Technology"),
+            )
+            for r in existing_pos_rows
+        }
+
+        trades = self.db.fetch_all(
+            """
+            SELECT * FROM shadow_trade_history
+            WHERE account_id = ?
+            ORDER BY fill_date ASC, created_at ASC, rowid ASC
+            """,
+            (self.account_id,),
+        )
+
+        cash = start_cash
+        total_realised = 0.0
+        holdings: Dict[str, Dict[str, Any]] = {}
+
+        for tr in trades:
+            tid = str(tr["trade_id"])
+            tkr = str(tr["ticker"]).strip().upper()
+            side = str(tr["side"]).strip().upper()
+            qty = max(1, int(tr["quantity"]))
+            px = round(float(tr["fill_price"]), 4)
+            fees = round(float(tr.get("fees_usd") or 0.0), 2)
+            fdate = str(tr["fill_date"])
+            sid = str(tr.get("strategy_id") or "strat_volatility_breakout")
+            sver = int(tr.get("strategy_version") or 1)
+
+            if side == "BUY":
+                cost = round(qty * px + fees, 2)
+                if cost > cash:
+                    shortfall = round(cost - cash, 2)
+                    start_cash = round(start_cash + shortfall, 2)
+                    cash = 0.0
+                else:
+                    cash = round(cash - cost, 2)
+
+                if tkr in holdings:
+                    h = holdings[tkr]
+                    old_q = int(h["quantity"])
+                    old_p = float(h["avg_entry_price"])
+                    new_q = old_q + qty
+                    h["avg_entry_price"] = round(((old_q * old_p) + (qty * px)) / new_q, 4)
+                    h["quantity"] = new_q
+                    h["highest_price"] = max(float(h["highest_price"]), px)
+                else:
+                    holdings[tkr] = {
+                        "ticker": tkr,
+                        "strategy_id": sid,
+                        "strategy_version": sver,
+                        "quantity": qty,
+                        "avg_entry_price": px,
+                        "highest_price": px,
+                        "opened_date": fdate,
+                    }
+                self.db.execute(
+                    "UPDATE shadow_trade_history SET realised_pnl = 0.0, cash_after = ? WHERE account_id = ? AND trade_id = ?",
+                    (cash, self.account_id, tid),
+                )
+            elif side == "SELL":
+                h = holdings.get(tkr)
+                avg_entry = float(h["avg_entry_price"]) if h is not None else px
+                sell_qty = min(int(h["quantity"]), qty) if h is not None else qty
+                proceeds = round(sell_qty * px - fees, 2)
+                realised_delta = round((px - avg_entry) * sell_qty - fees, 2)
+                cash = round(cash + proceeds, 2)
+                total_realised = round(total_realised + realised_delta, 2)
+                if h is not None:
+                    rem = int(h["quantity"]) - sell_qty
+                    if rem <= 0:
+                        del holdings[tkr]
+                    else:
+                        h["quantity"] = rem
+                self.db.execute(
+                    "UPDATE shadow_trade_history SET quantity = ?, realised_pnl = ?, cash_after = ? WHERE account_id = ? AND trade_id = ?",
+                    (sell_qty, realised_delta, cash, self.account_id, tid),
+                )
+
+        # Rebuild shadow_positions from replayed holdings
+        self.db.execute("DELETE FROM shadow_positions WHERE account_id = ?", (self.account_id,))
+        universe_meta = self.market_data.get_universe_metadata(include_delisted=True)
+        spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker)
+
+        for tkr, h in holdings.items():
+            bars = self.market_data.get_bars(tkr)
+            latest_close = float(bars[-1].adj_close) if bars else float(h["avg_entry_price"])
+            ref_bars = bars if bars else spy_bars
+            hold_days = sum(1 for b in ref_bars if b.bar_date > h["opened_date"]) if ref_bars else 0
+            high_since = max(
+                float(h["highest_price"]),
+                latest_close,
+                max((float(b.adj_high) for b in bars if b.bar_date >= h["opened_date"]), default=latest_close),
+            )
+            saved_sl, saved_tp, saved_sec = saved_brackets.get(tkr, (None, None, "Technology"))
+            meta = universe_meta.get(tkr)
+            sec = meta.sector if meta else saved_sec
+
+            if saved_sl is None or saved_tp is None:
+                if len(bars) >= 20:
+                    inds = compute_indicator_series(bars)
+                    ind_last = inds.get(bars[-1].bar_date)
+                    atr = float(ind_last.atr_14) if (ind_last and ind_last.atr_14) else float(h["avg_entry_price"]) * 0.025
+                else:
+                    atr = float(h["avg_entry_price"]) * 0.025
+                if saved_sl is None:
+                    saved_sl = round(max(0.01, float(h["avg_entry_price"]) - 2.0 * atr), 2)
+                if saved_tp is None:
+                    saved_tp = round(float(h["avg_entry_price"]) + 3.5 * atr, 2)
+
+            self.db.execute(
+                """
+                INSERT INTO shadow_positions (
+                    account_id, ticker, strategy_id, strategy_version, sector,
+                    quantity, avg_entry_price, current_price, highest_price_since_entry,
+                    stop_loss_price, take_profit_price, opened_date, holding_days, notes, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Reconciled from Trade Ledger', ?)
+                """,
+                (
+                    self.account_id,
+                    tkr,
+                    h["strategy_id"],
+                    int(h["strategy_version"]),
+                    sec,
+                    int(h["quantity"]),
+                    round(float(h["avg_entry_price"]), 4),
+                    round(latest_close, 4),
+                    round(high_since, 4),
+                    round(saved_sl, 2) if saved_sl else None,
+                    round(saved_tp, 2) if saved_tp else None,
+                    h["opened_date"],
+                    int(hold_days),
+                    now_iso,
+                ),
+            )
+
+        self.db.execute(
+            """
+            UPDATE shadow_accounts
+            SET starting_cash = ?, cash_balance = ?, realised_pnl = ?, updated_at = ?
+            WHERE account_id = ?
+            """,
+            (start_cash, cash, total_realised, now_iso, self.account_id),
+        )
+        return self.get_account_summary()
+
+    def edit_trade(
+        self,
+        trade_id: str,
+        ticker: str,
+        side: str,
+        quantity: int,
+        fill_price: float,
+        fees_usd: float = 0.0,
+        fill_date: Optional[str] = None,
+        stop_loss_price: Optional[float] = None,
+        take_profit_price: Optional[float] = None,
+        notes: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Edit an existing trade in shadow_trade_history (or delete if quantity <= 0) and reconcile cash, positions, and P&L."""
+        if int(quantity) <= 0:
+            return self.delete_trade(trade_id)
+        if float(fill_price) <= 0:
+            raise ValueError("Fill price must be positive.")
+        ticker_u = ticker.strip().upper()
+        side_u = side.strip().upper()
+        if side_u not in ("BUY", "SELL"):
+            raise ValueError("Side must be BUY or SELL.")
+
+        existing = self.db.fetch_one(
+            "SELECT * FROM shadow_trade_history WHERE account_id = ? AND trade_id = ?",
+            (self.account_id, trade_id),
+        )
+        if existing is None:
+            raise KeyError(f"Trade {trade_id} not found.")
+
+        dt_str = (fill_date or str(existing["fill_date"])).strip()
+        new_notes = notes if notes is not None else f"Edited {side_u} {int(quantity)} {ticker_u} @ ${float(fill_price):.2f}"
+        self.db.execute(
+            """
+            UPDATE shadow_trade_history
+            SET ticker = ?, side = ?, quantity = ?, fill_price = ?, fees_usd = ?, fill_date = ?, notes = ?
+            WHERE account_id = ? AND trade_id = ?
+            """,
+            (
+                ticker_u,
+                side_u,
+                int(quantity),
+                round(float(fill_price), 4),
+                round(float(fees_usd), 2),
+                dt_str,
+                new_notes,
+                self.account_id,
+                trade_id,
+            ),
+        )
+        summary = self.reconcile_from_trade_ledger()
+        if side_u == "BUY" and (stop_loss_price or take_profit_price):
+            summary = self.update_position_brackets(ticker_u, stop_loss_price, take_profit_price)
+        return summary
+
+    def delete_trade(self, trade_id: str) -> Dict[str, Any]:
+        """Remove a trade from shadow_trade_history and reconcile cash_balance, open positions, and realised_pnl."""
+        self.db.execute(
+            "DELETE FROM shadow_trade_history WHERE account_id = ? AND trade_id = ?",
+            (self.account_id, trade_id),
+        )
+        return self.reconcile_from_trade_ledger()
+
     def reset_copilot_account(self, starting_cash: Optional[float] = None) -> Dict[str, Any]:
         """Clear all shadow positions, trade history, and dismissed signals, resetting cash to starting_cash."""
         acc = self.ensure_initialized()
