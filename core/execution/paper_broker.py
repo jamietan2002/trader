@@ -2159,7 +2159,7 @@ class LiveTradingCopilotEngine:
         self.db.execute(
             """
             UPDATE shadow_accounts
-            SET starting_cash = ?, cash_balance = ?, realised_pnl = 0.0, updated_at = ?
+            SET starting_cash = ?, cash_balance = ?, realised_pnl = 0.0, enabled_strategies_json = '[]', updated_at = ?
             WHERE account_id = ?
             """,
             (base_cash, base_cash, now_iso, self.account_id),
@@ -2201,22 +2201,59 @@ class LiveTradingCopilotEngine:
 
         all_strats = self.registry.list_strategies()
         strat_by_key = {f"{s.strategy_id}:{s.version}": s for s in all_strats}
+        strat_by_id_latest: Dict[str, StrategyConfig] = {}
+        for s in all_strats:
+            prev = strat_by_id_latest.get(s.strategy_id)
+            if prev is None or (s.status == "PAPER_TRADING" and prev.status != "PAPER_TRADING") or s.version > prev.version:
+                strat_by_id_latest[s.strategy_id] = s
+
+        def _champion_score(s: StrategyConfig) -> float:
+            bs = s.backtest_summary or {}
+            sqn = float(bs.get("sqn_score") or bs.get("sharpe_ratio") or 0.0)
+            r6m = float(bs.get("recent_6m_return_pct") or 0.0)
+            wr6m = float(bs.get("recent_6m_win_rate_pct") or bs.get("win_rate_pct") or 0.0)
+            tot = float(bs.get("total_return_pct") or 0.0)
+            return round(sqn * 10.0 + r6m * 1.0 + wr6m * 0.2 + tot * 0.1, 4)
+
+        paper_strats = [s for s in strat_by_id_latest.values() if s.status in ("PAPER_TRADING", "APPROVED_FOR_REVIEW")]
+        if not paper_strats:
+            paper_strats = list(strat_by_id_latest.values())
+        ranked_champions = sorted(paper_strats, key=_champion_score, reverse=True)
+        best_champion = ranked_champions[0] if ranked_champions else (all_strats[0] if all_strats else None)
+
         enabled_keys = summary.get("enabled_strategies") or []
         if enabled_keys:
             active_strats = [strat_by_key[k] for k in enabled_keys if k in strat_by_key]
         else:
-            active_strats = [s for s in all_strats if s.status == "PAPER_TRADING"]
+            # Default: Stick to the #1 Best Champion Strategy (with automatic fallback to #2 only if #1 has 0 signals today)
+            active_strats = [best_champion] if best_champion is not None else []
 
-        # Deduplicate by strategy_id (keep highest version)
-        latest_by_id: Dict[str, StrategyConfig] = {}
-        for s in active_strats:
-            prev = latest_by_id.get(s.strategy_id)
-            if prev is None or s.version > prev.version:
-                latest_by_id[s.strategy_id] = s
-        deduped_strats = list(latest_by_id.values())
-        fallback_strat = deduped_strats[0] if deduped_strats else (all_strats[0] if all_strats else None)
+        # Deduplicate by strategy_id (keep highest version) and preserve champion ranking order
+        deduped_strats: List[StrategyConfig] = []
+        seen_active_ids: set[str] = set()
+        for s in sorted(active_strats, key=_champion_score, reverse=True):
+            if s.strategy_id not in seen_active_ids:
+                seen_active_ids.add(s.strategy_id)
+                deduped_strats.append(s)
+        if not deduped_strats and best_champion is not None:
+            deduped_strats = [best_champion]
+        fallback_strat = best_champion or (deduped_strats[0] if deduped_strats else None)
+
+        active_champion_info: Dict[str, Any] = {}
+        if best_champion is not None:
+            bs = best_champion.backtest_summary or {}
+            active_champion_info = {
+                "strategy_id": best_champion.strategy_id,
+                "version": best_champion.version,
+                "name": best_champion.name,
+                "sqn_score": round(float(bs.get("sqn_score") or 0.0), 2),
+                "recent_6m_return_pct": round(float(bs.get("recent_6m_return_pct") or 0.0), 2),
+                "recent_6m_win_rate_pct": round(float(bs.get("recent_6m_win_rate_pct") or bs.get("win_rate_pct") or 0.0), 1),
+                "total_return_pct": round(float(bs.get("total_return_pct") or 0.0), 2),
+            }
 
         # 1. Evaluate SELL / HOLD status for every confirmed position the user actually holds
+        #    Always uses the exact strategy (pos['strategy_id'] v{pos['strategy_version']}) that opened the position!
         sell_actions: List[Dict[str, Any]] = []
         hold_updates: List[Dict[str, Any]] = []
         for pos in open_positions:
@@ -2230,7 +2267,11 @@ class LiveTradingCopilotEngine:
             ind_today = inds.get(bars[-1].bar_date)
             if ind_today is None:
                 continue
-            strat = strat_by_key.get(f"{pos['strategy_id']}:{pos['strategy_version']}", fallback_strat)
+            strat = (
+                strat_by_key.get(f"{pos['strategy_id']}:{pos['strategy_version']}")
+                or strat_by_id_latest.get(str(pos["strategy_id"]))
+                or fallback_strat
+            )
             if strat is None:
                 continue
 
@@ -2302,6 +2343,7 @@ class LiveTradingCopilotEngine:
                 "next_trading_day": next_open_session,
                 "session_date": session_date,
                 "account_summary": summary,
+                "active_champion": active_champion_info,
                 "sell_actions": [],
                 "buy_actions": [],
                 "hold_updates": hold_updates,
@@ -2315,7 +2357,10 @@ class LiveTradingCopilotEngine:
         universe_meta = self.market_data.get_universe_metadata(include_delisted=True)
 
         # Compute sector momentum rank map for SECTOR_ROTATION strategies
-        all_universe_tickers = sorted({t for s in deduped_strats for t in s.universe if t != self.settings.benchmark_ticker})
+        candidate_strats_for_scan = list(deduped_strats)
+        if not enabled_keys and len(ranked_champions) >= 2 and ranked_champions[1].strategy_id not in {s.strategy_id for s in candidate_strats_for_scan}:
+            candidate_strats_for_scan.append(ranked_champions[1])
+        all_universe_tickers = sorted({t for s in candidate_strats_for_scan for t in s.universe if t != self.settings.benchmark_ticker})
         bars_by_tkr: Dict[str, List[DailyBar]] = {}
         inds_by_tkr: Dict[str, Dict[str, Any]] = {}
         sector_rs_buckets: Dict[str, List[float]] = {}
@@ -2344,7 +2389,8 @@ class LiveTradingCopilotEngine:
         sim_open_map = dict(open_by_ticker)
         total_eq = max(1.0, float(summary["total_equity"]))
 
-        # Collect signals across all active strategies and interleave by strategy family
+        # Collect signals from primary active strategy(s); if in auto-champion mode and #1 Champion has 0 signals today,
+        # automatically fallback to #2 Uncorrelated Champion (e.g. Mean Reversion on market pullback days)
         signals_by_strat: Dict[str, List[Tuple[StrategyConfig, str, DailyBar, Any]]] = {}
         for strat in deduped_strats:
             bucket: List[Tuple[StrategyConfig, str, DailyBar, Any]] = []
@@ -2380,6 +2426,45 @@ class LiveTradingCopilotEngine:
             bucket.sort(key=lambda item: float(item[3].conviction_score), reverse=True)
             if bucket:
                 signals_by_strat[strat.strategy_id] = bucket
+
+        # Automatic Regime Fallback: if #1 Champion has 0 signals today (e.g. market pullback), check #2 Champion
+        if not signals_by_strat and not enabled_keys and len(ranked_champions) >= 2:
+            fallback_runner = ranked_champions[1]
+            bucket_fb: List[Tuple[StrategyConfig, str, DailyBar, Any]] = []
+            for ticker in fallback_runner.universe:
+                if ticker == self.settings.benchmark_ticker or ticker in sim_open_map:
+                    continue
+                if (fallback_runner.strategy_id, ticker, "BUY") in dismissed_set:
+                    continue
+                bars = bars_by_tkr.get(ticker)
+                if not bars or len(bars) < 25:
+                    continue
+                latest_bar = bars[-1]
+                inds = inds_by_tkr.get(ticker) or {}
+                ind_latest = inds.get(latest_bar.bar_date)
+                if ind_latest is None:
+                    continue
+                pead_lookback = max(20, int(fallback_runner.entry_rules.get("max_days_since_earnings", 10)) + 5)
+                recent_ev = self.market_data.get_point_in_time_earnings(
+                    ticker, latest_bar.bar_date, lookback_days=pead_lookback
+                )
+                m_meta = universe_meta.get(ticker)
+                sec_name = m_meta.sector if m_meta else "Technology"
+                sec_rank = sector_rank_map.get(sec_name, 1)
+                sig = StrategySignalEngine.evaluate_entry(
+                    config=fallback_runner,
+                    ind=ind_latest,
+                    spy_ind=spy_inds.get(latest_bar.bar_date),
+                    recent_earnings=recent_ev,
+                    sector_rs_rank=sec_rank,
+                )
+                if sig is not None:
+                    bucket_fb.append((fallback_runner, ticker, latest_bar, sig))
+            bucket_fb.sort(key=lambda item: float(item[3].conviction_score), reverse=True)
+            if bucket_fb:
+                signals_by_strat[fallback_runner.strategy_id] = bucket_fb
+                active_champion_info["fallback_triggered"] = True
+                active_champion_info["fallback_strategy"] = f"{fallback_runner.name} ({fallback_runner.strategy_id} v{fallback_runner.version})"
 
         strat_order = sorted(
             signals_by_strat.keys(),
@@ -2538,6 +2623,7 @@ class LiveTradingCopilotEngine:
             "next_trading_day": next_open_session,
             "session_date": session_date,
             "account_summary": summary,
+            "active_champion": active_champion_info,
             "sell_actions": sell_actions,
             "buy_actions": buy_actions,
             "hold_updates": hold_updates,

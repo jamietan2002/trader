@@ -4,6 +4,25 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-08] — Automatic #1 Champion Strategy Selection (`BUY`), Per-Position Entry-Strategy Binding (`SELL`/`HOLD`) & Headless Streamlit Runtime Verification
+
+### Summary
+- **Removed Manual Strategy Selection from `Live Copilot` (`core/execution/paper_broker.py`, `dashboard/streamlit_app.py`)**:
+  - Replaced manual strategy dropdowns/presets in `Live Copilot` with **100% Automatic Strategy Selection**:
+    1. **Open Holdings (`SELL` & `HOLD / Raise Stop`)**: Always evaluated using the **exact strategy (`pos['strategy_id'] v{pos['strategy_version']}`) that opened each holding**.
+    2. **New `BUY` Suggestions**: Automatically driven by the **#1 Champion Strategy (`strat_volatility_breakout v1`, `SQN 3.55`, `+11.03%` 6M, `67.9%` WR)** ranked by composite live-readiness score (`SQN * 10 + 6M Return % + 0.2 * 6M WR % + 0.1 * Full Return %`), with **Automatic Pullback Regime Fallback** to the #2 Champion (`strat_mean_reversion_bb v1`) **only** when the #1 Champion has `0` signals on a market pullback day.
+  - Replaced the `"⚙️ Strategy & Reset"` popover in Tab 1 with a clean, single-purpose **`🔄 Reset Account`** popover and added an **Active Strategy Engine** status line showing the auto-selected #1 Champion and open-position strategy binding.
+- **Headless Multi-Branch Streamlit Runtime Check (`.agents/skills/maintain-project-context/scripts/verify_context.py`)**:
+  - Added `_MockStreamlit` execution of `dashboard/streamlit_app.py` across both `Master Combined Portfolio` and `Per-Strategy Pod` UI branches so any undefined variable (`NameError`) or runtime error in `dashboard/streamlit_app.py` is caught automatically before every commit.
+
+### Modules Added / Modified
+- `core/execution/paper_broker.py`
+- `dashboard/streamlit_app.py`
+- `.agents/skills/maintain-project-context/scripts/verify_context.py`
+- `data/swing_trader.db`, `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-08] — Ledger-Driven Real-Account UI (Deposits/Withdrawals + Editable Trade Ledger as Single Source of Truth)
 
 ### Summary

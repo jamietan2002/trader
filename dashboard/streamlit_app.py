@@ -370,7 +370,7 @@ def main() -> None:
     )
 
     app = PlatformApplication()
-    _code_version = "2026-11-08-v14"
+    _code_version = "2026-11-08-v15"
     import api.server as _srv_mod
     if (
         getattr(_srv_mod, "_STREAMLIT_SYNC_VERSION", None) != _code_version
@@ -632,12 +632,27 @@ def main() -> None:
             help="Combined Realised P&L (from closed SELL trades) and Unrealised P&L (from open holdings).",
         )
 
-        # Clean 3-Action Ledger Control Bar (Deposit/Withdraw Cash, + Log Trade, Strategy & Reset)
-        ctrl_c1, ctrl_c2, ctrl_c3, ctrl_c4 = st.columns([2.2, 1.15, 1.15, 1.25])
+        active_champ = plan.get("active_champion") or {}
+        active_champ_id = str(active_champ.get("strategy_id") or "strat_volatility_breakout")
+        active_champ_ver = int(active_champ.get("version") or 1)
+        active_champ_name = str(active_champ.get("name") or "Volatility Compression Breakout")
+        active_champ_sqn = float(active_champ.get("sqn_score") or 3.55)
+        active_champ_r6m = float(active_champ.get("recent_6m_return_pct") or 11.03)
+        active_champ_wr = float(active_champ.get("recent_6m_win_rate_pct") or 67.9)
+        fallback_note = (
+            f" · *(Pullback Fallback Active Today: `{active_champ.get('fallback_strategy')}`)*"
+            if active_champ.get("fallback_triggered")
+            else " · *(Auto-Fallbacks to #2 `Mean Reversion` on pullback days with 0 breakouts)*"
+        )
+
+        # Clean 3-Action Ledger Control Bar (Deposit/Withdraw Cash, + Log Trade, Reset Account)
+        ctrl_c1, ctrl_c2, ctrl_c3, ctrl_c4 = st.columns([2.45, 1.1, 1.15, 0.95])
         with ctrl_c1:
             st.caption(
                 f"**Ledger Accounting**: `Net Deposited (${real_acc['starting_cash']:,.2f})` + `Realised P&L (${real_acc['realised_pnl']:+,.2f})` "
-                f"- `Open Cost Basis` = **`Available Cash (${real_acc['cash_balance']:,.2f})`** *(All cash & holdings are 100% calculated from deposits/withdrawals & trades)*"
+                f"- `Open Cost Basis` = **`Available Cash (${real_acc['cash_balance']:,.2f})`**  \n"
+                f"**Active Strategy Engine (Automatic)**: New `BUY`s use **#1 Champion `{active_champ_name}` (`{active_champ_id} v{active_champ_ver}` · SQN `{active_champ_sqn:.2f}` · 6M `{active_champ_r6m:+.2f}%` · `{active_champ_wr:.1f}%` WR)**{fallback_note}; "
+                f"`SELL` / `HOLD` signals always use each open holding's exact entry strategy."
             )
         with ctrl_c2:
             with st.popover("💰 Deposit / Withdraw Cash", width="stretch"):
@@ -686,11 +701,10 @@ def main() -> None:
                 lt_tp = lt_c8.number_input("Target $ (0=Auto)", min_value=0.0, value=0.0, step=0.50, key="lt_tp_inp")
                 if st.button(f"Record {lt_side} {int(lt_qty)} {lt_tkr}", width="stretch", key="btn_record_manual_trade"):
                     if lt_side == "BUY":
-                        active_s = (real_acc.get("enabled_strategies") or ["strat_volatility_breakout:1"])[0].split(":")
                         app.orchestrator.live_copilot.confirm_buy_execution(
                             ticker=lt_tkr,
-                            strategy_id=active_s[0],
-                            strategy_version=int(active_s[1]) if len(active_s) > 1 else 1,
+                            strategy_id=active_champ_id,
+                            strategy_version=active_champ_ver,
                             quantity=int(lt_qty),
                             fill_price=float(lt_px),
                             fees_usd=float(lt_fee),
@@ -716,52 +730,12 @@ def main() -> None:
                         except KeyError as err:
                             st.error(str(err))
         with ctrl_c4:
-            with st.popover("⚙️ Strategy & Reset", width="stretch"):
-                avail_keys = [
-                    f"{s['strategy_id']}:{s['version']}"
-                    for s in strats
-                    if s["status"] in ("PAPER_TRADING", "APPROVED_FOR_REVIEW")
-                ]
-                default_keys = real_acc.get("enabled_strategies") or avail_keys
-                valid_defaults = [k for k in default_keys if k in avail_keys] or avail_keys
-                st.caption("**1-Click Real-Account Strategy Presets:**")
-                pr_c1, pr_c2 = st.columns(2)
-                if pr_c1.button("★ $10k Starter: 1 Strategy", width="stretch", help="Best for $10k starter accounts: Runs ONLY Volatility Breakout v1 (SQN 3.55, +11.19% 6M on $10k, 67% WR). Zero cross-strategy crowding and 100% identical to its standalone backtest & paper pod."):
-                    single1 = [k for k in avail_keys if "volatility_breakout" in k] or avail_keys[:1]
-                    app.orchestrator.live_copilot.set_enabled_strategies(single1)
-                    st.session_state["copilot_strats_select"] = single1
-                    st.session_state["_copilot_flash_msg"] = "Applied $10k Starter Preset: 1 Strategy Only (Volatility Breakout v1) — 100% identical to standalone backtest & paper pod."
-                    st.rerun()
-                if pr_c2.button("★ Core 2 (Breakout + Dip)", width="stretch", help="Pairs Volatility Breakout v1 + Mean Reversion v1 (+14.62% 6M on $10k, 64.1% WR). Uses idle cash during market pullbacks when breakouts pause."):
-                    core2 = [k for k in avail_keys if "volatility_breakout" in k or "mean_reversion" in k] or avail_keys
-                    app.orchestrator.live_copilot.set_enabled_strategies(core2)
-                    st.session_state["copilot_strats_select"] = core2
-                    st.session_state["_copilot_flash_msg"] = "Applied Core 2 Uncorrelated Preset (Volatility Breakout + Mean Reversion)."
-                    st.rerun()
-                pr_c3, pr_c4 = st.columns(2)
-                if pr_c3.button("Core 3 (+ Earnings PEAD)", width="stretch", help="Core 2 + Post-Earnings Announcement Drift (recommended for $25k-$50k accounts or earnings season)."):
-                    core3 = [k for k in avail_keys if any(x in k for x in ("volatility_breakout", "mean_reversion", "pead"))] or avail_keys
-                    app.orchestrator.live_copilot.set_enabled_strategies(core3)
-                    st.session_state["copilot_strats_select"] = core3
-                    st.session_state["_copilot_flash_msg"] = "Applied Core 3 Preset (Breakout + Mean Reversion + PEAD)."
-                    st.rerun()
-                if pr_c4.button("All 5 Base ($50k+)", width="stretch", help="Full 5-sleeve diversification (recommended only for $50k+ accounts to avoid signal crowding and fee drag)."):
-                    app.orchestrator.live_copilot.set_enabled_strategies(avail_keys)
-                    st.session_state["copilot_strats_select"] = avail_keys
-                    st.session_state["_copilot_flash_msg"] = "Enabled all 5 Golden Base strategies."
-                    st.rerun()
-                chosen_keys = st.multiselect(
-                    "Or customize active strategies",
-                    options=avail_keys,
-                    default=valid_defaults,
-                    key="copilot_strats_select",
+            with st.popover("🔄 Reset Account", width="stretch"):
+                st.markdown("**Start Fresh / Reset Account Ledger**")
+                st.caption(
+                    "Clears all recorded trades and holdings and resets your account to a fresh initial cash deposit. "
+                    "*(Strategy selection is 100% automatic: #1 Champion for new BUYs, and each open holding's entry strategy for SELL/HOLD)*."
                 )
-                if st.button("Apply Custom Selection", width="stretch"):
-                    app.orchestrator.live_copilot.set_enabled_strategies(chosen_keys)
-                    st.session_state["_copilot_flash_msg"] = f"Active strategy filter saved ({len(chosen_keys)} strategies enabled)."
-                    st.rerun()
-                st.markdown("---")
-                st.caption("**Start Fresh / Reset Account Ledger:**")
                 reset_dep = st.number_input("Initial Cash Deposit ($)", min_value=100.0, value=float(real_acc["starting_cash"]), step=1000.0, key="reset_init_dep_inp")
                 if st.button("Reset Account to Initial Deposit", width="stretch", help="Clears all trades and holdings and starts fresh with this initial deposit."):
                     app.orchestrator.live_copilot.reset_copilot_account(starting_cash=float(reset_dep))
@@ -1176,11 +1150,10 @@ def main() -> None:
             if editing_trade is None:
                 if btn_col1.button(f"➕ Add {te_side} {int(te_qty)} {te_ticker}", key=f"btn_add_tr_{tr_sig}", width="stretch"):
                     if te_side == "BUY":
-                        active_s = (real_acc.get("enabled_strategies") or ["strat_volatility_breakout:1"])[0].split(":")
                         app.orchestrator.live_copilot.confirm_buy_execution(
                             ticker=te_ticker,
-                            strategy_id=active_s[0],
-                            strategy_version=int(active_s[1]) if len(active_s) > 1 else 1,
+                            strategy_id=active_champ_id,
+                            strategy_version=active_champ_ver,
                             quantity=int(te_qty),
                             fill_price=float(te_px),
                             fees_usd=float(te_fee),
