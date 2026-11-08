@@ -598,14 +598,32 @@ class MarketDataService:
             return max_dt
 
         ref_dt = date.fromisoformat(target_date[:10]) if target_date else date.today()
-        # On a weekend/holiday, the latest completed session is the prior trading day (e.g. Friday).
-        # On a trading day, require at least the previous trading day's close (or today's close if available).
-        include_same = not USTradingCalendar.is_trading_day(ref_dt)
+        # Determine the latest completed US trading session:
+        # - For past dates (< today), that date's close has already occurred if it was a trading day.
+        # - For weekends/holidays, the latest completed session is the prior trading day (e.g. Friday).
+        # - For today on an active trading day, include today only after 4:15 PM ET (15 mins after NYSE/NASDAQ close).
+        today_dt = date.today()
+        if ref_dt < today_dt:
+            include_same = USTradingCalendar.is_trading_day(ref_dt)
+        elif not USTradingCalendar.is_trading_day(ref_dt):
+            include_same = False
+        else:
+            try:
+                from zoneinfo import ZoneInfo
+                now_et = datetime.now(ZoneInfo("America/New_York"))
+                include_same = (now_et.hour > 16) or (now_et.hour == 16 and now_et.minute >= 15)
+            except Exception:
+                include_same = False
         expected_min_session = USTradingCalendar.previous_trading_day(ref_dt, include_same_day=include_same)
 
         if max_dt is None or min_src != self.provider.provider_name or max_dt < expected_min_session:
+            cooldown_key = f"ensure_latest_bars_check:{self.provider.provider_name}:{expected_min_session}"
+            if max_dt is not None and min_src == self.provider.provider_name and self.db.get_cached_response(cooldown_key):
+                return max_dt
             try:
                 self.ingest_universe_and_history(start_date="2023-01-03", end_date=ref_dt.isoformat())
+                expires = (datetime.now(timezone.utc) + timedelta(seconds=120)).isoformat()
+                self.db.set_cached_response(cooldown_key, "market_data_sync", {"checked": expected_min_session}, expires)
                 row2 = self.db.fetch_one(
                     "SELECT MAX(bar_date) AS max_dt FROM market_bars_daily WHERE ticker = ?",
                     (self.settings.benchmark_ticker,),
@@ -725,6 +743,8 @@ class MarketDataService:
             self.db.execute("DELETE FROM portfolio_snapshots")
             self.db.execute("DELETE FROM risk_alerts")
             self.db.execute("DELETE FROM job_executions")
+            self.db.execute("DELETE FROM research_reports")
+            self.db.execute("DELETE FROM experiment_proposals")
             self.db.execute(
                 """
                 UPDATE paper_accounts

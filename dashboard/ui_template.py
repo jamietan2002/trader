@@ -726,14 +726,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       if (!isTradingDay) {
         if (calBanner) {
-          calBanner.innerHTML = `<div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);padding:10px 14px;border-radius:6px;font-size:0.84rem;color:#fcd34d;"><strong>No Trade Suggestions Today (${calDate} — ${statusReason}):</strong> US equity markets (NYSE &amp; NASDAQ) are closed today, so no BUY or SELL orders are suggested today. Next trading session: <strong>${nextTradingDay}</strong>.</div>`;
+          calBanner.innerHTML = `<div style="background:rgba(56,189,248,0.10);border:1px solid rgba(56,189,248,0.35);padding:10px 14px;border-radius:6px;font-size:0.84rem;color:#e2e8f0;"><strong>Market Closed Today (${calDate} — ${statusReason}):</strong> Previewing setups for Next Market Open (<strong>${nextTradingDay} 9:30 AM ET</strong>, evaluated from ${plan.session_date} close).</div>`;
         }
-        document.getElementById('copilot-sell-box').innerHTML = '';
-        document.getElementById('copilot-buy-box').innerHTML = '';
       } else {
         if (calBanner) {
           calBanner.innerHTML = `<div style="font-size:0.8rem;color:#94a3b8;">Today (<strong>${calDate}</strong>) is an active US trading session. Signals evaluated from latest market close (<strong>${plan.session_date}</strong>).</div>`;
         }
+      }
+      {
         document.getElementById('copilot-sell-box').innerHTML = sells.length ? `
         <div style="font-size:0.84rem;font-weight:600;color:var(--amber);margin-bottom:6px;">Step A — SELL Orders (Exits Triggered on Your Confirmed Holdings)</div>
         <table>

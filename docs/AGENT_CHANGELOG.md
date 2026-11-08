@@ -4,6 +4,33 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-08] — End-to-End System Audit & Fixes (10 Logic, Causality, Reconciliation & UI Edge Cases)
+
+### Summary
+- **Planned `SELL` Proceeds & Freed Risk in `get_daily_action_plan()` (`core/execution/paper_broker.py`)**:
+  - Updated `LiveTradingCopilotEngine.get_daily_action_plan()` to credit estimated `SELL` proceeds (`quantity_to_sell * reference_exit_price`) to `sim_cash` and free exiting positions from `sim_open_map` (while blocking same-bar re-entry via `exiting_tickers`) before sizing Step 3 `BUY` candidates, matching the user's execution order (`STEP 2A SELLs first -> STEP 3 BUYs`) and `PaperTradingEngine`.
+- **Earnings Blackout & Dollar-Volume Enforcement in `get_daily_action_plan()` (`core/execution/paper_broker.py`)**:
+  - Passed `upcoming_earnings_days` and `avg_daily_dollar_volume_20d` into `preview_rm.evaluate_proposed_entry()` so non-PEAD setups within the 2-day pre-earnings blackout window are deterministically vetoed in `Live Copilot` just as in `PaperTradingEngine`.
+- **Causal Point-in-Time Catalyst Cutoff in Historical Replays (`core/execution/paper_broker.py`)**:
+  - Updated `PaperTradingEngine.run_trading_session_for_strategies()` so `cat_cutoff` only extends to `date.today()` when `trading_date` is within 4 calendar days of today (live/weekend session), preserving strict `cat_cutoff = trading_date` causality during historical replays.
+- **Isolated Strategy Pod Fallback Guard & Multi-Strategy Ticker Deduplication (`core/execution/paper_broker.py`)**:
+  - Guarded the automatic `MEAN_REVERSION` pullback fallback with `custom_strategies is None` so selecting an isolated single-strategy pod in Tab 2 (`Paper Portfolio`) strictly evaluates only that pod's strategy.
+  - Added `seen_paper_candidates` and `seen_buy_candidates` deduplication so tickers signaled by multiple strategies are evaluated once under the highest-conviction strategy without producing duplicate vetoes.
+- **Auto-ATR Brackets on Manual `+ Log Trade`, Full Ledger-Replay `undo_last_trade`, and Bracket Validation (`core/execution/paper_broker.py`)**:
+  - Updated `confirm_buy_execution()` to auto-compute default `2.0x ATR` Stop-Loss and `3.5x ATR` Take-Profit when omitted (`+ Log Trade`), simplified `undo_last_trade()` to delete the last fill and invoke `reconcile_from_trade_ledger()`, and updated `reconcile_from_trade_ledger()` to recompute brackets whenever an edited trade's `avg_entry_price` crosses a saved stop/target.
+- **Weekday Post-Close Detection (`16:15 ET`), Pre-Open Refresh & Watchlist Deduplication (`core/market_data/providers.py`, `agents/market_researcher/agent.py`, `infrastructure/scheduler/orchestrator.py`, `.github/workflows/autonomous_trading.yml`)**:
+  - Updated `MarketDataService.ensure_latest_market_data()` to check `America/New_York` time (`>= 16:15 ET`) on active trading days so post-close runs automatically ingest today's newly closed bar.
+  - Updated `MarketResearchAgent.get_latest_reports()` to filter by `MAX(as_of_date)` and deduplicate by `ticker` (eliminating stale `2025-06-30` rows from appearing alongside `2026-11-06` rows), and purged stale `2025` rows from `data/swing_trader.db`.
+  - Added `AutonomousWorkflowOrchestrator.run_pre_open_refresh()` and wired it into `.github/workflows/autonomous_trading.yml`.
+
+### Modules Added / Modified
+- `core/execution/paper_broker.py`, `core/market_data/providers.py`
+- `agents/market_researcher/agent.py`, `infrastructure/scheduler/orchestrator.py`
+- `.github/workflows/autonomous_trading.yml`, `dashboard/streamlit_app.py` (`_code_version = "2026-11-08-v20"`), `dashboard/ui_template.py`
+- `data/swing_trader.db`, `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-08] — Synchronized Paper & Live AI Catalyst Execution, Concise 4-Factor Trade Explanations (`Factors Considered` + `Removed Setups`), Step-by-Step Copilot UX & Anti-Race-Condition Loading Lock
 
 ### Summary

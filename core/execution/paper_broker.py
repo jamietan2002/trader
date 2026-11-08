@@ -915,8 +915,15 @@ class PaperTradingEngine:
         strat_by_id = {(s.strategy_id, s.version): s for s in active_strategies}
         fallback_strat = active_strategies[0] if active_strategies else None
 
-        # Load latest point-in-time AI / news catalyst sentiment per ticker
-        cat_cutoff = max(trading_date, date.today().isoformat())
+        # Load latest point-in-time AI / news catalyst sentiment per ticker.
+        # For historical replay dates (> 4 days before today), enforce strict point-in-time trading_date cutoff;
+        # for the active live/weekend session, include IDE AI catalysts published up to today.
+        try:
+            td_dt = date.fromisoformat(trading_date[:10])
+            is_live_window = abs((date.today() - td_dt).days) <= 4
+        except ValueError:
+            is_live_window = False
+        cat_cutoff = max(trading_date, date.today().isoformat()) if is_live_window else trading_date
         catalyst_rows = self.db.fetch_all(
             """
             SELECT ticker, headline, summary, sentiment_score, source_name, catalyst_type, published_date
@@ -1077,7 +1084,12 @@ class PaperTradingEngine:
 
         ordered_candidates.sort(key=_paper_candidate_conviction, reverse=True)
 
+        seen_paper_candidates: set[str] = set()
         for strat, ticker, today_bar, prev_bar, sig in ordered_candidates:
+            if ticker in seen_paper_candidates:
+                continue
+            seen_paper_candidates.add(ticker)
+
             # Prevent cross-strategy position overwrite on the same ticker in the Master combined account
             open_tickers_now = {p["ticker"] for p in self.get_open_positions()}
             if ticker in open_tickers_now:
@@ -1632,6 +1644,20 @@ class LiveTradingCopilotEngine:
             if take_profit_price is not None:
                 take_profit_price = round(max(fill_price + 0.01, take_profit_price + price_shift), 2)
 
+        # Auto-compute default ATR stop/target if omitted (e.g. when logging via + Log Trade)
+        if stop_loss_price is None or take_profit_price is None:
+            t_bars = self.market_data.get_bars(ticker_u)
+            if len(t_bars) >= 20:
+                t_inds = compute_indicator_series(t_bars)
+                t_ind_last = t_inds.get(t_bars[-1].bar_date)
+                atr_est = float(t_ind_last.atr_14) if (t_ind_last and t_ind_last.atr_14) else fill_price * 0.025
+            else:
+                atr_est = fill_price * 0.025
+            if stop_loss_price is None:
+                stop_loss_price = round(max(0.01, fill_price - 2.0 * atr_est), 2)
+            if take_profit_price is None:
+                take_profit_price = round(fill_price + 3.5 * atr_est, 2)
+
         # Ensure stop-loss is strictly below fill_price and take-profit is strictly above fill_price
         if stop_loss_price is not None and stop_loss_price >= fill_price:
             stop_loss_price = round(max(0.01, fill_price * 0.95), 2)
@@ -1919,7 +1945,7 @@ class LiveTradingCopilotEngine:
     def undo_last_trade(self) -> Dict[str, Any]:
         """Reverse the most recently confirmed BUY or SELL fill in the user's real shadow ledger."""
         last_trade = self.db.fetch_one(
-            "SELECT * FROM shadow_trade_history WHERE account_id = ? ORDER BY created_at DESC LIMIT 1",
+            "SELECT * FROM shadow_trade_history WHERE account_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
             (self.account_id,),
         )
         if last_trade is None:
@@ -1980,6 +2006,15 @@ class LiveTradingCopilotEngine:
             else:
                 meta = self.market_data.get_universe_metadata(include_delisted=True).get(ticker_u)
                 sec = meta.sector if meta else "Technology"
+                t_bars = self.market_data.get_bars(ticker_u)
+                if len(t_bars) >= 20:
+                    t_inds = compute_indicator_series(t_bars)
+                    t_ind_last = t_inds.get(t_bars[-1].bar_date)
+                    atr_est = float(t_ind_last.atr_14) if (t_ind_last and t_ind_last.atr_14) else inferred_entry * 0.025
+                else:
+                    atr_est = inferred_entry * 0.025
+                rest_sl = round(max(0.01, inferred_entry - 2.0 * atr_est), 2)
+                rest_tp = round(inferred_entry + 3.5 * atr_est, 2)
                 self.db.execute(
                     """
                     INSERT INTO shadow_positions (
@@ -1998,8 +2033,8 @@ class LiveTradingCopilotEngine:
                         inferred_entry,
                         fill_price,
                         max(inferred_entry, fill_price),
-                        round(inferred_entry * 0.95, 2),
-                        round(inferred_entry * 1.08, 2),
+                        rest_sl,
+                        rest_tp,
                         fill_date,
                         now_iso,
                     ),
@@ -2154,17 +2189,18 @@ class LiveTradingCopilotEngine:
             meta = universe_meta.get(tkr)
             sec = meta.sector if meta else saved_sec
 
-            if saved_sl is None or saved_tp is None:
+            avg_entry_val = float(h["avg_entry_price"])
+            if saved_sl is None or saved_tp is None or saved_sl >= avg_entry_val or saved_tp <= avg_entry_val:
                 if len(bars) >= 20:
                     inds = compute_indicator_series(bars)
                     ind_last = inds.get(bars[-1].bar_date)
-                    atr = float(ind_last.atr_14) if (ind_last and ind_last.atr_14) else float(h["avg_entry_price"]) * 0.025
+                    atr = float(ind_last.atr_14) if (ind_last and ind_last.atr_14) else avg_entry_val * 0.025
                 else:
-                    atr = float(h["avg_entry_price"]) * 0.025
-                if saved_sl is None:
-                    saved_sl = round(max(0.01, float(h["avg_entry_price"]) - 2.0 * atr), 2)
-                if saved_tp is None:
-                    saved_tp = round(float(h["avg_entry_price"]) + 3.5 * atr, 2)
+                    atr = avg_entry_val * 0.025
+                if saved_sl is None or saved_sl >= avg_entry_val:
+                    saved_sl = round(max(0.01, avg_entry_val - 2.0 * atr), 2)
+                if saved_tp is None or saved_tp <= avg_entry_val:
+                    saved_tp = round(avg_entry_val + 3.5 * atr, 2)
 
             self.db.execute(
                 """
@@ -2555,9 +2591,16 @@ class LiveTradingCopilotEngine:
         sorted_secs = sorted(sector_avg.items(), key=lambda kv: kv[1], reverse=True)
         sector_rank_map = {sec: idx + 1 for idx, (sec, _) in enumerate(sorted_secs)}
 
-        # Simulate remaining cash/exposure as recommendations are queued so total recommendations respect user's caps
+        # Simulate remaining cash/exposure as recommendations are queued so total recommendations respect user's caps.
+        # Credit proceeds and free sector/heat slots from any positions scheduled to be sold first in Step 2A.
         sim_cash = float(summary["cash_balance"])
         sim_open_map = dict(open_by_ticker)
+        exiting_tickers: set[str] = set()
+        for sa_item in sell_actions:
+            ex_tkr = str(sa_item["ticker"])
+            exiting_tickers.add(ex_tkr)
+            sim_cash = round(sim_cash + float(sa_item["quantity_to_sell"]) * float(sa_item["reference_exit_price"]), 2)
+            sim_open_map.pop(ex_tkr, None)
         total_eq = max(1.0, float(summary["total_equity"]))
 
         # Collect signals from primary active strategy(s); if in auto-champion mode and #1 Champion has 0 signals today,
@@ -2566,7 +2609,7 @@ class LiveTradingCopilotEngine:
         for strat in deduped_strats:
             bucket: List[Tuple[StrategyConfig, str, DailyBar, Any]] = []
             for ticker in strat.universe:
-                if ticker == self.settings.benchmark_ticker or ticker in sim_open_map:
+                if ticker == self.settings.benchmark_ticker or ticker in sim_open_map or ticker in exiting_tickers:
                     continue
                 if (strat.strategy_id, ticker, "BUY") in dismissed_set:
                     continue
@@ -2599,7 +2642,8 @@ class LiveTradingCopilotEngine:
                 signals_by_strat[strat.strategy_id] = bucket
 
         # Automatic Regime Fallback: if #1 Champion has 0 signals today (e.g. market pullback), prioritize MEAN_REVERSION then remaining champions
-        if not signals_by_strat and not enabled_keys and len(ranked_champions) >= 2:
+        # Only trigger when in auto-champion mode (custom_strategies is None and no manual enabled_keys override)
+        if not signals_by_strat and not enabled_keys and custom_strategies is None and len(ranked_champions) >= 2:
             fallback_candidates = sorted(
                 ranked_champions[1:],
                 key=lambda s: (0 if s.strategy_family == "MEAN_REVERSION" else 1, -_champion_score(s)),
@@ -2607,7 +2651,7 @@ class LiveTradingCopilotEngine:
             for fallback_runner in fallback_candidates:
                 bucket_fb: List[Tuple[StrategyConfig, str, DailyBar, Any]] = []
                 for ticker in fallback_runner.universe:
-                    if ticker == self.settings.benchmark_ticker or ticker in sim_open_map:
+                    if ticker == self.settings.benchmark_ticker or ticker in sim_open_map or ticker in exiting_tickers:
                         continue
                     if (fallback_runner.strategy_id, ticker, "BUY") in dismissed_set:
                         continue
@@ -2673,9 +2717,11 @@ class LiveTradingCopilotEngine:
             if snap_tickers:
                 live_snapshots = self.market_data.fetch_live_quote_snapshots(snap_tickers)
 
+        seen_buy_candidates: set[str] = set()
         for strat, ticker, latest_bar, sig in interleaved:
-            if ticker in sim_open_map:
+            if ticker in seen_buy_candidates or ticker in sim_open_map or ticker in exiting_tickers:
                 continue
+            seen_buy_candidates.add(ticker)
             meta = universe_meta.get(ticker)
             sector = meta.sector if meta else "Technology"
             ref_price = round(float(latest_bar.adj_close), 2)
@@ -2774,6 +2820,10 @@ class LiveTradingCopilotEngine:
             else:
                 eff_risk_cfg = self.settings.risk
                 strat_max_exp = strat.risk_params.get("max_position_exposure_pct")
+            ind_latest_obj = (inds_by_tkr.get(ticker) or {}).get(latest_bar.bar_date)
+            upcoming_ev = self.market_data.get_upcoming_earnings_within_days(ticker, session_date, 3)
+            days_to_earn = 1 if upcoming_ev else None
+
             preview_rm = PortfolioRiskManager(eff_risk_cfg, db=None)
             decision = preview_rm.evaluate_proposed_entry(
                 account_id=self.account_id,
@@ -2789,6 +2839,8 @@ class LiveTradingCopilotEngine:
                 peak_equity=total_eq,
                 available_cash=sim_cash,
                 open_positions=sim_open_map,
+                avg_daily_dollar_volume_20d=ind_latest_obj.avg_dollar_volume_20d if ind_latest_obj else None,
+                upcoming_earnings_days=days_to_earn,
                 strategy_risk_pct=strat.risk_params.get("risk_per_trade_pct"),
                 strategy_max_exp_pct=strat_max_exp,
             )

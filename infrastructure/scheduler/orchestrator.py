@@ -323,6 +323,23 @@ class AutonomousWorkflowOrchestrator:
             "post_close": post_close_res,
         }
 
+    def run_pre_open_refresh(self, session_date: str) -> Dict[str, Any]:
+        """Stage 2 (Pre-Open 9:00 AM ET / 9:00 PM SGT): Refresh research scan, live extended-hours quote cache, and paper AI catalyst sync."""
+        scan_res = self.research_agent.run_market_scan(as_of_date=session_date, top_n=8)
+        active_strats = self.registry.list_strategies(status=StrategyStatus.PAPER_TRADING.value)
+        sync_res = self.paper_engine.sync_ai_catalysts_to_paper_accounts(
+            active_strategies=active_strats,
+            session_date=session_date,
+        )
+        copilot_plan = self.live_copilot.get_daily_action_plan(check_calendar_today=False)
+        return {
+            "session_date": session_date,
+            "research_scanned": scan_res.get("universe_scanned", 0),
+            "ai_paper_exits_triggered": len(sync_res.get("ai_paper_exits_triggered") or []),
+            "copilot_buys_ready": len(copilot_plan.get("buy_actions") or []),
+            "copilot_vetoed_count": len(copilot_plan.get("vetoed_signals") or []),
+        }
+
     def run_weekly_workflow(
         self,
         week_ending_date: str,

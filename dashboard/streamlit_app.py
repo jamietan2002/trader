@@ -485,7 +485,7 @@ def main() -> None:
     st.markdown(CLASSY_MINIMAL_CSS, unsafe_allow_html=True)
 
     app = PlatformApplication()
-    _code_version = "2026-11-08-v19"
+    _code_version = "2026-11-08-v20"
     import api.server as _srv_mod
     if (
         getattr(_srv_mod, "_STREAMLIT_SYNC_VERSION", None) != _code_version
@@ -767,7 +767,7 @@ def main() -> None:
                 lt_px = lt_c4.number_input("Fill Price ($)", min_value=0.01, value=lt_default_px, step=0.50, key=f"lt_px_inp_{lt_tkr}_{latest_bar_date}")
                 lt_fee = lt_c5.number_input("Fees ($)", min_value=0.0, value=0.0, step=0.50, key="lt_fee_inp")
                 lt_c6, lt_c7, lt_c8 = st.columns(3)
-                lt_date = lt_c6.text_input("Date", value=latest_bar_date, key="lt_date_inp")
+                lt_date = lt_c6.text_input("Date", value=latest_bar_date, key=f"lt_date_inp_{latest_bar_date}")
                 lt_sl = lt_c7.number_input("Stop $ (0=Auto)", min_value=0.0, value=0.0, step=0.50, key="lt_sl_inp")
                 lt_tp = lt_c8.number_input("Target $ (0=Auto)", min_value=0.0, value=0.0, step=0.50, key="lt_tp_inp")
                 if st.button(f"Record {lt_side} {int(lt_qty)} {lt_tkr}", width="stretch", key="btn_record_manual_trade"):
@@ -806,7 +806,13 @@ def main() -> None:
             with st.popover("Reset", width="stretch"):
                 st.markdown("**Reset Account Ledger**")
                 st.caption("Clears all trades and holdings and resets your account to a fresh initial deposit.")
-                reset_dep = st.number_input("Initial Cash Deposit ($)", min_value=100.0, value=float(real_acc["starting_cash"]), step=1000.0, key="reset_init_dep_inp")
+                reset_dep = st.number_input(
+                    "Initial Cash Deposit ($)",
+                    min_value=100.0,
+                    value=float(real_acc["starting_cash"]),
+                    step=1000.0,
+                    key=f"reset_init_dep_inp_{int(real_acc['starting_cash'])}",
+                )
                 if st.button("Confirm Reset", width="stretch"):
                     with st.spinner("Resetting account ledger..."):
                         app.orchestrator.live_copilot.reset_copilot_account(starting_cash=float(reset_dep))
@@ -1486,12 +1492,14 @@ def main() -> None:
             st.markdown("##### Strategy Scorecard")
         with rb_col2:
             if st.button("Revert All to Base (v1)", width="stretch"):
-                app.orchestrator.registry.revert_to_golden_baseline()
+                with st.spinner("Restoring all strategies to Golden Base (v1)..."):
+                    app.orchestrator.registry.revert_to_golden_baseline()
                 st.rerun()
         with rb_col3:
             if st.button("Enforce Best Champions", width="stretch"):
-                for sid in {s["strategy_id"] for s in strats}:
-                    app.orchestrator.registry.rollback_to_best_champion(sid)
+                with st.spinner("Enforcing best champion versions across registry..."):
+                    for sid in {s["strategy_id"] for s in strats}:
+                        app.orchestrator.registry.rollback_to_best_champion(sid)
                 st.rerun()
 
         display_scorecard = [
@@ -1590,7 +1598,8 @@ def main() -> None:
                         key=f"revert_v1_{s['strategy_id']}_{s['version']}",
                         width="stretch",
                     ):
-                        app.orchestrator.registry.revert_to_golden_baseline(s["strategy_id"])
+                        with st.spinner(f"Restoring {s['strategy_id']} to v1 base..."):
+                            app.orchestrator.registry.revert_to_golden_baseline(s["strategy_id"])
                         st.rerun()
 
                 if exp_match and exp_match.get("trades"):
@@ -1613,23 +1622,34 @@ def main() -> None:
             st.success(st.session_state.pop("_ide_bridge_flash"))
 
         st.markdown("##### 1. Ranked US Equity Watchlist")
-        reports_summary = [
-            {
-                "Rank": idx + 1,
-                "Ticker": r["ticker"],
-                "Company": r["company_name"],
-                "Price": f"${r['current_price']:.2f}",
-                "Sector": r["market_and_sector_context"]["sector"],
-                "20d RS vs SPY": f"{r['relative_strength_vs_spy_20d']:+.2f}%",
-                "Volume (20d)": f"{r['volume_analysis']['volume_ratio_20']:.2f}x",
-                "Archetype": r["suggested_strategy_family"],
-                "Score": r["composite_rank_score"],
-                "Confidence": f"{r['research_confidence_score'] * 100:.0f}%",
-                "Catalyst": r.get("catalyst_assessment", ""),
-                "Bullish Thesis": r["bullish_thesis"],
-            }
-            for idx, r in enumerate(state["research_reports"])
-        ]
+        reports_summary = []
+        for idx, r in enumerate(state["research_reports"]):
+            cat_text = str(r.get("catalyst_assessment") or "").strip()
+            if not cat_text:
+                cat_list = r.get("relevant_news_and_catalysts") or []
+                if cat_list and isinstance(cat_list[0], dict):
+                    c0 = cat_list[0]
+                    c_sent = c0.get("sentiment_score")
+                    sent_str = f" ({float(c_sent):+.2f})" if c_sent is not None else ""
+                    cat_text = f"{c0.get('headline', '')}{sent_str}"
+                else:
+                    cat_text = "No recent catalyst flags"
+            reports_summary.append(
+                {
+                    "Rank": idx + 1,
+                    "Ticker": r["ticker"],
+                    "Company": r["company_name"],
+                    "Price": f"${r['current_price']:.2f}",
+                    "Sector": r["market_and_sector_context"]["sector"],
+                    "20d RS vs SPY": f"{r['relative_strength_vs_spy_20d']:+.2f}%",
+                    "Volume (20d)": f"{r['volume_analysis']['volume_ratio_20']:.2f}x",
+                    "Archetype": r["suggested_strategy_family"],
+                    "Score": r["composite_rank_score"],
+                    "Confidence": f"{r['research_confidence_score'] * 100:.0f}%",
+                    "Catalyst": cat_text,
+                    "Bullish Thesis": r["bullish_thesis"],
+                }
+            )
         st.dataframe(reports_summary, width="stretch", hide_index=True)
 
         st.markdown("---")
@@ -1685,15 +1705,16 @@ def main() -> None:
                 )
                 if st.button("Apply AI Output to Engine", width="stretch"):
                     try:
-                        parsed_payload = json.loads(ai_json_input)
-                        res_apply = app.orchestrator.apply_ide_ai_cycle(payload=parsed_payload)
-                        enriched_n = len(res_apply.get("research_tickers_enriched") or [])
-                        tourn_list = res_apply.get("tournament_results") or []
-                        prom_n = sum(1 for t in tourn_list if t.get("promoted"))
-                        st.session_state["_ide_bridge_flash"] = (
-                            f"Applied AI output (`{res_apply['session_date']}`): "
-                            f"enriched `{enriched_n}` report(s), evaluated `{len(tourn_list)}` candidate(s) (`{prom_n}` promoted)."
-                        )
+                        with st.spinner("Applying AI catalyst updates, running 9-gate tournament & syncing Paper/Live books..."):
+                            parsed_payload = json.loads(ai_json_input)
+                            res_apply = app.orchestrator.apply_ide_ai_cycle(payload=parsed_payload)
+                            enriched_n = len(res_apply.get("research_tickers_enriched") or [])
+                            tourn_list = res_apply.get("tournament_results") or []
+                            prom_n = sum(1 for t in tourn_list if t.get("promoted"))
+                            st.session_state["_ide_bridge_flash"] = (
+                                f"Applied AI output (`{res_apply['session_date']}`): "
+                                f"enriched `{enriched_n}` report(s), evaluated `{len(tourn_list)}` candidate(s) (`{prom_n}` promoted)."
+                            )
                         st.rerun()
                     except Exception as exc:
                         st.error(f"Invalid AI JSON payload: {exc}")
@@ -1780,9 +1801,10 @@ def main() -> None:
 
         step_info = {
             "step_daily_vs_weekly": (
-                "**1. Daily Run, Weekly Run & Market-Open Execution**\n\n"
-                "- **Daily Run (`Mon–Fri 21:30 UTC`)**: Computes signals from completed daily closes, evaluates exits and `+1.0R` stop ratchets on open holdings, and sizes new `BUY` setups.\n"
-                "- **Market-Open Execution (`9:30–9:45 AM ET`)**: Place **Day Limit Orders inside the Buy-Zone (`Ref - 0.25 ATR` to `Ref + 0.50 ATR`)** with an attached `GTC` Stop-Loss & Take-Profit bracket. Skip if the open gaps above `Max Chase`.\n"
+                "**1. Two-Stage Daily Execution (`Post-Close` + `Pre-Open`) & Weekly Run**\n\n"
+                "- **Stage 1 — Post-Close Structural Scan (`Mon–Fri 21:30 UTC / 5:30 AM SGT`)**: Computes signals from official `4:00 PM ET` daily closes, evaluates exits and `+1.0R` stop ratchets on open holdings, and sizes next-session `BUY` setups.\n"
+                "- **Stage 2 — Pre-Open AI & Gap Gate (`Mon–Fri 8:45–9:25 AM ET / 8:45–9:25 PM SGT`)**: Type **`run`** in the IDE (or rely on the `9:00 AM ET` GitHub Actions refresh) to scan overnight/`AMC`/`BMO` earnings and news—vetoing bearish catalysts (`<= -0.35`), re-ranking positive catalysts (`>= +0.25`) to #1 priority, and checking pre-market gaps.\n"
+                "- **Market-Open Execution (`9:30–9:45 AM ET`)**: Execute `SELL` exits first, raise `+1R` `GTC` stops, and place **Day Limit Orders inside the Buy-Zone (`Ref - 0.25 ATR` to `Ref + 0.50 ATR`)** with an attached `GTC` Stop-Loss & Take-Profit bracket.\n"
                 "- **Weekly Run (`Saturday 10:00 SGT`)**: Evaluates candidate `v+1` upgrades in the 9-gate Out-of-Sample & Walk-Forward tournament."
             ),
             "step_multi_strategy": (

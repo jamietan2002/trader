@@ -308,6 +308,10 @@ class MarketResearchAgent(BaseAgent):
         now_iso = utc_now_iso()
         for rep in candidate_reports:
             self.db.execute(
+                "DELETE FROM research_reports WHERE as_of_date = ? AND ticker = ?",
+                (as_of_date, rep.ticker),
+            )
+            self.db.execute(
                 """
                 INSERT INTO research_reports (
                     report_id, run_id, as_of_date, ticker, company_name,
@@ -348,8 +352,22 @@ class MarketResearchAgent(BaseAgent):
 
     def get_latest_reports(self, limit: int = 15) -> List[Dict[str, Any]]:
         rows = self.db.fetch_all(
-            "SELECT report_json FROM research_reports ORDER BY as_of_date DESC, composite_rank_score DESC LIMIT ?",
-            (limit,),
+            """
+            SELECT report_json
+            FROM research_reports
+            WHERE as_of_date = (SELECT MAX(as_of_date) FROM research_reports)
+            ORDER BY composite_rank_score DESC, created_at DESC
+            """
         )
-        return [json.loads(r["report_json"]) for r in rows]
+        deduped: List[Dict[str, Any]] = []
+        seen_tickers: set[str] = set()
+        for r in rows:
+            rep = json.loads(r["report_json"])
+            tkr = str(rep.get("ticker") or "").upper()
+            if tkr and tkr not in seen_tickers:
+                seen_tickers.add(tkr)
+                deduped.append(rep)
+                if len(deduped) >= limit:
+                    break
+        return deduped
 

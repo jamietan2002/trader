@@ -80,8 +80,9 @@ jobs:
               app.orchestrator.run_daily_workflow(trading_date=session_date, force=False)
               app.orchestrator.run_weekly_workflow(week_ending_date=session_date, force=True)
           else:
-              print(f"[DAILY] Running Daily Pre-Market, Paper Execution & Post-Close Review for {session_date}...")
+              print(f"[DAILY] Running Daily Post-Close / Pre-Open Refresh for {session_date}...")
               app.orchestrator.run_daily_workflow(trading_date=session_date, force=False)
+              app.orchestrator.run_pre_open_refresh(session_date=session_date)
           EOF
 
       - name: Commit & Push Updated Paper Account & Strategy Registry State
