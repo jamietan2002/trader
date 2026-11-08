@@ -19,7 +19,7 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 ### Modules Added / Modified
 - `core/market_data/providers.py`, `core/execution/paper_broker.py`
 - `infrastructure/scheduler/orchestrator.py`, `.github/workflows/autonomous_trading.yml`
-- `dashboard/streamlit_app.py`, `USER_GUIDE.md`, `docs/AGENT_CHANGELOG.md`
+- `dashboard/streamlit_app.py`, `USER_GUIDE.md`, `docs/QUANTITATIVE_EVOLUTION_AND_LESSONS.md`, `docs/AGENT_CHANGELOG.md`
 
 ---
 

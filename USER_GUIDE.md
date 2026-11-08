@@ -154,4 +154,4 @@ Check these 5 health indicators weekly (in **Tab 1**, **Tab 2**, and **Tab 3**):
 | **`3. Strategies, Rules & Backtests`** | `core/strategies/registry.py`, `evaluation/metrics/performance.py` | Strategy origin, exact `entry_rules`/`exit_rules`, 9-gate `SPY` & `6M`/`SQN` audit, historical trades, and `Revert All to Golden Base (v1)` |
 | **`4. AI Research & IDE Bridge`** | `infrastructure/scheduler/orchestrator.py`, `.agents/skills/run-ai-cycle/SKILL.md` | Watchlist rankings, IDE AI checklist, copyable prompt, and direct JSON-to-Engine feed (`/api/ide/apply`) |
 | **`5. Risk, Walk-Forward & Logs`** | `core/risk/manager.py`, `core/backtesting/engine.py` | Sector exposure vs. `30%` cap, 4-window Walk-Forward folds, risk vetoes, and job execution logs |
-| **`6. Platform Guide`** | `USER_GUIDE.md` | Visual architecture mental model and interactive workflow guide |
+| **`6. Platform Guide`** | `USER_GUIDE.md`, `docs/QUANTITATIVE_EVOLUTION_AND_LESSONS.md` | Visual architecture mental model, interactive workflow guide, and Initial-vs-Upgraded design evolution log |
