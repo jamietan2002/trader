@@ -547,7 +547,9 @@ class AutonomousWorkflowOrchestrator:
             "active_paper_strategies": strat_summaries,
             "paper_account_summary": self.paper_engine.get_account_summary(),
             "recent_closed_paper_trades": ledger_sells,
-            "live_copilot_action_plan": self.live_copilot.get_daily_action_plan(as_of_date=latest_date),
+            "live_copilot_action_plan": self.live_copilot.get_daily_action_plan(
+                as_of_date=trading_date, check_calendar_today=False
+            ),
             "daily_workflow_status": daily_res.get("status", "COMPLETED") if isinstance(daily_res, dict) else "COMPLETED",
         }
 
@@ -723,7 +725,9 @@ class AutonomousWorkflowOrchestrator:
             "research_tickers_enriched": updated_tickers,
             "recorded_proposal_id": recorded_proposal_id,
             "tournament_results": tournament_results,
-            "updated_copilot_action_plan": self.live_copilot.get_daily_action_plan(as_of_date=dt_str),
+            "updated_copilot_action_plan": self.live_copilot.get_daily_action_plan(
+                as_of_date=session_date, check_calendar_today=False
+            ),
         }
         self.db.execute(
             """

@@ -4,6 +4,25 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-08] — Two-Stage Institutional Swing Execution (`Post-Close Structural Scan` + `Pre-Open Live Quote, Gap & AI Catalyst Gate`)
+
+### Summary
+- **Pre-Open Live Snapshot & Overnight Gap Gate (`core/market_data/providers.py`, `core/execution/paper_broker.py`, `.github/workflows/autonomous_trading.yml`)**:
+  - Added `MarketDataService.fetch_live_quote_snapshots()` querying Alpaca's `/v2/stocks/snapshots?feed=iex` (`latestTrade`, `dailyBar`, `prevDailyBar`) to compare extended-hours / pre-market prices against the official `4:00 PM ET` closing bar.
+  - Enhanced `LiveTradingCopilotEngine.get_daily_action_plan()` with a **Pre-Open Gap Gate**: automatically vetoes `BUY` setups that break down below the Buy-Zone (`overnight_gap_atr <= -0.75`) or gap beyond `max_overnight_gap_atr_multiple` (`+2.5x ATR`), and badges each setup (`In Buy-Zone`, `Extended — Do Not Chase > Max Chase`, or `Wait for Buy-Zone Reclaim`).
+  - Added a **Pre-Open GitHub Actions schedule (`0 13 * * 1-5` — `9:00 AM ET` / `9:00 PM SGT`)** alongside the Post-Close schedule (`30 21 * * 1-5`).
+- **Pre-Open AI Catalyst Re-Ranking & Emergency Holding Protection (`core/execution/paper_broker.py`, `infrastructure/scheduler/orchestrator.py`)**:
+  - Updated `get_daily_action_plan()` to re-rank candidate `BUY`s by **AI-Adjusted Conviction (`base_conv + ai_boost`)** *before* allocating simulated cash so positive-catalyst setups (`sentiment >= +0.25`) are funded first in smaller (`$10k`) accounts.
+  - Added **Emergency AI Bearish Catalyst Exit (`sentiment <= -0.50`)** on open holdings so running `run` pre-open surfaces an immediate `SELL` action if an existing holding suffers a severe overnight/`AMC`/`BMO` catalyst shock.
+  - Updated `USER_GUIDE.md` and `dashboard/streamlit_app.py` (`_code_version = "2026-11-08-v18"`) with concise Two-Stage daily execution guidance (`8:45–9:25 AM ET` pre-open check + `9:30–9:45 AM ET` execution).
+
+### Modules Added / Modified
+- `core/market_data/providers.py`, `core/execution/paper_broker.py`
+- `infrastructure/scheduler/orchestrator.py`, `.github/workflows/autonomous_trading.yml`
+- `dashboard/streamlit_app.py`, `USER_GUIDE.md`, `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-08] — Live Market Bar Auto-Sync (`ensure_latest_market_data`), Pullback Regime Dip-Buying & Next-Session Preview Clarity
 
 ### Summary

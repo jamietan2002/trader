@@ -615,6 +615,67 @@ class MarketDataService:
                 logger.warning(f"Auto-refresh of market data failed ({exc}); using cached DB bars ({max_dt}).")
         return max_dt
 
+    def fetch_live_quote_snapshots(
+        self,
+        tickers: Sequence[str],
+        cache_ttl_seconds: int = 120,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Fetch latest trade / extended-hours / pre-market snapshot quotes from Alpaca IEX feed."""
+        import sys as _sys
+
+        clean_tickers = sorted({str(t).strip().upper() for t in tickers if t and str(t).strip()})
+        if not clean_tickers or not self._is_live_api_configured() or self.provider.provider_name != "alpaca":
+            return {}
+        if "unittest" in _sys.modules:
+            return {}
+
+        symbols_param = ",".join(clean_tickers)
+        url = f"https://data.alpaca.markets/v2/stocks/snapshots?symbols={symbols_param}&feed=iex"
+        cache_key = f"alpaca_snapshots:{hashlib.sha256(url.encode('utf-8')).hexdigest()}"
+        cached = self.db.get_cached_response(cache_key)
+        if isinstance(cached, dict):
+            return cached
+
+        headers = {
+            "APCA-API-KEY-ID": self.settings.alpaca_api_key,
+            "APCA-API-SECRET-KEY": self.settings.alpaca_secret_key,
+            "Accept": "application/json",
+        }
+        try:
+            req = urllib.request.Request(url, headers=headers, method="GET")
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                raw_data = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            logger.warning(f"Alpaca live snapshot fetch failed ({exc}); using daily close prices.")
+            return {}
+
+        result: Dict[str, Dict[str, Any]] = {}
+        for sym, snap in (raw_data or {}).items():
+            if not isinstance(snap, dict):
+                continue
+            lt = snap.get("latestTrade") or {}
+            lq = snap.get("latestQuote") or {}
+            db_bar = snap.get("dailyBar") or {}
+            prev_bar = snap.get("prevDailyBar") or {}
+            lt_p = float(lt.get("p") or 0.0)
+            db_c = float(db_bar.get("c") or 0.0)
+            prev_c = float(prev_bar.get("c") or 0.0)
+            indicative_p = lt_p if lt_p > 0 else (db_c if db_c > 0 else prev_c)
+            if indicative_p > 0:
+                result[str(sym).upper()] = {
+                    "ticker": str(sym).upper(),
+                    "indicative_price": round(indicative_p, 2),
+                    "latest_trade_price": round(lt_p, 2) if lt_p > 0 else None,
+                    "latest_trade_timestamp": str(lt.get("t") or ""),
+                    "daily_close": round(db_c, 2) if db_c > 0 else None,
+                    "prev_daily_close": round(prev_c, 2) if prev_c > 0 else None,
+                    "bid_price": round(float(lq.get("bp") or 0.0), 2),
+                    "ask_price": round(float(lq.get("ap") or 0.0), 2),
+                }
+        expires = (datetime.now(timezone.utc) + timedelta(seconds=cache_ttl_seconds)).isoformat()
+        self.db.set_cached_response(cache_key, "alpaca_snapshots", result, expires)
+        return result
+
     def ingest_universe_and_history(
         self,
         start_date: str = "2023-01-03",

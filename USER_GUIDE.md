@@ -16,45 +16,57 @@ This platform runs a systematic **swing-trading engine** (holding liquid US larg
 
 ---
 
-## 2. How the Engine Works & Exact Order Execution Rules
+## 2. How the Engine Works & Two-Stage Daily Execution Rules
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────────────┐
-│ 1. DAILY EXECUTION LOOP (Mon–Fri After Market Close · Forward Paper & Copilot)   │
+│ STAGE 1: POST-CLOSE STRUCTURAL SCAN (5:30 PM ET / 5:30 AM SGT · Auto via GitHub) │
 │                                                                                  │
-│  [Alpaca Daily Bars] ──► [5 Golden Base Strategies] ──► [AI Catalyst Filter]     │
-│                                                                 │                │
-│  [Live Copilot Checklist] & [Forward Paper Ledger]  ◄── [7-Rule Risk Manager]    │
-└──────────────────────────────────────────────────────────────────────────────────┘
-
+│  [4:00 PM ET Closing Bars] ──► [#1 Champion + Entry-Bound Exits] ──► [2d Earn    │
+│                                                                      Blackout]   │
+└────────────────────────────────────────┬─────────────────────────────────────────┘
+                                         ▼
 ┌──────────────────────────────────────────────────────────────────────────────────┐
-│ 2. WEEKLY SELF-IMPROVEMENT LOOP (Saturdays · Strictly In Backtesting)            │
+│ STAGE 2: PRE-OPEN GAP & AI CATALYST GATE (8:45–9:25 AM ET · Type "run" in IDE)   │
 │                                                                                  │
-│  [Post-Trade Attribution] ──► [Propose Candidate v+1] ──► [In-Sample/OOS/WF]     │
-│                                                                 │                │
-│  [Keep Champion v1 or Promote v+1] ◄── [9-Gate Audit + SPY Dominance Check]      │
+│  [AMC/BMO Earnings + Web News] + [Alpaca Pre-Market Snapshots]                   │
+│       ├──► Veto Bearish BUY Setups (Sentiment <= -0.35 or Gap <= -0.75 ATR)      │
+│       ├──► Emergency SELL Alert on Holdings (Severe News <= -0.50)               │
+│       └──► Re-Rank Top Catalysts (>= +0.25) & Flag Extended Gaps (> Max Chase)   │
+└────────────────────────────────────────┬─────────────────────────────────────────┘
+                                         ▼
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│ STAGE 3: MARKET OPEN EXECUTION (9:30–9:45 AM ET · Regular Trading Hours Only)    │
+│                                                                                  │
+│  1. Execute SELL Exits & Raise +1R GTC Stops (9:30–9:35 AM ET)                   │
+│  2. Submit Day Limit BUY Orders inside Buy-Zone (<= Max Chase) + GTC Bracket     │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Daily Routine (In Exact Order & Time, `ET` & `SGT`)
-1. **Step 1 — Before Market Open (`Anytime before 9:30 AM ET / 9:30 PM SGT`): Optional AI Check (`type run in IDE`)**:
-   - **How AI changes decisions**: Searches live web news (`search_web`) for your checklist stocks—automatically **vetoing** any `BUY` candidate with bearish breaking news (`sentiment <= -0.35`, e.g., guidance cut/probe) and **boosting** high-catalyst setups (`>= +0.25`).
-   - **What if you forget or skip `run`?**: Nothing breaks! GitHub Actions already ran the deterministic daily engine automatically at `5:30 AM SGT` (`21:30 UTC`), so your checklist in `Live Copilot` is **already updated and ready to trade**.
-2. **Step 2 — Priority #1 (`9:30–9:35 AM ET / 9:30–9:35 PM SGT`): Execute `SELL` Exits & `Raise Stop` Alerts First**:
-   - Always execute **`SELL` exit cards first** at market open to free up cash and lock in P&L.
-   - Next, if any holding shows a **`Raise Stop-Loss` alert** (`+1.0R` Chandelier or `+1.25R` Breakeven), update your broker's existing `GTC Stop-Loss` order to that higher price.
-3. **Step 3 — Priority #2 (`9:30–9:45 AM ET` or Pre-Submitted Limit): Place `BUY` Orders + Attach Stop/Target Immediately**:
-   - **Do you need to click at `9:30:00 AM ET` sharp?** **No!** You can either:
-     - *Option A (Set-and-Forget Before Open)*: Anytime before `9:30 AM ET`, submit a **Regular-Hours (`RTH`) Day Limit Order** at the **`Max Chase` price** (`Ref + 0.50 ATR`) with an attached **OCO Bracket (`Stop-Loss` + `Take-Profit`)**. At `9:30 AM ET`, your broker fills you automatically if the open is $\le$ `Max Chase`.
-     - *Option B (Live Open Window `9:30–9:45 AM ET`)*: Place a Limit order if the live price trades inside the **`Buy-Zone ($Low – $MaxChase)`** ($\left[\text{Ref} - 0.25\text{ ATR}, \, \text{Ref} + 0.50\text{ ATR}\right]$). Never trade illiquid Pre-Market or After-Hours sessions.
-   - **When to set `Stop-Loss` and `Take-Profit`**: **Immediately when placing your `BUY` order** (as an attached **Bracket / OCO order**, or as a **`GTC Stop-Loss` + `GTC Limit Take-Profit`** within 1 minute of your fill). Because they are `GTC`, your `-1%` max risk and profit target are protected automatically every day even if you are offline.
-4. **Step 4 — Log Confirmations (`✓ Sold` / `✓ Bought`) & Contingency Rules**:
-   - **What if you forget to place orders for a day?**:
-     - *Missed a `BUY`*: **Never chase it late.** Leave it—if the setup is still valid and inside the Buy-Zone tomorrow, it will appear on tomorrow's checklist with updated prices.
-     - *Missed a `SELL`*: Your broker's `GTC Stop-Loss` and `Take-Profit` bracket continues protecting your downside/upside automatically, and the `SELL` card stays at the top of your checklist tomorrow until you execute and click `✓ Sold`.
-   - **What if YOU decide to exit a position early (discretionary full or partial exit)?**:
-     - Sell the shares in your broker (and cancel any leftover open `GTC Stop/Target` orders for that stock if not linked via OCO), then go to **Section 2 (`My Active Holdings`)** in `Live Copilot`, enter the shares sold and your actual exit price, and click **`Close`** (or **`Sell N`**). Your cash and Realised P&L update in 1 click!
-   - **What if the Profit Target (`Take-Profit`) is not hit?**: Handled by the **4-Way Exit Bracket** (`+1.0R` to `+1.25R` Breakeven/Chandelier Stop Ratchet, Momentum Stall / `RSI >= 68` exit, or `Day N` Time-Stop after `8–15` trading days).
+### Why Do We Run a Two-Stage Engine (Post-Close + Pre-Open)?
+1. **Why Stage 1 Runs Post-Market (`5:30 PM ET` / `5:30 AM SGT`)**:
+   - Over **98% of US equity volume** (and **15–25%** in the `4:00 PM ET` closing auction alone) trades during Regular Trading Hours (`9:30 AM – 4:00 PM ET`). After-hours and pre-market trade `< 2%` of daily volume with wide bid-ask spreads.
+   - Structural daily indicators (`SMA-20/50/200`, `RSI-14`, `ATR-14`, `20d High`, `Volume Ratio`) **must** be computed from the official `4:00 PM ET` closing bar, while enforcing a **2-Day Earnings Blackout (`earnings_blackout_days_before = 2`)** so non-PEAD strategies never propose buying right before a scheduled `AMC` or `BMO` earnings call.
+2. **Why Stage 2 Runs Pre-Open (`8:45–9:25 AM ET` / `8:45–9:25 PM SGT`) & How `run` Changes Trade Decisions**:
+   - Between `4:00 PM ET` (Day $T$) and `9:30 AM ET` (Day $T+1$), **`AMC` earnings (`4:05–5:30 PM ET`)**, **`BMO` earnings (`6:00–8:30 AM ET`)**, overnight macro/analyst news, and pre-market price gaps occur.
+   - Typing **`run`** in the IDE `15–45 minutes` before the `9:30 AM ET` open **directly updates your trade decisions in 4 ways**:
+     1. **Hard Veto on Bearish `BUY` Candidates (`sentiment <= -0.35`)**: Automatically removes any `BUY` candidate hit by an overnight guidance cut, downgrade, SEC/FDA probe, or macro shock.
+     2. **Emergency `SELL` Protection on Open Holdings (`sentiment <= -0.50`)**: Triggers an immediate `SELL` action if a stock you already hold suffers a severe overnight catalyst shock.
+     3. **Conviction Re-Ranking (`sentiment >= +0.25`)**: Boosts conviction and re-orders `buy_actions` BEFORE cash allocation so your `$10k` capital funds the highest-catalyst setup first.
+     4. **Live Extended-Hours / Pre-Market Gap Gate (`fetch_live_quote_snapshots`)**: Queries Alpaca's live IEX snapshot (`indicative_price` vs `Close`):
+        - **Severe Gap Breakdown (`<= -0.75 ATR`) or Runaway Gap (`> +2.5 ATR`)**: Automatically vetoes the `BUY` setup (`PRE_OPEN_GAP_VETO`).
+        - **Extended Above `Max Chase` (`> Close + 0.50 ATR`)**: Flags **`Extended — Do Not Chase`**; keep your Limit Order at `<= Max Chase` so you only buy if price pulls back into the Buy-Zone after `9:30 AM ET`.
+
+### Daily User Actions (Concise 4-Step Checklist, `ET` & `SGT`)
+1. **`8:45–9:25 AM ET` (`8:45–9:25 PM SGT`) — Pre-Open AI & Gap Check (`type run in IDE`)**:
+   - Type **`run`** in the IDE after `BMO` earnings (`8:30 AM ET`) and before the `9:30 AM ET` open so overnight news vetoes, catalyst re-rankings, and pre-market gap checks update your `Live Copilot` checklist.
+   - *What if you skip `run`?* GitHub Actions automatically runs both Post-Close (`21:30 UTC`) and Pre-Open (`13:00 UTC` / `9:00 AM ET`), and your **Buy-Zone Limit Order (`<= Max Chase`)** automatically protects you from chasing overnight gap-ups.
+2. **`9:30–9:35 AM ET` (`9:30–9:35 PM SGT`) — Execute `SELL` Exits & Raise `+1R` Stops First**:
+   - Execute **`SELL` cards first** to free cash and lock in P&L, then raise your broker's `GTC Stop-Loss` on any holding showing a **`Raise Stop`** alert (`+1R` Breakeven / Chandelier).
+3. **`9:30–9:45 AM ET` (or Pre-Set `RTH` Limit) — Place `BUY` Limit Orders in `Buy-Zone` + `GTC Bracket`**:
+   - Submit a **Regular-Hours (`RTH`) Day Limit Order** inside the **`Buy-Zone ($Low – $MaxChase)`** and immediately attach your **`GTC Stop-Loss` + `GTC Take-Profit`** bracket. Never trade illiquid pre-market or after-hours sessions.
+4. **Post-Fill — Click `Sold` / `Bought` in `Live Copilot`**:
+   - Confirm your actual broker fill price and shares in Tab 1 (or edit/add/remove any trade in Section 3 `Account Ledger`). Cash, holdings, and P&L reconcile automatically from your ledger.
 
 ---
 

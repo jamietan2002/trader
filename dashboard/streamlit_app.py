@@ -413,7 +413,7 @@ def main() -> None:
     st.markdown(CLASSY_MINIMAL_CSS, unsafe_allow_html=True)
 
     app = PlatformApplication()
-    _code_version = "2026-11-08-v17"
+    _code_version = "2026-11-08-v18"
     import api.server as _srv_mod
     if (
         getattr(_srv_mod, "_STREAMLIT_SYNC_VERSION", None) != _code_version
@@ -518,10 +518,10 @@ def main() -> None:
         st.markdown("#### Daily Workflow")
         st.caption("Eastern (`ET`) / Singapore (`SGT`)")
         st.checkbox(
-            "1. Pre-Open: Optional `run` in IDE",
+            "1. 8:45–9:25 ET: Type `run` in IDE",
             value=ide_ran_today,
             key="sidebar_chk_ide_run",
-            help="Optional live web catalyst scan before 9:30 AM ET. If skipped, GitHub Actions already updated your signals at 21:30 UTC.",
+            help="Best run 15–45 mins before 9:30 AM ET open (after BMO/AMC earnings & overnight news): vetoes bearish news (<= -0.35), re-ranks top catalysts (>= +0.25), and checks pre-market gaps.",
         )
         st.checkbox(
             "2. 9:30 ET: Execute SELLs & Stops",
@@ -533,7 +533,7 @@ def main() -> None:
             "3. 9:30–9:45 ET: Place BUY Limits",
             value=False,
             key="sidebar_chk_copilot",
-            help="Submit Day Limit orders inside the Buy-Zone with an attached GTC Stop-Loss and Take-Profit bracket.",
+            help="Submit Day Limit orders inside the Buy-Zone (<= Max Chase) with an attached GTC Stop-Loss and Take-Profit bracket.",
         )
         st.checkbox(
             "4. Post-Fill: Confirm in Copilot",
@@ -737,10 +737,10 @@ def main() -> None:
         with ctrl_c5:
             with st.popover("? Rules", width="stretch"):
                 st.markdown(
-                    "**Daily Execution & Next-Session Preview (`ET` / `SGT`)**\n\n"
-                    f"1. **Why Setups Are Known in Advance (`Day T Close → Day T+1 Open`)**: Swing signals are computed from the last completed daily close (`{latest_bar_date}` at `4:00 PM ET`). Once that daily bar closes, the `BUY`/`SELL` triggers, `Buy-Zone ($Low – $MaxChase)`, `Stop-Loss`, and `Take-Profit` for the next market open (`{next_trading_day_iso}` at `9:30 AM ET`) are deterministically locked in.\n"
-                    "2. **What Changes If You Type `run` in IDE?**: Running `run` before market open scans live breaking web news (`search_web`)—**vetoing/removing** any `BUY` setup with bearish breaking news (`sentiment <= -0.35`), **boosting** positive catalysts (`>= +0.25`), and testing candidate strategy upgrades (`v+1`).\n"
-                    "3. **What If You Do NOT Run `run`?**: Nothing breaks—GitHub Actions (`21:30 UTC` / `5:30 AM SGT` Mon–Fri) already ingests the latest close and computes your deterministic `#1 Champion` checklist. Using a **Day Limit Order inside the Buy-Zone (`<= Max Chase`)** at `9:30–9:45 AM ET` automatically protects you if a stock gaps overnight."
+                    "**Two-Stage Institutional Swing Execution (`ET` / `SGT`)**\n\n"
+                    f"1. **Stage 1 — Post-Close Structural Scan (`5:30 PM ET` / `5:30 AM SGT` Auto)**: Daily indicators (`SMA`, `RSI`, `ATR`, `20d High`) require the official `4:00 PM ET` closing auction (`98%` of daily volume). Stage 1 locks in structural setups (`Close {latest_bar_date}`) and blocks non-PEAD entries within 2 days before `AMC`/`BMO` earnings.\n"
+                    f"2. **Stage 2 — Pre-Open AI & Gap Gate (`8:45–9:25 AM ET` / `8:45–9:25 PM SGT` — Type `run` in IDE)**: Running `run` 15–45 mins before the `{next_trading_day_iso}` open checks overnight/`AMC`/`BMO` earnings and news—**removing** any `BUY` with bearish news (`<= -0.35`), triggering **emergency `SELL` alerts** on holdings with severe news (`<= -0.50`), **re-ranking** positive catalysts (`>= +0.25`) to #1 priority, and checking live pre-market gaps.\n"
+                    "3. **At Open (`9:30–9:45 AM ET`)**: Execute **`SELL` exits first**, raise `+1R` `GTC Stops`, and place **Day Limit Orders inside the `Buy-Zone (<= Max Chase)`** with attached `GTC Stop + Target` brackets. If a stock gaps above `Max Chase`, your limit order automatically prevents chasing."
                 )
 
         st.markdown("---")
@@ -773,10 +773,10 @@ def main() -> None:
             )
             if show_signals_today:
                 st.caption(
-                    f"**How Preview Works (`{latest_bar_date}` Close → `{next_trading_day_iso}` Open)**: "
-                    f"Setups below are pre-computed from the completed `{latest_bar_date}` (`4:00 PM ET`) daily candle for execution at the `{next_trading_day_iso}` (`9:30–9:45 AM ET`) open. "
-                    f"**If you type `run` in IDE** before `{next_trading_day_iso}` open, live web news (`search_web`) will veto setups with bearish breaking news (`<= -0.35`) and boost positive catalysts. "
-                    f"**If you don't run `run`**, this deterministic checklist is already complete—place your Day Limit Order inside the **Buy-Zone (`<= Max Chase`)** so overnight gaps above Max Chase are automatically skipped."
+                    f"**Two-Stage Preview (`{latest_bar_date}` Close → `{next_trading_day_iso}` Open)**: "
+                    f"Setups below are computed from the `{latest_bar_date}` (`4:00 PM ET`) closing candle. "
+                    f"**Best Practice (`8:45–9:25 AM ET` on `{next_trading_day_iso}`)**: Type `run` in IDE before the open so overnight/`BMO` news vetoes bearish setups (`<= -0.35`), boosts top catalysts (`>= +0.25`), and checks pre-market gaps. "
+                    f"**If you skip `run`**: GitHub Actions also syncs pre-open (`9:00 AM ET`), and placing a **Day Limit Order inside the Buy-Zone (`<= Max Chase`)** automatically protects you against overnight gaps."
                 )
 
         sell_actions = raw_sell_actions if show_signals_today else []
@@ -882,11 +882,28 @@ def main() -> None:
                         if ai_sent_val >= 0.20
                         else ""
                     )
+                    pre_open_status = str(ba.get("pre_open_status") or "READY_IN_BUY_ZONE")
+                    ind_px = float(ba.get("indicative_price") or ref_px)
+                    gap_pct = float(ba.get("overnight_gap_pct") or 0.0)
+                    if pre_open_status == "EXTENDED_ABOVE_MAX_CHASE":
+                        gap_badge_html = (
+                            f" · <span style='color:#f59e0b;font-weight:600;'>Extended ${ind_px:.2f} ({gap_pct:+.1f}%) — Do Not Chase &gt; Max Chase</span>"
+                        )
+                    elif pre_open_status == "DIPPED_BELOW_BUY_ZONE":
+                        gap_badge_html = (
+                            f" · <span style='color:#f59e0b;font-weight:600;'>Pre-Open ${ind_px:.2f} ({gap_pct:+.1f}%) — Wait for Buy-Zone Reclaim</span>"
+                        )
+                    elif abs(gap_pct) >= 0.05:
+                        gap_badge_html = (
+                            f" · <span style='color:#38bdf8;'>Live Quote ${ind_px:.2f} ({gap_pct:+.1f}% · In Buy-Zone)</span>"
+                        )
+                    else:
+                        gap_badge_html = " · <span style='color:#38bdf8;'>In Buy-Zone</span>"
                     with bc_info:
                         st.markdown(
                             f"**BUY `{int(b_qty)}` `{ba['ticker']}` @ `${float(b_price):.2f}`** "
                             f"(`${live_cost:,.0f}` · `{live_weight:.1f}%` · Close `{ba.get('signal_date', latest_bar_date)}`) · "
-                            f"Buy-Zone **`{buy_zone_str}`**{ai_badge_html}  \n"
+                            f"Buy-Zone **`{buy_zone_str}`**{gap_badge_html}{ai_badge_html}  \n"
                             f"<span style='color:#cbd5e1;font-size:0.83rem;'>Bracket: <strong>Stop ${adj_stop:.2f}</strong> (-${live_risk:,.0f} risk) · "
                             f"<strong>Target ${adj_tp:.2f}</strong> · +1R Breakeven ${ratchet_1r:.2f} · {ba['holding_horizon_days']}</span>  \n"
                             f"<span style='color:#64748b;font-size:0.79rem;'>{ba['strategy_id']} v{ba['strategy_version']} — {ba['reason']}</span>",

@@ -2,9 +2,11 @@ name: Autonomous Swing Trading Loop (Daily & Weekly)
 
 on:
   schedule:
-    # Runs Monday-Friday at 21:30 UTC (16:30 EST / 17:30 EDT, right after US market close)
+    # Stage 1 (Post-Close): Monday-Friday at 21:30 UTC (5:30 AM SGT, after 4:00 PM ET close)
     - cron: "30 21 * * 1-5"
-    # Runs every Saturday at 02:00 UTC (10:00 AM SGT) for the Weekly Self-Improving Strategy Discovery Loop
+    # Stage 2 (Pre-Open): Monday-Friday at 13:00 UTC (9:00 AM EDT / 8:00 AM EST / 9:00 PM SGT, after BMO earnings & before 9:30 AM ET open)
+    - cron: "0 13 * * 1-5"
+    # Weekly Self-Improving Strategy Discovery Loop: Saturday at 02:00 UTC (10:00 AM SGT)
     - cron: "0 2 * * 6"
   workflow_dispatch:
     inputs:
