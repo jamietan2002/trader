@@ -36,17 +36,25 @@ This platform runs a systematic **swing-trading engine** (holding liquid US larg
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Practical Trading Mechanics: When & How to Execute Orders
-1. **When Signals Are Generated (`After Market Close, >16:00 ET`)**: Signals are computed strictly from completed daily closing bars to eliminate intraday false breakouts and look-ahead bias. On weekends and `NYSE`/`NASDAQ` holidays, `Live Copilot` automatically suppresses new trade suggestions.
-2. **When to Place Orders (`9:30–9:45 AM ET Market Open Limit Order`)**: Review your checklist before the bell and execute during regular market open (`9:30–9:45 AM ET`). **Never trade in illiquid Pre-Market or After-Hours sessions**, where bid-ask spreads are `5x–20x` wider.
-3. **Exact Entry Price vs. Buy-Zone Range (`$Low – $MaxChase`)**: Every `BUY` card gives a reference price and an ATR-bounded **`Buy-Zone Limit`**:
-   $$\text{Buy Zone} = \left[\, \text{Ref Close} - 0.25 \times \text{ATR}_{14}, \;\; \text{Ref Close} + 0.50 \times \text{ATR}_{14} \,\right]$$
-   - **If Price Opens Above `Max Chase`**: **Do not chase.** Leave your Limit Order at `Max Chase` (`Ref + 0.50 ATR`); if unfilled, skip the trade.
-   - **If Price Gaps Down Below `Buy Zone Low`**: **Skip the trade** (opening support breakdown).
-4. **What If the Profit Target (`Take-Profit`) Is Not Hit? (4-Way Exit Bracket)**:
-   - **`+1.0R` to `+1.25R` Stop Ratchet**: Once price reaches **`+1.0R`** (`breakeven_ratchet_price` on your card), raise your Stop-Loss to Breakeven / Chandelier trail (`Highest High - k * ATR`). Even if the full Take-Profit is not hit, a reversal still locks in a winning trade.
-   - **Momentum Stall / RSI Overbought Exit**: Exits early if trend alignment breaks (`Close < SMA20`) or `RSI14` hits `68+` (for mean-reversion bounces).
-   - **Time-Stop (`holding_period_max_days`, `8–15` trading days)**: If neither Target nor Stop is hit by Day $N_{\max}$, exit at Market Open to recycle capital.
+### Daily Routine (In Exact Order & Time, `ET` & `SGT`)
+1. **Step 1 — Before Market Open (`Anytime before 9:30 AM ET / 9:30 PM SGT`): Optional AI Check (`type run in IDE`)**:
+   - **How AI changes decisions**: Searches live web news (`search_web`) for your checklist stocks—automatically **vetoing** any `BUY` candidate with bearish breaking news (`sentiment <= -0.35`, e.g., guidance cut/probe) and **boosting** high-catalyst setups (`>= +0.25`).
+   - **What if you forget or skip `run`?**: Nothing breaks! GitHub Actions already ran the deterministic daily engine automatically at `5:30 AM SGT` (`21:30 UTC`), so your checklist in `Live Copilot` is **already updated and ready to trade**.
+2. **Step 2 — Priority #1 (`9:30–9:35 AM ET / 9:30–9:35 PM SGT`): Execute `SELL` Exits & `Raise Stop` Alerts First**:
+   - Always execute **`SELL` exit cards first** at market open to free up cash and lock in P&L.
+   - Next, if any holding shows a **`Raise Stop-Loss` alert** (`+1.0R` Chandelier or `+1.25R` Breakeven), update your broker's existing `GTC Stop-Loss` order to that higher price.
+3. **Step 3 — Priority #2 (`9:30–9:45 AM ET` or Pre-Submitted Limit): Place `BUY` Orders + Attach Stop/Target Immediately**:
+   - **Do you need to click at `9:30:00 AM ET` sharp?** **No!** You can either:
+     - *Option A (Set-and-Forget Before Open)*: Anytime before `9:30 AM ET`, submit a **Regular-Hours (`RTH`) Day Limit Order** at the **`Max Chase` price** (`Ref + 0.50 ATR`) with an attached **OCO Bracket (`Stop-Loss` + `Take-Profit`)**. At `9:30 AM ET`, your broker fills you automatically if the open is $\le$ `Max Chase`.
+     - *Option B (Live Open Window `9:30–9:45 AM ET`)*: Place a Limit order if the live price trades inside the **`Buy-Zone ($Low – $MaxChase)`** ($\left[\text{Ref} - 0.25\text{ ATR}, \, \text{Ref} + 0.50\text{ ATR}\right]$). Never trade illiquid Pre-Market or After-Hours sessions.
+   - **When to set `Stop-Loss` and `Take-Profit`**: **Immediately when placing your `BUY` order** (as an attached **Bracket / OCO order**, or as a **`GTC Stop-Loss` + `GTC Limit Take-Profit`** within 1 minute of your fill). Because they are `GTC`, your `-1%` max risk and profit target are protected automatically every day even if you are offline.
+4. **Step 4 — Log Confirmations (`✓ Sold` / `✓ Bought`) & Contingency Rules**:
+   - **What if you forget to place orders for a day?**:
+     - *Missed a `BUY`*: **Never chase it late.** Leave it—if the setup is still valid and inside the Buy-Zone tomorrow, it will appear on tomorrow's checklist with updated prices.
+     - *Missed a `SELL`*: Your broker's `GTC Stop-Loss` and `Take-Profit` bracket continues protecting your downside/upside automatically, and the `SELL` card stays at the top of your checklist tomorrow until you execute and click `✓ Sold`.
+   - **What if YOU decide to exit a position early (discretionary full or partial exit)?**:
+     - Sell the shares in your broker (and cancel any leftover open `GTC Stop/Target` orders for that stock if not linked via OCO), then go to **Section 2 (`My Active Holdings`)** in `Live Copilot`, enter the shares sold and your actual exit price, and click **`Close`** (or **`Sell N`**). Your cash and Realised P&L update in 1 click!
+   - **What if the Profit Target (`Take-Profit`) is not hit?**: Handled by the **4-Way Exit Bracket** (`+1.0R` to `+1.25R` Breakeven/Chandelier Stop Ratchet, Momentum Stall / `RSI >= 68` exit, or `Day N` Time-Stop after `8–15` trading days).
 
 ---
 

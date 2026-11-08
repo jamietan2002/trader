@@ -370,7 +370,7 @@ def main() -> None:
     )
 
     app = PlatformApplication()
-    _code_version = "2026-11-08-v11"
+    _code_version = "2026-11-08-v12"
     import api.server as _srv_mod
     if (
         getattr(_srv_mod, "_STREAMLIT_SYNC_VERSION", None) != _code_version
@@ -475,25 +475,31 @@ def main() -> None:
             )
 
         st.markdown("---")
-        st.markdown("### Daily & Weekly AI Checklist")
-        st.caption("To maximize Paper & Real P&L with live news catalysts and strategy optimization:")
+        st.markdown("### Daily Routine (In Exact Order)")
+        st.caption("Times shown in **US Eastern (`ET`)** & **Singapore (`SGT`)**:")
         st.checkbox(
-            "1. Type `run` in Antigravity IDE chat",
+            "Step 1 (Before 9:30 AM ET / 9:30 PM SGT): Optional — Type `run` in IDE",
             value=ide_ran_today,
             key="sidebar_chk_ide_run",
-            help="Triggers the `run-ai-cycle` skill: runs `ide-context`, searches live web news (`search_web`), tests candidate upgrades (`ide-apply`), and pushes to GitHub.",
+            help="Run BEFORE market open if you want live web news to veto negative-news traps (<= -0.35) or boost high-catalyst BUY setups. If you skip this, GitHub Actions already updated your checklist automatically at 5:30 AM SGT!",
         )
         st.checkbox(
-            "2. Review Live Copilot Checklist",
+            "Step 2 (9:30–9:35 AM ET / 9:30–9:35 PM SGT): Execute SELLs & Raise Stops First",
+            value=False,
+            key="sidebar_chk_sells_stops",
+            help="Always execute SELL exits first to free up cash, and update any GTC Stop-Loss orders on holdings that reached +1R.",
+        )
+        st.checkbox(
+            "Step 3 (9:30–9:45 AM ET or Pre-Set Limit): Place BUYs + Attach GTC Stop/Target",
             value=False,
             key="sidebar_chk_copilot",
-            help="Check Tab 1 (Live Copilot) for any SELL exits, Stop-Loss ratchets, or 1%-risk BUY setups.",
+            help="Either pre-submit a Regular-Hours Day Limit order at the Max Chase price (with attached GTC Stop-Loss & Take-Profit bracket) before 9:30 AM ET, or place it live during 9:30–9:45 AM ET.",
         )
         st.checkbox(
-            "3. Confirm Broker Fills (If Traded)",
+            "Step 4 (After Execution): Click `✓ Sold` / `✓ Bought` in Tab 1",
             value=False,
             key="sidebar_chk_fills",
-            help="Click `✓ Bought` or `✓ Sold` in Live Copilot only after executing in your broker.",
+            help="Confirm only what actually filled in your broker so your shadow cash and holdings stay 100% accurate.",
         )
         st.caption(f"Last IDE AI Run: **`{last_ide_run_ts}`**")
 
@@ -716,6 +722,40 @@ def main() -> None:
                 st.session_state["_copilot_flash_msg"] = f"Undid {last_t['side']} {last_t['quantity']} {last_t['ticker']} @ ${float(last_t['fill_price']):.2f}."
                 st.rerun()
 
+        # Compact 4-Step Daily Playbook & "What If" Contingency Guide
+        with st.expander(
+            "⏱️ Daily Order of Operations (By Time) — What Comes First, When to Set Stop/Target, What If You Forget a Day or Exit Early?",
+            expanded=False,
+        ):
+            g_col1, g_col2 = st.columns(2)
+            with g_col1:
+                st.markdown(
+                    "**A. Exact Daily Sequence (In Order, `ET` & `SGT`)**\n\n"
+                    "1. **Step 1 — Before Market Open (`Anytime before 9:30 AM ET / 9:30 PM SGT`): Optional AI Check (`type run in IDE`)**\n"
+                    "   - **How AI changes decisions**: Searches live web news (`search_web`) for your checklist stocks—automatically **vetoing** any `BUY` setup with bearish breaking news (`sentiment <= -0.35`, e.g., guidance cut/probe) and **boosting** high-catalyst setups (`>= +0.25`).\n"
+                    "   - **If you skip `run`**: GitHub Actions already ran the deterministic engine at `5:30 AM SGT` (`21:30 UTC`), so your checklist below is **already updated and ready to trade**.\n"
+                    "2. **Step 2 — Priority #1 (`9:30–9:35 AM ET / 9:30–9:35 PM SGT`): Execute `SELL` Exits & `Raise Stop` Alerts First**\n"
+                    "   - Always execute **`SELL` signals first** at market open to free up cash and lock in P&L.\n"
+                    "   - Next, if any open holding shows **`Raise Stop → $X.XX`**, update your broker's existing `GTC Stop-Loss` order to that higher price.\n"
+                    "3. **Step 3 — Priority #2 (`9:30–9:45 AM ET` or Pre-Submitted Limit): Place `BUY` Orders + Attach Stop/Target Immediately**\n"
+                    "   - **Do I need to trade at `9:30:00` sharp?** **No!** You can either:\n"
+                    "     - *Option A (Set-and-Forget Before Open)*: Anytime before `9:30 AM ET`, submit a **Regular-Hours (`RTH`) Day Limit Order** at the **`Max Chase` price** (top of Buy-Zone) with an attached **OCO Bracket (`Stop-Loss` + `Take-Profit`)**. At `9:30 AM ET`, your broker fills you automatically if the open is $\\le$ `Max Chase`.\n"
+                    "     - *Option B (Live Open Window `9:30–9:45 AM ET`)*: Place a Limit order if the live price is inside the **`Buy-Zone ($Low – $MaxChase)`**.\n"
+                    "4. **Step 4 — After Broker Fill: Click `✓ Sold` / `✓ Bought` Below**"
+                )
+            with g_col2:
+                st.markdown(
+                    "**B. When to Set Stop/Target, What If You Forget a Day, or Exit Early?**\n\n"
+                    "- **When should I set `Stop-Loss` and `Take-Profit`?**\n"
+                    "  - **Immediately when placing your `BUY` order** (as an attached **Bracket / OCO order**, or as a **`GTC Stop-Loss` + `GTC Limit Take-Profit`** within 1 minute of your BUY fill). Because they are `GTC` (Good-Til-Cancelled), your broker protects your `-1%` max risk and upside target automatically every day even if you are away from your screen.\n"
+                    "- **What if I forget to run or place orders for a day?**\n"
+                    "  - **Forgot a `BUY`**: **Never chase it late.** Leave it—if the stock is still valid and inside the Buy-Zone tomorrow, it will appear on tomorrow's checklist with updated prices. If it gapped away, missing it saved you from chasing!\n"
+                    "  - **Forgot a `SELL`**: Your broker's `GTC Stop-Loss` and `Take-Profit` bracket continues protecting your downside/upside automatically, and the `SELL` card will remain at the top of your checklist tomorrow until you execute and click `✓ Sold`.\n"
+                    "- **What if I decide to exit a position early on my own?**\n"
+                    "  1. Sell the shares in your broker (and cancel any leftover open `GTC Stop/Target` orders for that stock if not linked via OCO).\n"
+                    "  2. Scroll to **Section 2 (`My Active Holdings`)** below, type the shares sold and your actual exit price, and click **`Close / Sell`**. Your cash and Realised P&L update in 1 click!"
+                )
+
         # Trading-Day Gate: If today is a weekend or US market holiday, state so and suppress suggestions by default
         show_signals_today = is_today_trading_day
         if not is_today_trading_day:
@@ -729,20 +769,22 @@ def main() -> None:
                 value=False,
                 key="copilot_preview_non_trading_day",
             )
-        elif latest_bar_date < today_iso:
+        else:
             st.caption(
                 f"🟢 **Today (`{today_iso}`) is an active US Trading Day.** "
-                f"Signals below are evaluated from the most recent completed market close (`{latest_bar_date}`). "
-                f"*Tip: Type **`run`** in the Antigravity IDE after market close to ingest the latest bars and live news catalysts.*"
+                f"**Execution Order**: **1)** Optional `run` in IDE before open → **2)** Execute `SELL` exits & `Raise Stop` updates first (`9:30–9:35 AM ET` / `9:30–9:35 PM SGT`) → **3)** Place `BUY` Limit orders inside Buy-Zone (`9:30–9:45 AM ET` or pre-set RTH Limit) with immediate `GTC Stop-Loss` & `Take-Profit` bracket."
             )
 
         sell_actions = raw_sell_actions if show_signals_today else []
         buy_actions = raw_buy_actions if show_signals_today else []
+        ratchet_alerts = [
+            h for h in hold_updates if h.get("stop_mode") and h.get("stop_mode") != "Initial ATR Stop"
+        ] if show_signals_today else []
 
         if show_signals_today:
-            # A. SELL Actions (Exits on confirmed positions)
+            # PRIORITY 1: SELL Actions (Exits on confirmed positions)
             if sell_actions:
-                st.markdown("##### SELL — Exit Signals on Your Holdings")
+                st.markdown("##### Priority 1 (At Open `9:30–9:35 AM ET` / `9:30–9:35 PM SGT`) — `SELL` Exit Signals on Your Holdings *(Execute First to Free Cash)*")
                 for idx, sa in enumerate(sell_actions):
                     sc_info, sc_qty, sc_px, sc_btn1, sc_btn2 = st.columns([2.6, 0.8, 0.9, 0.9, 0.7])
                     s_qty_sig = f"{sa['ticker']}_{sa['quantity_to_sell']}_{sa['reference_exit_price']}"
@@ -763,8 +805,8 @@ def main() -> None:
                     live_est_pnl = round((float(s_price) - float(sa["avg_entry_price"])) * int(s_qty), 2)
                     with sc_info:
                         st.warning(
-                            f"**SELL `{s_qty}` `{sa['ticker']}`** (`Est. P&L: ${live_est_pnl:+,.2f}`)\n\n"
-                            f"Your Entry `${sa['avg_entry_price']:.2f}` → Exit `${float(s_price):.2f}` · *{sa['reason']}*"
+                            f"**SELL `{s_qty}` `{sa['ticker']}`** (`Est. P&L: ${live_est_pnl:+,.2f}`) · *Execute at Open (`9:30–9:35 AM ET`)*\n\n"
+                            f"Your Entry `${sa['avg_entry_price']:.2f}` → Exit `${float(s_price):.2f}` · *{sa['reason']}* (Cancel any old GTC bracket after selling)"
                         )
                     with sc_btn1:
                         st.write("")
@@ -793,9 +835,21 @@ def main() -> None:
                             st.session_state["_copilot_flash_msg"] = f"Marked {sa['ticker']} as Hold for today (click 'Restore Skipped' to undo)."
                             st.rerun()
 
-            # B. BUY Actions (New entries sized to user's real cash & equity)
+            # PRIORITY 2: Stop-Loss Ratchet Alerts on Open Holdings
+            if ratchet_alerts:
+                st.markdown("##### Priority 2 (Anytime Today) — `Raise Stop-Loss` on Your Winning Holdings *(Lock In Profit Floor)*")
+                for r_h in ratchet_alerts:
+                    st.info(
+                        f"🛡️ **`{r_h['ticker']}` (`{r_h['quantity']} sh`) reached `+1R+` profit!** "
+                        f"Update your broker's `GTC Stop-Loss` order from `${float(r_h.get('initial_stop_price') or r_h['stop_loss_price']):.2f}` "
+                        f"→ **`${float(r_h['stop_loss_price']):.2f}`** (`{r_h['stop_mode']}`) · Keep `Take-Profit` at `${float(r_h['take_profit_price']):.2f}`."
+                    )
+
+            # PRIORITY 3: BUY Actions (New entries sized to user's real cash & equity)
             if buy_actions:
-                st.markdown("##### BUY — New Setups Sized to Your Account (1% Max Risk)")
+                st.markdown(
+                    "##### Priority 3 (`9:30–9:45 AM ET` / `9:30–9:45 PM SGT` or Pre-Set RTH Limit) — `BUY` New Setups *(Attach GTC Stop-Loss & Take-Profit Immediately)*"
+                )
                 for idx, ba in enumerate(buy_actions):
                     bc_info, bc_qty, bc_px, bc_btn1, bc_btn2 = st.columns([2.6, 0.8, 0.9, 0.9, 0.7])
                     b_sig = f"{ba['ticker']}_{ba['recommended_shares']}_{ba['reference_entry_price']}"
@@ -889,7 +943,13 @@ def main() -> None:
 
         st.markdown("---")
         # 2. My Confirmed Real Positions with 1-Click Partial/Full Close & Smart Pre-Filled Editor
-        st.markdown("#### 2. My Active Holdings & Stop-Loss Ratchet Status")
+        st.markdown("#### 2. My Active Holdings, Stop-Loss Ratchets & Early Exit Controls")
+        st.caption(
+            "**Want to exit a position early (or log a Stop-Loss / Take-Profit fill)?** "
+            "1) Sell in your broker & cancel any leftover GTC bracket for that stock → "
+            "2) Enter the **Shares** & **Exit Price ($)** on that row below → "
+            "3) Click **`Close`** (or **`Sell N`** for a partial exit) to immediately credit your Cash and log Realised P&L."
+        )
         if hold_updates:
             for h_idx, h in enumerate(hold_updates):
                 hc1, hc2, hc3, hc4, hc5 = st.columns([2.5, 1.3, 0.7, 0.8, 0.8])
