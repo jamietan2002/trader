@@ -229,6 +229,15 @@ def _build_strategy_readiness_rows(
                     f"{oos.get('total_return_pct', 0.0):+.2f}% "
                     f"(SPY {oos.get('benchmark_return_pct', 0.0):+.2f}%)"
                 ),
+                "Recent 6M (vs SPY & WR)": (
+                    f"{m.get('recent_6m_return_pct', 0.0):+.2f}% "
+                    f"(α {m.get('recent_6m_excess_vs_spy_pct', 0.0):+.2f}% · WR {m.get('recent_6m_win_rate_pct', m.get('win_rate_pct', 0.0)):.0f}%)"
+                ),
+                "SQN / Payoff / Win%": (
+                    f"SQN {m.get('sqn_score', 0.0):.2f} · "
+                    f"{m.get('payoff_ratio', 1.5):.2f}x · "
+                    f"{m.get('win_rate_pct', 0.0):.0f}%"
+                ),
                 "Sharpe / PF / WF": (
                     f"{m.get('sharpe_ratio', 0.0):.2f} / {m.get('profit_factor', 0.0):.2f} / "
                     f"{float(wf.get('consistency_ratio', 0.0))*100:.0f}%"
@@ -361,7 +370,7 @@ def main() -> None:
     )
 
     app = PlatformApplication()
-    _code_version = "2026-11-07-v10"
+    _code_version = "2026-11-08-v11"
     import api.server as _srv_mod
     if (
         getattr(_srv_mod, "_STREAMLIT_SYNC_VERSION", None) != _code_version
@@ -811,13 +820,23 @@ def main() -> None:
                     live_cost = round(int(b_qty) * float(b_price), 2)
                     live_weight = round((live_cost / max(1.0, float(real_acc["total_equity"]))) * 100.0, 1)
                     live_risk = round(max(0.0, (float(b_price) - adj_stop) * int(b_qty)), 0)
+                    buy_zone_str = ba.get("entry_buy_zone_str") or f"${ref_px * 0.995:.2f} – ${ref_px * 1.015:.2f}"
+                    ratchet_1r = float(ba.get("breakeven_ratchet_price") or round(float(b_price) + max(0.01, float(b_price) - adj_stop), 2))
+                    ai_sent_val = float(ba.get("ai_catalyst_sentiment", 0.0))
+                    ai_badge_html = (
+                        f" · <span style='color:#4ade80;font-weight:600;'>AI Catalyst {ai_sent_val:+.2f}</span>"
+                        if ai_sent_val >= 0.20
+                        else ""
+                    )
                     with bc_info:
                         st.markdown(
                             f"**BUY `{int(b_qty)}` `{ba['ticker']}` @ `${float(b_price):.2f}`** "
-                            f"(`~${live_cost:,.0f}` · `{live_weight:.1f}%` of account)  \n"
+                            f"(`~${live_cost:,.0f}` · `{live_weight:.1f}%` of account) · "
+                            f"**Buy-Zone Limit: `{buy_zone_str}`** (Open `9:30–9:45 AM ET`){ai_badge_html}  \n"
                             f"Set Broker Bracket: **Stop-Loss `${adj_stop:.2f}`** (`-${live_risk:,.0f}` max risk) · "
-                            f"**Take-Profit `${adj_tp:.2f}`** · *Max Hold `{ba['holding_horizon_days']}`*  \n"
-                            f"<span style='color:#94a3b8;font-size:0.82rem;'>{ba['strategy_id']} v{ba['strategy_version']} — {ba['reason']}</span>",
+                            f"**Take-Profit `${adj_tp:.2f}`** · *At `+1R (${ratchet_1r:.2f})` raise Stop → Breakeven; Time-Stop `{ba['holding_horizon_days']}`*  \n"
+                            f"<span style='color:#94a3b8;font-size:0.82rem;'>{ba['strategy_id']} v{ba['strategy_version']} — {ba['reason']} · "
+                            f"{ba.get('if_entry_not_hit_rule', 'Skip if open gaps above Buy-Zone ceiling.')}</span>",
                             unsafe_allow_html=True,
                         )
                     with bc_btn1:
@@ -1288,6 +1307,15 @@ def main() -> None:
                     st.write(
                         f"- **Out-of-Sample (`OOS`)**: `{oos.get('total_return_pct', 0.0):+.2f}%` vs SPY `{oos.get('benchmark_return_pct', 0.0):+.2f}%` "
                         f"(**OOS Excess: `{float(oos.get('total_return_pct', 0.0)) - float(oos.get('benchmark_return_pct', 0.0)):+.2f}%`**)"
+                    )
+                    st.write(
+                        f"- **Recent 6-Month Regime (`126d`)**: `{m.get('recent_6m_return_pct', 0.0):+.2f}%` "
+                        f"(vs SPY `{m.get('recent_6m_spy_return_pct', 0.0):+.2f}%` · **Excess `{m.get('recent_6m_excess_vs_spy_pct', 0.0):+.2f}%`** · "
+                        f"6M Win Rate `{m.get('recent_6m_win_rate_pct', m.get('win_rate_pct', 0.0)):.1f}%`)"
+                    )
+                    st.write(
+                        f"- **Rolling 6-Month Consistency & SQN**: `{m.get('rolling_6m_win_pct', 100.0):.1f}%` of rolling 6M windows profitable · "
+                        f"`SQN = {m.get('sqn_score', 0.0):.2f}` · `Payoff = {m.get('payoff_ratio', 1.5):.2f}x`"
                     )
                     st.write(
                         f"- **Jensen's Alpha & Beta**: `α = {m.get('alpha_annualised_pct', 0.0):+.2f}%/yr` · "

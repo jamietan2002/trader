@@ -210,8 +210,12 @@ class BacktestEngine:
                 )
                 curr_eq_open = cash + pos_val_open
 
-                # Adjust stop/target relative to actual open gap
+                # Adjust stop/target relative to actual open gap & enforce Opening Gap-Chase Cap
                 open_gap = bar.adj_open - entry_sig.close_at_signal
+                max_gap_atr = float(strategy.entry_rules.get("max_entry_gap_atr", 1.25))
+                if entry_sig.atr_at_signal and entry_sig.atr_at_signal > 0:
+                    if open_gap > max_gap_atr * entry_sig.atr_at_signal:
+                        continue
                 adj_stop = (
                     round(max(0.01, entry_sig.stop_loss_price + open_gap), 2)
                     if entry_sig.stop_loss_price

@@ -753,20 +753,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ` : '<div style="font-size:0.84rem;color:var(--muted);">No SELL exit triggers on your confirmed holdings today.</div>';
 
         document.getElementById('copilot-buy-box').innerHTML = buys.length ? `
-        <div style="font-size:0.84rem;font-weight:600;color:var(--accent);margin:10px 0 6px;">Step B — BUY Candidates (Sized to 1% Risk of Your Real Account)</div>
+        <div style="font-size:0.84rem;font-weight:600;color:var(--accent);margin:10px 0 6px;">Step B — BUY Candidates (Open Limit 9:30–9:45 AM ET · Sized to 1% Risk)</div>
         <table>
-          <thead><tr><th>Ticker</th><th>Strategy</th><th>Shares Bought</th><th>Fill Price ($)</th><th>Est. Cost</th><th>Stop-Loss</th><th>Take-Profit</th><th>Max Risk</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Ticker</th><th>Strategy</th><th>Shares</th><th>Fill Price ($)</th><th>Buy-Zone Limit</th><th>Stop / Target</th><th>+1R Ratchet / Plan</th><th>Actions</th></tr></thead>
           <tbody>
             ${buys.map((b, idx) => `
               <tr>
                 <td><strong>${b.ticker}</strong></td>
                 <td>${b.strategy_id} v${b.strategy_version}</td>
-                <td><input type="number" id="cop-buy-qty-${idx}" value="${b.recommended_shares}" min="1" style="width:70px;background:var(--bg);color:var(--text);border:1px solid var(--border);padding:4px 6px;border-radius:4px;" /></td>
-                <td><input type="number" id="cop-buy-px-${idx}" value="${b.reference_entry_price}" step="0.10" style="width:90px;background:var(--bg);color:var(--text);border:1px solid var(--border);padding:4px 6px;border-radius:4px;" /></td>
-                <td>${fmtUsd(b.estimated_cost_usd)} (${b.portfolio_weight_pct}%)</td>
-                <td class="neg">${fmtUsd(b.stop_loss_price)}</td>
-                <td class="pos">${fmtUsd(b.take_profit_price)}</td>
-                <td>-${fmtUsd(b.estimated_risk_usd)}</td>
+                <td><input type="number" id="cop-buy-qty-${idx}" value="${b.recommended_shares}" min="1" style="width:65px;background:var(--bg);color:var(--text);border:1px solid var(--border);padding:4px 6px;border-radius:4px;" /></td>
+                <td><input type="number" id="cop-buy-px-${idx}" value="${b.reference_entry_price}" step="0.10" style="width:85px;background:var(--bg);color:var(--text);border:1px solid var(--border);padding:4px 6px;border-radius:4px;" /></td>
+                <td><span class="badge badge-info">${b.entry_buy_zone_str || fmtUsd(b.reference_entry_price)}</span></td>
+                <td><span class="neg">${fmtUsd(b.stop_loss_price)}</span> / <span class="pos">${fmtUsd(b.take_profit_price)}</span></td>
+                <td style="font-size:0.75rem;color:#94a3b8;">+1R @ ${fmtUsd(b.breakeven_ratchet_price)} &rarr; Breakeven · ${b.holding_horizon_days}</td>
                 <td style="display:flex;gap:6px;">
                   <button class="btn" onclick="confirmCopilotBuy(${idx}, '${b.ticker}', '${b.strategy_id}', ${b.strategy_version}, ${b.recommended_shares}, ${b.reference_entry_price}, ${b.stop_loss_price || 0}, ${b.take_profit_price || 0}, '${b.sector}')">Confirm Bought</button>
                   <button class="btn btn-secondary" onclick="skipCopilotSignal('${b.signal_date}', '${b.strategy_id}', '${b.ticker}', 'BUY')">Skip</button>

@@ -165,6 +165,19 @@ def calculate_performance_metrics(
             "upside_capture_pct": 0.0,
             "downside_capture_pct": 0.0,
             "capture_ratio": 0.0,
+            "payoff_ratio": 0.0,
+            "sqn_score": 0.0,
+            "profit_per_day_held_pct": 0.0,
+            "recent_6m_return_pct": 0.0,
+            "recent_6m_spy_return_pct": 0.0,
+            "recent_6m_excess_vs_spy_pct": 0.0,
+            "recent_6m_win_rate_pct": 0.0,
+            "recent_6m_profit_factor": 0.0,
+            "recent_6m_trade_count": 0,
+            "rolling_6m_win_pct": 0.0,
+            "rolling_6m_beat_spy_pct": 0.0,
+            "rolling_6m_median_return_pct": 0.0,
+            "rolling_6m_worst_return_pct": 0.0,
         }
 
     equities = [float(pt["equity"]) for pt in equity_curve]
@@ -235,6 +248,86 @@ def calculate_performance_metrics(
     avg_hold_days = (
         sum(int(t.get("holding_days", 0)) for t in trades) / n_trades if n_trades > 0 else 0.0
     )
+
+    if abs(avg_loss_pct) > 1e-6:
+        payoff_ratio = avg_win_pct / abs(avg_loss_pct)
+    else:
+        payoff_ratio = 5.0 if avg_win_pct > 0 else 1.0
+
+    profit_per_day_held_pct = (expectancy_pct / max(1.0, avg_hold_days)) if n_trades > 0 else 0.0
+
+    # Van Tharp System Quality Number (SQN): (mean_trade_return / std_trade_return) * sqrt(min(N, 100))
+    sqn_score = 0.0
+    if n_trades >= 3:
+        t_rets = [float(t.get("return_pct", 0.0)) for t in trades]
+        t_mean = sum(t_rets) / n_trades
+        t_var = sum((x - t_mean) ** 2 for x in t_rets) / max(1, n_trades - 1)
+        t_std = math.sqrt(t_var)
+        if t_std > 1e-9:
+            sqn_score = (t_mean / t_std) * math.sqrt(min(n_trades, 100))
+
+    # 6-Month (126-Trading-Day) Recent Horizon & Rolling 6-Month Consistency Metrics
+    horizon_6m = min(126, n_days)
+    recent_start_idx = max(0, n_days - horizon_6m)
+    recent_start_dt = equity_curve[recent_start_idx]["date"]
+    recent_start_eq = equities[recent_start_idx]
+    recent_6m_return_pct = (
+        ((final_equity / recent_start_eq) - 1.0) * 100.0 if recent_start_eq > 0 else 0.0
+    )
+
+    recent_trades = [
+        t for t in trades if str(t.get("exit_date") or t.get("entry_date") or "") >= recent_start_dt
+    ]
+    recent_6m_trade_count = len(recent_trades)
+    if recent_6m_trade_count > 0:
+        r_wins = [t for t in recent_trades if float(t.get("net_pnl", 0.0)) > 0]
+        r_losses = [t for t in recent_trades if float(t.get("net_pnl", 0.0)) <= 0]
+        recent_6m_win_rate_pct = (len(r_wins) / recent_6m_trade_count) * 100.0
+        r_gp = sum(float(t["net_pnl"]) for t in r_wins)
+        r_gl = abs(sum(float(t["net_pnl"]) for t in r_losses))
+        recent_6m_profit_factor = (r_gp / r_gl) if r_gl > 1e-9 else (5.0 if r_gp > 0 else 0.0)
+    else:
+        recent_6m_win_rate_pct = win_rate * 100.0
+        recent_6m_profit_factor = profit_factor
+
+    recent_6m_spy_return_pct = 0.0
+    if spy_bars:
+        rec_spy = [b for b in spy_bars if recent_start_dt <= b.bar_date <= equity_curve[-1]["date"]]
+        if len(rec_spy) >= 2 and rec_spy[0].adj_close > 0:
+            recent_6m_spy_return_pct = ((rec_spy[-1].adj_close / rec_spy[0].adj_close) - 1.0) * 100.0
+    recent_6m_excess_vs_spy_pct = recent_6m_return_pct - recent_6m_spy_return_pct
+
+    rolling_6m_win_pct = 100.0 if total_return > 0 else 0.0
+    rolling_6m_beat_spy_pct = 100.0 if recent_6m_excess_vs_spy_pct >= 0 else 0.0
+    rolling_6m_median_return_pct = recent_6m_return_pct
+    rolling_6m_worst_return_pct = recent_6m_return_pct
+
+    if n_days > 126:
+        spy_close_by_dt = {b.bar_date: float(b.adj_close) for b in (spy_bars or []) if b.adj_close > 0}
+        roll_rets: List[float] = []
+        roll_beats = 0
+        roll_spy_count = 0
+        for idx in range(126, n_days):
+            eq_0 = equities[idx - 126]
+            eq_1 = equities[idx]
+            if eq_0 <= 0:
+                continue
+            r_6m = ((eq_1 / eq_0) - 1.0) * 100.0
+            roll_rets.append(r_6m)
+            dt_0 = equity_curve[idx - 126]["date"]
+            dt_1 = equity_curve[idx]["date"]
+            if dt_0 in spy_close_by_dt and dt_1 in spy_close_by_dt and spy_close_by_dt[dt_0] > 0:
+                s_6m = ((spy_close_by_dt[dt_1] / spy_close_by_dt[dt_0]) - 1.0) * 100.0
+                roll_spy_count += 1
+                if r_6m >= s_6m:
+                    roll_beats += 1
+        if roll_rets:
+            sorted_roll = sorted(roll_rets)
+            rolling_6m_win_pct = (sum(1 for r in roll_rets if r > 0.0) / len(roll_rets)) * 100.0
+            rolling_6m_median_return_pct = sorted_roll[len(sorted_roll) // 2]
+            rolling_6m_worst_return_pct = sorted_roll[0]
+            if roll_spy_count > 0:
+                rolling_6m_beat_spy_pct = (roll_beats / roll_spy_count) * 100.0
 
     # Exposure & Turnover
     invested_ratios = [
@@ -367,6 +460,19 @@ def calculate_performance_metrics(
         "upside_capture_pct": round(upside_capture_pct, 2),
         "downside_capture_pct": round(downside_capture_pct, 2),
         "capture_ratio": round(capture_ratio, 3),
+        "payoff_ratio": round(payoff_ratio, 2),
+        "sqn_score": round(sqn_score, 2),
+        "profit_per_day_held_pct": round(profit_per_day_held_pct, 3),
+        "recent_6m_return_pct": round(recent_6m_return_pct, 2),
+        "recent_6m_spy_return_pct": round(recent_6m_spy_return_pct, 2),
+        "recent_6m_excess_vs_spy_pct": round(recent_6m_excess_vs_spy_pct, 2),
+        "recent_6m_win_rate_pct": round(recent_6m_win_rate_pct, 2),
+        "recent_6m_profit_factor": round(recent_6m_profit_factor, 2),
+        "recent_6m_trade_count": int(recent_6m_trade_count),
+        "rolling_6m_win_pct": round(rolling_6m_win_pct, 1),
+        "rolling_6m_beat_spy_pct": round(rolling_6m_beat_spy_pct, 1),
+        "rolling_6m_median_return_pct": round(rolling_6m_median_return_pct, 2),
+        "rolling_6m_worst_return_pct": round(rolling_6m_worst_return_pct, 2),
         "final_equity": round(final_equity, 2),
     }
 

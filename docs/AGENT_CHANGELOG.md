@@ -4,6 +4,20 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-08] — 6-Month Deployment Horizon & SQN Metrics, Opening Gap-Chase Protection, AI Catalyst Veto/Booster & Exact Market-Open Buy-Zone Execution Rules
+
+### Summary
+- **6-Month (`126`-Trading-Day) Deployment Horizon & Van Tharp `SQN` Metrics (`calculate_performance_metrics` in `evaluation/metrics/performance.py`, `dashboard/streamlit_app.py`, `dashboard/ui_template.py`)**: Added **System Quality Number (`sqn_score` = $\frac{\mu_R}{\sigma_R}\sqrt{\min(N,100)}$)**, **Payoff Ratio (`payoff_ratio`)**, **Profit per Day Held (`profit_per_day_held_pct`)**, **Recent 6-Month Return & Excess vs. `SPY` (`recent_6m_return_pct`, `recent_6m_spy_return_pct`, `recent_6m_excess_vs_spy_pct`)**, **Recent 6-Month Win Rate & Profit Factor (`recent_6m_win_rate_pct`, `recent_6m_profit_factor`, `recent_6m_trade_count`)**, and **Rolling 6-Month Window Consistency (`rolling_6m_win_pct`, `rolling_6m_beat_spy_pct`, `rolling_6m_median_return_pct`, `rolling_6m_worst_return_pct`)** so strategies are evaluated on both multi-year regime survival and 6-month live forward profit consistency.
+- **Opening Gap-Chase Protection (`BacktestEngine` in `core/backtesting/engine.py`)**: Added causal opening gap-chase protection (`max_entry_gap_atr`, default `1.25 * ATR14`) so entries triggered at Day $T$ close are automatically skipped if Day $T+1$ open (`adj_open`) gaps up beyond the chase ceiling, preventing mean-reversion losses from buying exhausted overnight gaps.
+- **AI Catalyst Veto & Conviction Booster + Actionable Market-Open Buy-Zone Rules (`LiveTradingCopilotEngine.get_daily_action_plan` in `core/execution/paper_broker.py`, `dashboard/streamlit_app.py`, `dashboard/ui_template.py`)**: Wired point-in-time `market_catalysts` sentiment into `get_daily_action_plan()` to automatically veto BUY signals with bearish AI catalyst sentiment (`<= -0.35`, `AI_BEARISH_CATALYST_VETO`) and boost conviction for positive catalysts (`>= +0.25`). Added explicit **`entry_buy_zone_low`**, **`max_chase_price` (`entry_buy_zone_str`)**, **`breakeven_ratchet_price` (`+1.0R`)**, **`order_timing_guidance` (`9:30–9:45 AM ET Open Limit`)**, **`if_entry_not_hit_rule`**, and **`if_target_not_hit_rule`** to every Copilot BUY recommendation.
+
+### Modules Added / Modified
+- `evaluation/metrics/performance.py`, `core/backtesting/engine.py`, `core/execution/paper_broker.py`
+- `dashboard/streamlit_app.py`, `dashboard/ui_template.py`, `data/swing_trader.db`
+- `USER_GUIDE.md`, `docs/AGENT_CHANGELOG.md`, `tests/test_platform.py`
+
+---
+
 ## [2026-11-07] — Trading-Day-Aware Copilot Checklist, Top-of-Mind Tab Hierarchy, Unified Strategy Encyclopaedia & Direct IDE AI Prompt-to-Engine Bridge
 
 ### Summary

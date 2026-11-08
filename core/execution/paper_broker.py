@@ -1854,6 +1854,7 @@ class LiveTradingCopilotEngine:
                         ),
                         "holding_days": int(pos["holding_days"]),
                         "reason": exit_sig.reason,
+                        "order_timing_guidance": "Execute Market or Limit-at-Bid Order at Market Open (9:30–9:35 AM ET)",
                         "signal_date": session_date,
                     }
                 )
@@ -1982,12 +1983,45 @@ class LiveTradingCopilotEngine:
                 if idx < len(signals_by_strat[sid]):
                     interleaved.append(signals_by_strat[sid][idx])
 
+        # Load latest point-in-time AI / news catalyst sentiment per ticker (up to session_date)
+        catalyst_rows = self.db.fetch_all(
+            """
+            SELECT ticker, headline, summary, sentiment_score, source_name, published_date
+            FROM market_catalysts
+            WHERE published_date <= ?
+            ORDER BY published_date DESC, id DESC
+            LIMIT 250
+            """,
+            (session_date,),
+        )
+        latest_catalyst_by_tkr: Dict[str, Dict[str, Any]] = {}
+        for crow in catalyst_rows:
+            t_key = str(crow["ticker"]).upper()
+            if t_key not in latest_catalyst_by_tkr:
+                latest_catalyst_by_tkr[t_key] = dict(crow)
+
         for strat, ticker, latest_bar, sig in interleaved:
             if ticker in sim_open_map:
                 continue
             meta = universe_meta.get(ticker)
             sector = meta.sector if meta else "Technology"
             ref_price = round(float(latest_bar.adj_close), 2)
+
+            # AI / News Catalyst Veto & Conviction Booster
+            cat_info = latest_catalyst_by_tkr.get(ticker.upper())
+            ai_sent = float(cat_info["sentiment_score"]) if cat_info and cat_info.get("sentiment_score") is not None else 0.0
+            ai_note = str(cat_info.get("headline") or cat_info.get("summary") or "") if cat_info else ""
+            if cat_info and ai_sent <= -0.35:
+                vetoed_signals.append(
+                    {
+                        "ticker": ticker,
+                        "strategy": f"{strat.strategy_id} v{strat.version}",
+                        "reference_price": ref_price,
+                        "veto_rule": "AI_BEARISH_CATALYST_VETO",
+                        "reason": f"AI Catalyst Filter vetoed entry (Sentiment {ai_sent:+.2f}): {ai_note[:95]}",
+                    }
+                )
+                continue
 
             # Use Temporary RiskManager without DB alert logging so previewing recommendations doesn't spam paper risk_alerts
             preview_rm = PortfolioRiskManager(self.settings.risk, db=None)
@@ -2012,6 +2046,18 @@ class LiveTradingCopilotEngine:
                 shares = decision.recommended_shares
                 est_cost = round(shares * ref_price, 2)
                 weight_pct = round((est_cost / total_eq) * 100.0, 2)
+                atr_val = float(sig.atr_at_signal) if (sig.atr_at_signal and sig.atr_at_signal > 0) else round(ref_price * 0.02, 2)
+                stop_p = round(float(sig.stop_loss_price), 2) if sig.stop_loss_price else round(ref_price - 2.0 * atr_val, 2)
+                tp_p = round(float(sig.take_profit_price), 2) if sig.take_profit_price else round(ref_price + 3.5 * atr_val, 2)
+                buy_zone_low = round(max(0.01, ref_price - 0.25 * atr_val), 2)
+                max_chase_p = round(ref_price + 0.50 * atr_val, 2)
+                risk_per_sh = max(0.01, ref_price - stop_p)
+                ratchet_1r_p = round(ref_price + 1.0 * risk_per_sh, 2)
+
+                base_conv = float(sig.conviction_score) * 100.0
+                if ai_sent >= 0.25:
+                    base_conv = min(99.0, base_conv + min(8.0, ai_sent * 12.0))
+
                 buy_actions.append(
                     {
                         "action": "BUY",
@@ -2022,14 +2068,23 @@ class LiveTradingCopilotEngine:
                         "strategy_name": strat.name,
                         "recommended_shares": shares,
                         "reference_entry_price": ref_price,
+                        "entry_buy_zone_low": buy_zone_low,
+                        "max_chase_price": max_chase_p,
+                        "entry_buy_zone_str": f"${buy_zone_low:.2f} – ${max_chase_p:.2f}",
+                        "breakeven_ratchet_price": ratchet_1r_p,
                         "estimated_cost_usd": est_cost,
                         "portfolio_weight_pct": weight_pct,
-                        "stop_loss_price": round(float(sig.stop_loss_price), 2) if sig.stop_loss_price else None,
-                        "take_profit_price": round(float(sig.take_profit_price), 2) if sig.take_profit_price else None,
+                        "stop_loss_price": stop_p,
+                        "take_profit_price": tp_p,
                         "estimated_risk_usd": decision.estimated_risk_usd,
                         "risk_pct_of_equity": round((decision.estimated_risk_usd / total_eq) * 100.0, 2),
                         "holding_horizon_days": f"{strat.holding_period_min_days}–{strat.holding_period_max_days} trading days",
-                        "conviction_score": round(float(sig.conviction_score) * 100.0, 0),
+                        "conviction_score": round(base_conv, 0),
+                        "ai_catalyst_sentiment": round(ai_sent, 2),
+                        "ai_catalyst_note": ai_note,
+                        "order_timing_guidance": "Place Limit Order for Market Open (9:30–9:45 AM ET); NEVER trade illiquid pre-market/after-hours.",
+                        "if_entry_not_hit_rule": f"Cancel/Skip if open gaps above Max Chase (${max_chase_p:.2f}) or breaks below ${buy_zone_low:.2f}.",
+                        "if_target_not_hit_rule": f"At +1.0R (${ratchet_1r_p:.2f}), raise Stop to Breakeven (${ref_price:.2f}); exit on Day {strat.holding_period_max_days} (Time-Stop) if Target (${tp_p:.2f}) not hit.",
                         "reason": sig.reason,
                         "signal_date": session_date,
                     }
