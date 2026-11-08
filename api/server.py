@@ -37,6 +37,18 @@ class PlatformApplication:
         self.orchestrator = AutonomousWorkflowOrchestrator(self.settings, self.db)
 
     def get_dashboard_state(self) -> Dict[str, Any]:
+        latest_dt = None
+        if hasattr(self.orchestrator.market_data, "ensure_latest_market_data"):
+            latest_dt = self.orchestrator.market_data.ensure_latest_market_data()
+        reports = self.orchestrator.research_agent.get_latest_reports(limit=15)
+        latest_rep_dt = str(reports[0].get("as_of_timestamp") or "")[:10] if reports else ""
+        if latest_dt and (not reports or latest_rep_dt < str(latest_dt)):
+            try:
+                self.orchestrator.research_agent.run_market_scan(as_of_date=latest_dt, top_n=8)
+                reports = self.orchestrator.research_agent.get_latest_reports(limit=15)
+            except Exception as exc:
+                logger.warning(f"Auto market scan refresh skipped: {exc}")
+
         strats_dicts = [s.to_dict() for s in self.orchestrator.registry.list_strategies()]
         return {
             "settings": self.settings.sanitized_dict(),
@@ -48,7 +60,7 @@ class PlatformApplication:
             "snapshots": self.orchestrator.paper_engine.get_portfolio_snapshots(),
             "strategies": strats_dicts,
             "experiments": self.orchestrator.registry.list_experiments(),
-            "research_reports": self.orchestrator.research_agent.get_latest_reports(limit=15),
+            "research_reports": reports,
             "proposals": self.orchestrator.analyst_agent.list_proposals(limit=15),
             "risk_alerts": self.orchestrator.risk_agent.get_recent_alerts(limit=30),
             "jobs": self.orchestrator.get_job_history(limit=30),

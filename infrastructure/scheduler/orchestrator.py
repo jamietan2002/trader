@@ -169,7 +169,7 @@ class AutonomousWorkflowOrchestrator:
     def bootstrap_baseline_system(
         self,
         start_date: str = "2023-01-03",
-        end_date: str = "2025-06-30",
+        end_date: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Seed market data, register the 3 baseline strategies, backtest & validate them, and run initial paper trading."""
         # 1. Ingest historical US equity data
@@ -261,6 +261,9 @@ class AutonomousWorkflowOrchestrator:
                 "status": "MARKET_HOLIDAY_OR_WEEKEND",
                 "message": f"{trading_date} is not a NYSE/NASDAQ trading session.",
             }
+
+        if hasattr(self.market_data, "ensure_latest_market_data"):
+            self.market_data.ensure_latest_market_data(target_date=trading_date)
 
         # 1. Pre-Market: Market Research Scan
         pre_market_res = self.run_idempotent_job(
@@ -458,6 +461,9 @@ class AutonomousWorkflowOrchestrator:
 
         if not self.registry.list_strategies():
             self.bootstrap_baseline_system()
+
+        if hasattr(self.market_data, "ensure_latest_market_data"):
+            self.market_data.ensure_latest_market_data(target_date=trading_date)
 
         spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker)
         latest_date = trading_date or (spy_bars[-1].bar_date if spy_bars else date.today().isoformat())

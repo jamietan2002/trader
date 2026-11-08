@@ -413,7 +413,7 @@ def main() -> None:
     st.markdown(CLASSY_MINIMAL_CSS, unsafe_allow_html=True)
 
     app = PlatformApplication()
-    _code_version = "2026-11-08-v16"
+    _code_version = "2026-11-08-v17"
     import api.server as _srv_mod
     if (
         getattr(_srv_mod, "_STREAMLIT_SYNC_VERSION", None) != _code_version
@@ -602,7 +602,13 @@ def main() -> None:
         real_history = copilot_data.get("trade_history") or []
         latest_bar_date = str(plan.get("session_date") or today_iso)
         universe_tickers = sorted({t for s in strats for t in s["universe"]} | {p["ticker"] for p in real_positions})
+        db_latest_rows = app.db.fetch_all(
+            "SELECT ticker, close FROM market_bars_daily "
+            "WHERE (ticker, bar_date) IN (SELECT ticker, MAX(bar_date) FROM market_bars_daily GROUP BY ticker)"
+        )
         latest_px_by_tkr = {r["ticker"]: float(r["current_price"]) for r in state["research_reports"]}
+        for _dbr in db_latest_rows:
+            latest_px_by_tkr[str(_dbr["ticker"])] = float(_dbr["close"])
 
         # 1. KPI Strip (100% Ledger-Calculated)
         total_real_pnl = round(float(real_acc["realised_pnl"]) + float(real_acc["unrealised_pnl"]), 2)
@@ -683,7 +689,7 @@ def main() -> None:
                 lt_default_px = round(latest_px_by_tkr.get(lt_tkr, 150.0), 2)
                 lt_c3, lt_c4, lt_c5 = st.columns(3)
                 lt_qty = lt_c3.number_input("Shares", min_value=1, value=10, step=1, key="lt_qty_inp")
-                lt_px = lt_c4.number_input("Fill Price ($)", min_value=0.01, value=lt_default_px, step=0.50, key=f"lt_px_inp_{lt_tkr}")
+                lt_px = lt_c4.number_input("Fill Price ($)", min_value=0.01, value=lt_default_px, step=0.50, key=f"lt_px_inp_{lt_tkr}_{latest_bar_date}")
                 lt_fee = lt_c5.number_input("Fees ($)", min_value=0.0, value=0.0, step=0.50, key="lt_fee_inp")
                 lt_c6, lt_c7, lt_c8 = st.columns(3)
                 lt_date = lt_c6.text_input("Date", value=latest_bar_date, key="lt_date_inp")
@@ -731,11 +737,10 @@ def main() -> None:
         with ctrl_c5:
             with st.popover("? Rules", width="stretch"):
                 st.markdown(
-                    "**Daily Execution Rules (`ET` / `SGT`)**\n\n"
-                    "1. **Pre-Open (`< 9:30 AM ET`)**: Optional — type `run` in IDE for live news catalyst filtering. If skipped, GitHub Actions (`5:30 AM SGT`) already updated your signals.\n"
-                    "2. **At Open (`9:30–9:35 AM ET`)**: Execute **`SELL` exits first** to free cash, and raise `GTC Stop-Loss` orders on holdings at `+1R`.\n"
-                    "3. **New Entries (`9:30–9:45 AM ET` or Pre-Set RTH Limit)**: Place a **Day Limit Order** inside the **`Buy-Zone ($Low – $MaxChase)`** and attach your **`GTC Stop-Loss` + `GTC Take-Profit`** bracket immediately.\n"
-                    "4. **Missed a Day?**: Never chase a `BUY` that gapped above `Max Chase`. Existing holdings remain protected by your broker's `GTC` bracket."
+                    "**Daily Execution & Next-Session Preview (`ET` / `SGT`)**\n\n"
+                    f"1. **Why Setups Are Known in Advance (`Day T Close → Day T+1 Open`)**: Swing signals are computed from the last completed daily close (`{latest_bar_date}` at `4:00 PM ET`). Once that daily bar closes, the `BUY`/`SELL` triggers, `Buy-Zone ($Low – $MaxChase)`, `Stop-Loss`, and `Take-Profit` for the next market open (`{next_trading_day_iso}` at `9:30 AM ET`) are deterministically locked in.\n"
+                    "2. **What Changes If You Type `run` in IDE?**: Running `run` before market open scans live breaking web news (`search_web`)—**vetoing/removing** any `BUY` setup with bearish breaking news (`sentiment <= -0.35`), **boosting** positive catalysts (`>= +0.25`), and testing candidate strategy upgrades (`v+1`).\n"
+                    "3. **What If You Do NOT Run `run`?**: Nothing breaks—GitHub Actions (`21:30 UTC` / `5:30 AM SGT` Mon–Fri) already ingests the latest close and computes your deterministic `#1 Champion` checklist. Using a **Day Limit Order inside the Buy-Zone (`<= Max Chase`)** at `9:30–9:45 AM ET` automatically protects you if a stock gaps overnight."
                 )
 
         st.markdown("---")
@@ -759,13 +764,20 @@ def main() -> None:
             nt_c1, nt_c2 = st.columns([3.1, 1.4])
             nt_c1.caption(
                 f"Markets closed today (**{market_status_reason}**). No orders should be placed today. "
-                f"Next session: **`{next_trading_day_iso}`** (latest close: `{latest_bar_date}`)."
+                f"Next session: **`{next_trading_day_iso}`** (computed from completed close: **`{latest_bar_date}`**)."
             )
             show_signals_today = nt_c2.checkbox(
                 f"Preview `{next_trading_day_iso}` setups",
                 value=False,
                 key="copilot_preview_non_trading_day",
             )
+            if show_signals_today:
+                st.caption(
+                    f"**How Preview Works (`{latest_bar_date}` Close → `{next_trading_day_iso}` Open)**: "
+                    f"Setups below are pre-computed from the completed `{latest_bar_date}` (`4:00 PM ET`) daily candle for execution at the `{next_trading_day_iso}` (`9:30–9:45 AM ET`) open. "
+                    f"**If you type `run` in IDE** before `{next_trading_day_iso}` open, live web news (`search_web`) will veto setups with bearish breaking news (`<= -0.35`) and boost positive catalysts. "
+                    f"**If you don't run `run`**, this deterministic checklist is already complete—place your Day Limit Order inside the **Buy-Zone (`<= Max Chase`)** so overnight gaps above Max Chase are automatically skipped."
+                )
 
         sell_actions = raw_sell_actions if show_signals_today else []
         buy_actions = raw_buy_actions if show_signals_today else []
@@ -778,7 +790,7 @@ def main() -> None:
                 st.caption("PRIORITY 1 · SELL EXITS (9:30–9:35 AM ET — EXECUTE FIRST)")
                 for idx, sa in enumerate(sell_actions):
                     sc_info, sc_qty, sc_px, sc_btn1, sc_btn2 = st.columns([2.7, 0.75, 0.85, 0.85, 0.65])
-                    s_qty_sig = f"{sa['ticker']}_{sa['quantity_to_sell']}_{sa['reference_exit_price']}"
+                    s_qty_sig = f"{sa['ticker']}_{sa['quantity_to_sell']}_{sa['reference_exit_price']}_{sa.get('signal_date', latest_bar_date)}"
                     s_qty = sc_qty.number_input(
                         "Shares",
                         min_value=1,
@@ -797,7 +809,7 @@ def main() -> None:
                     with sc_info:
                         st.markdown(
                             f"**SELL `{s_qty}` `{sa['ticker']}`** · Est. P&L **`${live_est_pnl:+,.2f}`**  \n"
-                            f"<span style='color:#94a3b8;font-size:0.82rem;'>Entry `${sa['avg_entry_price']:.2f}` → Exit `${float(s_price):.2f}` · "
+                            f"<span style='color:#94a3b8;font-size:0.82rem;'>Entry `${sa['avg_entry_price']:.2f}` → Exit `${float(s_price):.2f}` (Close `{sa.get('signal_date', latest_bar_date)}`) · "
                             f"{sa['strategy_id']} v{sa['strategy_version']} · {sa['reason']}</span>",
                             unsafe_allow_html=True,
                         )
@@ -840,7 +852,7 @@ def main() -> None:
                 st.caption("PRIORITY 3 · NEW BUY ENTRIES (9:30–9:45 AM ET LIMIT IN BUY-ZONE + GTC BRACKET)")
                 for idx, ba in enumerate(buy_actions):
                     bc_info, bc_qty, bc_px, bc_btn1, bc_btn2 = st.columns([2.7, 0.75, 0.85, 0.85, 0.65])
-                    b_sig = f"{ba['ticker']}_{ba['recommended_shares']}_{ba['reference_entry_price']}"
+                    b_sig = f"{ba['ticker']}_{ba['recommended_shares']}_{ba['reference_entry_price']}_{ba.get('signal_date', latest_bar_date)}"
                     b_qty = bc_qty.number_input(
                         "Shares",
                         min_value=1,
@@ -873,7 +885,7 @@ def main() -> None:
                     with bc_info:
                         st.markdown(
                             f"**BUY `{int(b_qty)}` `{ba['ticker']}` @ `${float(b_price):.2f}`** "
-                            f"(`${live_cost:,.0f}` · `{live_weight:.1f}%`) · "
+                            f"(`${live_cost:,.0f}` · `{live_weight:.1f}%` · Close `{ba.get('signal_date', latest_bar_date)}`) · "
                             f"Buy-Zone **`{buy_zone_str}`**{ai_badge_html}  \n"
                             f"<span style='color:#cbd5e1;font-size:0.83rem;'>Bracket: <strong>Stop ${adj_stop:.2f}</strong> (-${live_risk:,.0f} risk) · "
                             f"<strong>Target ${adj_tp:.2f}</strong> · +1R Breakeven ${ratchet_1r:.2f} · {ba['holding_horizon_days']}</span>  \n"

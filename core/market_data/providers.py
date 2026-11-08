@@ -571,13 +571,59 @@ class MarketDataService:
         else:
             self.provider = LocalSeededDataProvider()
 
+    def _is_live_api_configured(self) -> bool:
+        if self.provider.provider_name == "alpaca":
+            return bool(self.settings.alpaca_api_key and self.settings.alpaca_secret_key)
+        if self.provider.provider_name == "polygon":
+            return bool(self.settings.polygon_api_key)
+        return False
+
+    def ensure_latest_market_data(self, target_date: Optional[str] = None) -> Optional[str]:
+        """Ensure local SQLite market_bars_daily is synced up to the latest completed US trading session."""
+        row = self.db.fetch_one(
+            "SELECT MAX(bar_date) AS max_dt, MIN(provider_source) AS min_src FROM market_bars_daily WHERE ticker = ?",
+            (self.settings.benchmark_ticker,),
+        )
+        max_dt = str(row["max_dt"]) if (row and row.get("max_dt")) else None
+        min_src = str(row["min_src"]) if (row and row.get("min_src")) else None
+
+        if not self._is_live_api_configured():
+            if max_dt is None:
+                self.ingest_universe_and_history(start_date="2023-01-03", end_date=target_date or "2025-06-30")
+                row2 = self.db.fetch_one(
+                    "SELECT MAX(bar_date) AS max_dt FROM market_bars_daily WHERE ticker = ?",
+                    (self.settings.benchmark_ticker,),
+                )
+                return str(row2["max_dt"]) if (row2 and row2.get("max_dt")) else None
+            return max_dt
+
+        ref_dt = date.fromisoformat(target_date[:10]) if target_date else date.today()
+        # On a weekend/holiday, the latest completed session is the prior trading day (e.g. Friday).
+        # On a trading day, require at least the previous trading day's close (or today's close if available).
+        include_same = not USTradingCalendar.is_trading_day(ref_dt)
+        expected_min_session = USTradingCalendar.previous_trading_day(ref_dt, include_same_day=include_same)
+
+        if max_dt is None or min_src != self.provider.provider_name or max_dt < expected_min_session:
+            try:
+                self.ingest_universe_and_history(start_date="2023-01-03", end_date=ref_dt.isoformat())
+                row2 = self.db.fetch_one(
+                    "SELECT MAX(bar_date) AS max_dt FROM market_bars_daily WHERE ticker = ?",
+                    (self.settings.benchmark_ticker,),
+                )
+                return str(row2["max_dt"]) if (row2 and row2.get("max_dt")) else max_dt
+            except Exception as exc:
+                logger.warning(f"Auto-refresh of market data failed ({exc}); using cached DB bars ({max_dt}).")
+        return max_dt
+
     def ingest_universe_and_history(
         self,
         start_date: str = "2023-01-03",
-        end_date: str = "2025-06-30",
+        end_date: Optional[str] = None,
         tickers: Optional[Sequence[str]] = None,
     ) -> Dict[str, Any]:
         """Ingest universe metadata, daily bars, earnings events, and catalysts into local DB."""
+        if end_date is None:
+            end_date = date.today().isoformat() if self._is_live_api_configured() else "2025-06-30"
         universe = self.provider.get_universe()
         if tickers is not None:
             allowed = set(tickers) | {self.settings.benchmark_ticker}
@@ -585,11 +631,27 @@ class MarketDataService:
 
         now_iso = utc_now_iso()
 
-        # Check if the provider switched (e.g., from local_seeded to alpaca) and purge mixed-provider bars
+        # Check if the primary benchmark provider switched (e.g., from local_seeded to alpaca) and purge mixed-provider bars.
+        # Never downgrade existing live API bars (alpaca/polygon) back to local_seeded on read-only hosts without API keys.
         existing_sources = [
             r["provider_source"]
-            for r in self.db.fetch_all("SELECT DISTINCT provider_source FROM market_bars_daily")
+            for r in self.db.fetch_all(
+                "SELECT DISTINCT provider_source FROM market_bars_daily WHERE ticker = ?",
+                (self.settings.benchmark_ticker,),
+            )
         ]
+        if self.provider.provider_name == "local_seeded" and any(s in ("alpaca", "polygon") for s in existing_sources):
+            logger.info(
+                f"Preserving existing live market bars ({existing_sources}) instead of overwriting with local_seeded."
+            )
+            return {
+                "provider": existing_sources[0],
+                "universe_count": len(universe),
+                "bars_ingested": 0,
+                "earnings_ingested": 0,
+                "catalysts_ingested": 0,
+                "date_range": [start_date, end_date],
+            }
         if existing_sources and any(s != self.provider.provider_name for s in existing_sources):
             logger.info(
                 f"Data provider changed from {existing_sources} to {self.provider.provider_name}; "

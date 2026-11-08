@@ -1302,6 +1302,9 @@ class LiveTradingCopilotEngine:
         if not rows:
             return
         now_iso = utc_now_iso()
+        if as_of_date is None and hasattr(self.market_data, "ensure_latest_market_data"):
+            self.market_data.ensure_latest_market_data()
+
         spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker, end_date=as_of_date)
         for r in rows:
             ticker = r["ticker"]
@@ -2184,6 +2187,9 @@ class LiveTradingCopilotEngine:
             calendar_today_dt, include_same_day=is_today_trading_day
         )
 
+        if as_of_date is None and hasattr(self.market_data, "ensure_latest_market_data"):
+            self.market_data.ensure_latest_market_data()
+
         spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker, end_date=as_of_date)
         session_date = spy_bars[-1].bar_date if spy_bars else calendar_today_str
         spy_inds = compute_indicator_series(spy_bars) if spy_bars else {}
@@ -2358,8 +2364,12 @@ class LiveTradingCopilotEngine:
 
         # Compute sector momentum rank map for SECTOR_ROTATION strategies
         candidate_strats_for_scan = list(deduped_strats)
-        if not enabled_keys and len(ranked_champions) >= 2 and ranked_champions[1].strategy_id not in {s.strategy_id for s in candidate_strats_for_scan}:
-            candidate_strats_for_scan.append(ranked_champions[1])
+        if not enabled_keys:
+            existing_ids = {s.strategy_id for s in candidate_strats_for_scan}
+            for rc in ranked_champions[1:]:
+                if rc.strategy_id not in existing_ids:
+                    candidate_strats_for_scan.append(rc)
+                    existing_ids.add(rc.strategy_id)
         all_universe_tickers = sorted({t for s in candidate_strats_for_scan for t in s.universe if t != self.settings.benchmark_ticker})
         bars_by_tkr: Dict[str, List[DailyBar]] = {}
         inds_by_tkr: Dict[str, Dict[str, Any]] = {}
@@ -2427,44 +2437,49 @@ class LiveTradingCopilotEngine:
             if bucket:
                 signals_by_strat[strat.strategy_id] = bucket
 
-        # Automatic Regime Fallback: if #1 Champion has 0 signals today (e.g. market pullback), check #2 Champion
+        # Automatic Regime Fallback: if #1 Champion has 0 signals today (e.g. market pullback), prioritize MEAN_REVERSION then remaining champions
         if not signals_by_strat and not enabled_keys and len(ranked_champions) >= 2:
-            fallback_runner = ranked_champions[1]
-            bucket_fb: List[Tuple[StrategyConfig, str, DailyBar, Any]] = []
-            for ticker in fallback_runner.universe:
-                if ticker == self.settings.benchmark_ticker or ticker in sim_open_map:
-                    continue
-                if (fallback_runner.strategy_id, ticker, "BUY") in dismissed_set:
-                    continue
-                bars = bars_by_tkr.get(ticker)
-                if not bars or len(bars) < 25:
-                    continue
-                latest_bar = bars[-1]
-                inds = inds_by_tkr.get(ticker) or {}
-                ind_latest = inds.get(latest_bar.bar_date)
-                if ind_latest is None:
-                    continue
-                pead_lookback = max(20, int(fallback_runner.entry_rules.get("max_days_since_earnings", 10)) + 5)
-                recent_ev = self.market_data.get_point_in_time_earnings(
-                    ticker, latest_bar.bar_date, lookback_days=pead_lookback
-                )
-                m_meta = universe_meta.get(ticker)
-                sec_name = m_meta.sector if m_meta else "Technology"
-                sec_rank = sector_rank_map.get(sec_name, 1)
-                sig = StrategySignalEngine.evaluate_entry(
-                    config=fallback_runner,
-                    ind=ind_latest,
-                    spy_ind=spy_inds.get(latest_bar.bar_date),
-                    recent_earnings=recent_ev,
-                    sector_rs_rank=sec_rank,
-                )
-                if sig is not None:
-                    bucket_fb.append((fallback_runner, ticker, latest_bar, sig))
-            bucket_fb.sort(key=lambda item: float(item[3].conviction_score), reverse=True)
-            if bucket_fb:
-                signals_by_strat[fallback_runner.strategy_id] = bucket_fb
-                active_champion_info["fallback_triggered"] = True
-                active_champion_info["fallback_strategy"] = f"{fallback_runner.name} ({fallback_runner.strategy_id} v{fallback_runner.version})"
+            fallback_candidates = sorted(
+                ranked_champions[1:],
+                key=lambda s: (0 if s.strategy_family == "MEAN_REVERSION" else 1, -_champion_score(s)),
+            )
+            for fallback_runner in fallback_candidates:
+                bucket_fb: List[Tuple[StrategyConfig, str, DailyBar, Any]] = []
+                for ticker in fallback_runner.universe:
+                    if ticker == self.settings.benchmark_ticker or ticker in sim_open_map:
+                        continue
+                    if (fallback_runner.strategy_id, ticker, "BUY") in dismissed_set:
+                        continue
+                    bars = bars_by_tkr.get(ticker)
+                    if not bars or len(bars) < 25:
+                        continue
+                    latest_bar = bars[-1]
+                    inds = inds_by_tkr.get(ticker) or {}
+                    ind_latest = inds.get(latest_bar.bar_date)
+                    if ind_latest is None:
+                        continue
+                    pead_lookback = max(20, int(fallback_runner.entry_rules.get("max_days_since_earnings", 10)) + 5)
+                    recent_ev = self.market_data.get_point_in_time_earnings(
+                        ticker, latest_bar.bar_date, lookback_days=pead_lookback
+                    )
+                    m_meta = universe_meta.get(ticker)
+                    sec_name = m_meta.sector if m_meta else "Technology"
+                    sec_rank = sector_rank_map.get(sec_name, 1)
+                    sig = StrategySignalEngine.evaluate_entry(
+                        config=fallback_runner,
+                        ind=ind_latest,
+                        spy_ind=spy_inds.get(latest_bar.bar_date),
+                        recent_earnings=recent_ev,
+                        sector_rs_rank=sec_rank,
+                    )
+                    if sig is not None:
+                        bucket_fb.append((fallback_runner, ticker, latest_bar, sig))
+                bucket_fb.sort(key=lambda item: float(item[3].conviction_score), reverse=True)
+                if bucket_fb:
+                    signals_by_strat[fallback_runner.strategy_id] = bucket_fb
+                    active_champion_info["fallback_triggered"] = True
+                    active_champion_info["fallback_strategy"] = f"{fallback_runner.name} ({fallback_runner.strategy_id} v{fallback_runner.version})"
+                    break
 
         strat_order = sorted(
             signals_by_strat.keys(),

@@ -4,6 +4,26 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-08] — Live Market Bar Auto-Sync (`ensure_latest_market_data`), Pullback Regime Dip-Buying & Next-Session Preview Clarity
+
+### Summary
+- **Fixed Stale Preview Setup Prices (`core/market_data/providers.py`, `core/market_data/models.py`, `core/execution/paper_broker.py`, `infrastructure/scheduler/orchestrator.py`, `api/server.py`)**:
+  - Added `USTradingCalendar.previous_trading_day()` and `MarketDataService.ensure_latest_market_data()` to automatically sync `market_bars_daily` up to the latest completed US market close (`2026-11-06` via `alpaca`: `SPY $735.40`, `AAPL $342.41`, `MSFT $530.58`, `NVDA $186.70`, `AMZN $259.45`, `LLY $1,354.77`, `GS $865.97`, etc.) instead of falling back to hardcoded `2025-06-30` (`local_seeded`) bars.
+  - Protected `MarketDataService.ingest_universe_and_history()` so read-only environments without API keys (such as Streamlit Community Cloud when viewing the committed SQLite DB) never overwrite existing `alpaca`/`polygon` bars with `local_seeded` data.
+  - Updated `dashboard/streamlit_app.py` (`_code_version = "2026-11-08-v17"`) to source `latest_px_by_tkr` directly from `market_bars_daily` (`MAX(bar_date)` per ticker), include `signal_date` in widget keys so Streamlit never serves cached stale prices, and display `Close YYYY-MM-DD` on every setup row.
+- **Bull-Market Pullback Regime Handling (`core/strategies/registry.py`, `core/execution/paper_broker.py`)**:
+  - Updated `StrategySignalEngine.evaluate_entry()` and `LiveTradingCopilotEngine.get_daily_action_plan()` so that when `SPY` pulls back below `SMA50` while holding above its primary `SMA200` bull trend (`SPY $735.40 > SMA200 $727.61`), the automatic regime fallback prioritizes `MEAN_REVERSION` (`strat_mean_reversion_bb v1`) to surface institutional dip-buying setups (`AAPL`, `MSFT`, `LLY`).
+- **Clear Next-Session Preview & AI Flow Guidance (`dashboard/streamlit_app.py`)**:
+  - Added concise inline guidance below `Preview next_trading_day setups` and inside `? Rules` explaining why next-session setups are known after the prior day's `4:00 PM ET` close (`Day T Close → Day T+1 Open`), how running `run` in the IDE applies live web news catalyst vetoes/boosts, and why skipping `run` remains safe when using `Buy-Zone` limit orders.
+
+### Modules Added / Modified
+- `core/market_data/models.py`, `core/market_data/providers.py`
+- `core/strategies/registry.py`, `core/execution/paper_broker.py`
+- `infrastructure/scheduler/orchestrator.py`, `api/server.py`
+- `dashboard/streamlit_app.py`, `data/swing_trader.db`, `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-08] — Minimalist Classy Institutional UI Redesign & Full Ledger-Replay `undo_last_trade` / `adjust_cash_deposit_withdrawal`
 
 ### Summary

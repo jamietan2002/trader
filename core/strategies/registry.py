@@ -121,10 +121,16 @@ class StrategySignalEngine:
         if ind.atr_14 is None or ind.atr_14 <= 0 or ind.close <= 0:
             return None
 
-        # Optional SPY market regime filter (e.g., require SPY > SMA50 or realized vol cap)
+        # Optional SPY market regime filter (require SPY > SMA50; allow MEAN_REVERSION dip-buying or +12% RS leaders when SPY > SMA200)
         if rules.get("require_spy_above_sma50", False) and spy_ind is not None:
             if spy_ind.sma_50 is not None and spy_ind.close < spy_ind.sma_50:
-                return None
+                spy_above_200 = spy_ind.sma_200 is not None and spy_ind.close >= spy_ind.sma_200
+                is_pullback_or_leader = (
+                    family == StrategyFamily.MEAN_REVERSION.value
+                    or (ind.rs_vs_spy_20d is not None and ind.rs_vs_spy_20d >= 12.0)
+                )
+                if not (spy_above_200 and is_pullback_or_leader):
+                    return None
         max_spy_vol = rules.get("max_spy_realised_vol_20d")
         if max_spy_vol is not None and spy_ind is not None and spy_ind.realised_vol_20d_annualised is not None:
             if spy_ind.realised_vol_20d_annualised > float(max_spy_vol):

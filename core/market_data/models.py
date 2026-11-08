@@ -155,6 +155,15 @@ class USTradingCalendar:
         return curr.isoformat()
 
     @classmethod
+    def previous_trading_day(cls, from_date: str | date, include_same_day: bool = True) -> str:
+        if isinstance(from_date, str):
+            from_date = date.fromisoformat(from_date)
+        curr = from_date if include_same_day else (from_date - timedelta(days=1))
+        while not cls.is_trading_day(curr):
+            curr -= timedelta(days=1)
+        return curr.isoformat()
+
+    @classmethod
     def non_trading_reason(cls, d: str | date) -> str:
         if isinstance(d, str):
             d = date.fromisoformat(d)
