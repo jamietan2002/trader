@@ -915,7 +915,28 @@ class PaperTradingEngine:
         strat_by_id = {(s.strategy_id, s.version): s for s in active_strategies}
         fallback_strat = active_strategies[0] if active_strategies else None
 
-        # 1. Evaluate exits on existing open positions
+        # Load latest point-in-time AI / news catalyst sentiment per ticker
+        cat_cutoff = max(trading_date, date.today().isoformat())
+        catalyst_rows = self.db.fetch_all(
+            """
+            SELECT ticker, headline, summary, sentiment_score, source_name, catalyst_type, published_date
+            FROM market_catalysts
+            WHERE published_date <= ?
+            ORDER BY published_date DESC, id DESC
+            LIMIT 250
+            """,
+            (cat_cutoff,),
+        )
+        latest_cat_info: Dict[str, Dict[str, Any]] = {}
+        latest_cat_sent: Dict[str, float] = {}
+        for crow in catalyst_rows:
+            tk = str(crow["ticker"]).upper()
+            if tk not in latest_cat_info:
+                latest_cat_info[tk] = dict(crow)
+                if crow.get("sentiment_score") is not None:
+                    latest_cat_sent[tk] = float(crow["sentiment_score"])
+
+        # 1. Evaluate exits on existing open positions (Technical Exit + Emergency AI Bearish Catalyst Exit <= -0.50)
         for pos in self.get_open_positions():
             ticker = pos["ticker"]
             bars = self.market_data.get_bars(ticker, end_date=trading_date)
@@ -940,7 +961,16 @@ class PaperTradingEngine:
                 stop_loss_price=float(pos["stop_loss_price"]) if pos["stop_loss_price"] else None,
                 take_profit_price=float(pos["take_profit_price"]) if pos["take_profit_price"] else None,
             )
-            if exit_sig is not None:
+            pos_cat = latest_cat_info.get(ticker.upper())
+            pos_ai_sent = float(pos_cat["sentiment_score"]) if (pos_cat and pos_cat.get("sentiment_score") is not None) else 0.0
+            pos_ai_note = str(pos_cat.get("headline") or pos_cat.get("summary") or "") if pos_cat else ""
+            ai_exit_reason = (
+                f"AI Bearish Catalyst Protection (Sentiment {pos_ai_sent:+.2f}): {pos_ai_note[:95]}"
+                if (pos_cat and pos_ai_sent <= -0.50 and str(pos_cat.get("catalyst_type") or "") == "IDE_AI_RESEARCH")
+                else None
+            )
+            eff_exit_reason = exit_sig.reason if exit_sig is not None else ai_exit_reason
+            if eff_exit_reason is not None:
                 res = self.submit_and_execute_order(
                     strategy_id=strat.strategy_id,
                     strategy_version=strat.version,
@@ -951,7 +981,7 @@ class PaperTradingEngine:
                     signal_date=trading_date,
                     execution_bar=today_bar,
                     sector=pos["sector"],
-                    notes=exit_sig.reason,
+                    notes=eff_exit_reason,
                 )
                 exits_executed.append(res.to_dict())
 
@@ -1035,22 +1065,17 @@ class PaperTradingEngine:
                 if idx < len(bucket):
                     ordered_candidates.append(bucket[idx])
 
-        # Load latest point-in-time AI / news catalyst sentiment per ticker (up to prev_bar date / trading_date)
-        catalyst_rows = self.db.fetch_all(
-            """
-            SELECT ticker, sentiment_score
-            FROM market_catalysts
-            WHERE published_date <= ?
-            ORDER BY published_date DESC, id DESC
-            LIMIT 250
-            """,
-            (trading_date,),
-        )
-        latest_cat_sent: Dict[str, float] = {}
-        for crow in catalyst_rows:
-            tk = str(crow["ticker"]).upper()
-            if tk not in latest_cat_sent and crow.get("sentiment_score") is not None:
-                latest_cat_sent[tk] = float(crow["sentiment_score"])
+        def _paper_candidate_conviction(item: Tuple[StrategyConfig, str, DailyBar, DailyBar, Any]) -> float:
+            tk_u = str(item[1]).upper()
+            sent_v = latest_cat_sent.get(tk_u, 0.0)
+            base_c = float(item[4].conviction_score) * 100.0
+            if sent_v >= 0.25:
+                base_c = min(99.0, base_c + min(8.0, sent_v * 12.0))
+            elif sent_v < 0.0:
+                base_c = max(1.0, base_c + sent_v * 10.0)
+            return base_c
+
+        ordered_candidates.sort(key=_paper_candidate_conviction, reverse=True)
 
         for strat, ticker, today_bar, prev_bar, sig in ordered_candidates:
             # Prevent cross-strategy position overwrite on the same ticker in the Master combined account
@@ -1059,7 +1084,21 @@ class PaperTradingEngine:
                 continue
 
             # AI Bearish Catalyst Veto (<= -0.35)
-            if latest_cat_sent.get(ticker.upper(), 0.0) <= -0.35:
+            cat_row = latest_cat_info.get(ticker.upper())
+            ai_sent_val = latest_cat_sent.get(ticker.upper(), 0.0)
+            ai_note_str = str(cat_row.get("headline") or cat_row.get("summary") or "") if cat_row else ""
+            if ai_sent_val <= -0.35:
+                veto_reason_str = f"Removed by AI Catalyst Filter (Sentiment {ai_sent_val:+.2f}): {ai_note_str[:95]}"
+                vetoed_orders.append(
+                    {
+                        "ticker": ticker,
+                        "strategy_id": strat.strategy_id,
+                        "strategy_version": strat.version,
+                        "side": "BUY",
+                        "status": "REJECTED",
+                        "rejection_reason": veto_reason_str,
+                    }
+                )
                 continue
 
             summary_now = self.get_account_summary()
@@ -1096,6 +1135,10 @@ class PaperTradingEngine:
             upcoming_ev = self.market_data.get_upcoming_earnings_within_days(ticker, trading_date, 3)
             days_to_earn = 1 if upcoming_ev else None
 
+            entry_note = sig.reason
+            if ai_sent_val >= 0.25 and ai_note_str:
+                entry_note = f"{sig.reason} · [AI Catalyst {ai_sent_val:+.2f}: {ai_note_str[:55]}]"
+
             res = self.submit_and_execute_order(
                 strategy_id=strat.strategy_id,
                 strategy_version=strat.version,
@@ -1109,7 +1152,7 @@ class PaperTradingEngine:
                 stop_loss_target=adj_stop,
                 take_profit_target=adj_tp,
                 atr_14=sig.atr_at_signal,
-                notes=sig.reason,
+                notes=entry_note,
                 avg_daily_dollar_volume_20d=ind_prev_obj.avg_dollar_volume_20d if ind_prev_obj else None,
                 upcoming_earnings_days=days_to_earn,
                 strategy_risk_pct=strat.risk_params.get("risk_per_trade_pct"),
@@ -1139,6 +1182,78 @@ class PaperTradingEngine:
             "vetoed_orders": vetoed_orders,
             "account_summary": updated_summary,
         }
+
+    def sync_ai_catalysts_to_paper_accounts(
+        self,
+        active_strategies: Sequence[StrategyConfig],
+        session_date: str,
+    ) -> Dict[str, Any]:
+        """Synchronize latest IDE AI catalyst findings (`run`) to Master & Per-Strategy Paper Accounts."""
+        cat_cutoff = max(session_date, date.today().isoformat())
+        catalyst_rows = self.db.fetch_all(
+            """
+            SELECT ticker, headline, summary, sentiment_score, source_name, catalyst_type, published_date
+            FROM market_catalysts
+            WHERE published_date <= ? AND catalyst_type = 'IDE_AI_RESEARCH'
+            ORDER BY published_date DESC, id DESC
+            LIMIT 100
+            """,
+            (cat_cutoff,),
+        )
+        ai_cat_by_tkr: Dict[str, Dict[str, Any]] = {}
+        for crow in catalyst_rows:
+            tk = str(crow["ticker"]).upper()
+            if tk not in ai_cat_by_tkr:
+                ai_cat_by_tkr[tk] = dict(crow)
+
+        strat_by_id = {(s.strategy_id, s.version): s for s in active_strategies}
+        fallback_strat = active_strategies[0] if active_strategies else None
+        all_engines = [self]
+        if self.account_id == self.DEFAULT_ACCOUNT_ID:
+            seen_sids: set[str] = set()
+            for s in active_strategies:
+                if s.strategy_id not in seen_sids:
+                    seen_sids.add(s.strategy_id)
+                    all_engines.append(self.get_strategy_account_engine(s.strategy_id))
+
+        ai_exits: List[Dict[str, Any]] = []
+        for eng in all_engines:
+            for pos in eng.get_open_positions():
+                tkr = pos["ticker"].upper()
+                c_info = ai_cat_by_tkr.get(tkr)
+                if not c_info or c_info.get("sentiment_score") is None:
+                    continue
+                sent = float(c_info["sentiment_score"])
+                note = str(c_info.get("headline") or c_info.get("summary") or "")
+                # Emergency exit if open position has severe bearish AI catalyst (<= -0.50),
+                # or if position was opened on session_date and AI vetoed it (<= -0.35)
+                should_exit = (sent <= -0.50) or (sent <= -0.35 and str(pos.get("opened_date")) == session_date)
+                if not should_exit:
+                    continue
+                bars = eng.market_data.get_bars(tkr, end_date=session_date)
+                if not bars:
+                    continue
+                exec_bar = bars[-1]
+                strat = strat_by_id.get((pos["strategy_id"], int(pos["strategy_version"])), fallback_strat)
+                if strat is None:
+                    continue
+                res = eng.submit_and_execute_order(
+                    strategy_id=strat.strategy_id,
+                    strategy_version=strat.version,
+                    strategy_family=strat.strategy_family,
+                    ticker=tkr,
+                    side="SELL",
+                    requested_qty=int(pos["quantity"]),
+                    signal_date=session_date,
+                    execution_bar=exec_bar,
+                    sector=pos["sector"],
+                    notes=f"AI Catalyst Exit ({sent:+.2f}): {note[:90]}",
+                )
+                if res.status in ("FILLED", "PARTIALLY_FILLED"):
+                    ai_exits.append({"account_id": eng.account_id, **res.to_dict()})
+            eng.mark_to_market_and_snapshot(session_date)
+
+        return {"session_date": session_date, "ai_paper_exits_triggered": ai_exits}
 
     def _record_rejected_order(
         self,
@@ -2172,8 +2287,11 @@ class LiveTradingCopilotEngine:
         self,
         as_of_date: Optional[str] = None,
         check_calendar_today: bool = False,
+        custom_account_summary: Optional[Dict[str, Any]] = None,
+        custom_open_positions: Optional[List[Dict[str, Any]]] = None,
+        custom_strategies: Optional[Sequence[StrategyConfig]] = None,
     ) -> Dict[str, Any]:
-        """Compute step-by-step SELL and BUY recommendations tailored to the user's real account."""
+        """Compute step-by-step SELL and BUY recommendations tailored to a real or paper account."""
         calendar_today_str = as_of_date or date.today().isoformat()
         try:
             calendar_today_dt = date.fromisoformat(calendar_today_str[:10])
@@ -2194,15 +2312,18 @@ class LiveTradingCopilotEngine:
         session_date = spy_bars[-1].bar_date if spy_bars else calendar_today_str
         spy_inds = compute_indicator_series(spy_bars) if spy_bars else {}
 
-        summary = self.get_account_summary(as_of_date=session_date)
-        open_positions = self.get_open_positions()
+        summary = dict(custom_account_summary) if custom_account_summary is not None else self.get_account_summary(as_of_date=session_date)
+        open_positions = list(custom_open_positions) if custom_open_positions is not None else self.get_open_positions()
         open_by_ticker = {p["ticker"]: p for p in open_positions}
 
-        dismissed_rows = self.db.fetch_all(
-            "SELECT strategy_id, ticker, action FROM shadow_dismissed_signals WHERE account_id = ? AND signal_date = ?",
-            (self.account_id, session_date),
-        )
-        dismissed_set = {(r["strategy_id"], r["ticker"], r["action"]) for r in dismissed_rows}
+        if custom_account_summary is not None:
+            dismissed_set: set[Tuple[str, str, str]] = set()
+        else:
+            dismissed_rows = self.db.fetch_all(
+                "SELECT strategy_id, ticker, action FROM shadow_dismissed_signals WHERE account_id = ? AND signal_date = ?",
+                (self.account_id, session_date),
+            )
+            dismissed_set = {(r["strategy_id"], r["ticker"], r["action"]) for r in dismissed_rows}
 
         all_strats = self.registry.list_strategies()
         strat_by_key = {f"{s.strategy_id}:{s.version}": s for s in all_strats}
@@ -2227,7 +2348,9 @@ class LiveTradingCopilotEngine:
         best_champion = ranked_champions[0] if ranked_champions else (all_strats[0] if all_strats else None)
 
         enabled_keys = summary.get("enabled_strategies") or []
-        if enabled_keys:
+        if custom_strategies is not None:
+            active_strats = list(custom_strategies)
+        elif enabled_keys:
             active_strats = [strat_by_key[k] for k in enabled_keys if k in strat_by_key]
         else:
             # Default: Stick to the #1 Best Champion Strategy (with automatic fallback to #2 only if #1 has 0 signals today)
@@ -2320,6 +2443,14 @@ class LiveTradingCopilotEngine:
             effective_exit_reason = exit_sig.reason if exit_sig is not None else ai_emergency_exit_reason
 
             if effective_exit_reason is not None and not (check_calendar_today and not is_today_trading_day):
+                est_pnl_val = round(
+                    (float(bars[-1].adj_close) - float(pos["avg_entry_price"])) * int(pos["quantity"]), 2
+                )
+                sell_factors = [
+                    f"Exit Trigger: {effective_exit_reason}",
+                    f"Entry Strategy Rule: Bound to {pos['strategy_id']} v{pos['strategy_version']} ({int(pos['holding_days'])}d held)",
+                    f"P&L Outcome: Entry ${float(pos['avg_entry_price']):.2f} → Ref Exit ${float(bars[-1].adj_close):.2f} ({est_pnl_val:+,.2f})",
+                ]
                 sell_actions.append(
                     {
                         "action": "SELL",
@@ -2330,11 +2461,11 @@ class LiveTradingCopilotEngine:
                         "quantity_to_sell": int(pos["quantity"]),
                         "avg_entry_price": float(pos["avg_entry_price"]),
                         "reference_exit_price": round(float(bars[-1].adj_close), 2),
-                        "estimated_realised_pnl": round(
-                            (float(bars[-1].adj_close) - float(pos["avg_entry_price"])) * int(pos["quantity"]), 2
-                        ),
+                        "estimated_realised_pnl": est_pnl_val,
                         "holding_days": int(pos["holding_days"]),
                         "reason": effective_exit_reason,
+                        "why_summary": f"Close {int(pos['quantity'])} {ticker}: {effective_exit_reason}",
+                        "factors_considered": sell_factors,
                         "order_timing_guidance": "Execute Market or Limit-at-Bid Order at Market Open (9:30–9:35 AM ET)",
                         "signal_date": session_date,
                     }
@@ -2564,7 +2695,9 @@ class LiveTradingCopilotEngine:
                         "strategy": f"{strat.strategy_id} v{strat.version}",
                         "reference_price": ref_price,
                         "veto_rule": "AI_BEARISH_CATALYST_VETO",
-                        "reason": f"AI Catalyst Filter vetoed entry (Sentiment {ai_sent:+.2f}): {ai_note[:95]}",
+                        "removed_by": "Latest AI Findings",
+                        "technical_trigger": sig.reason,
+                        "reason": f"Removed by Latest AI Findings (Sentiment {ai_sent:+.2f} <= -0.35): {ai_note[:110]}",
                     }
                 )
                 continue
@@ -2582,8 +2715,10 @@ class LiveTradingCopilotEngine:
                         "strategy": f"{strat.strategy_id} v{strat.version}",
                         "reference_price": ref_price,
                         "veto_rule": "PRE_OPEN_GAP_BREAKDOWN",
+                        "removed_by": "Pre-Open Gap Filter",
+                        "technical_trigger": sig.reason,
                         "reason": (
-                            f"Pre-open/extended-hours quote ${indicative_px:.2f} ({gap_pct:+.2f}%, {gap_atr:+.2f} ATR) "
+                            f"Removed by Pre-Open Gap Filter: Extended-hours quote ${indicative_px:.2f} ({gap_pct:+.2f}%, {gap_atr:+.2f} ATR) "
                             f"broke below Buy-Zone Low (${buy_zone_low:.2f})."
                         ),
                     }
@@ -2596,8 +2731,10 @@ class LiveTradingCopilotEngine:
                         "strategy": f"{strat.strategy_id} v{strat.version}",
                         "reference_price": ref_price,
                         "veto_rule": "OVERNIGHT_EXTREME_GAP_UP",
+                        "removed_by": "Pre-Open Gap Filter",
+                        "technical_trigger": sig.reason,
                         "reason": (
-                            f"Pre-open/extended-hours quote ${indicative_px:.2f} ({gap_pct:+.2f}%, {gap_atr:+.2f} ATR) "
+                            f"Removed by Pre-Open Gap Filter: Extended-hours quote ${indicative_px:.2f} ({gap_pct:+.2f}%, {gap_atr:+.2f} ATR) "
                             f"exceeds max overnight gap ({self.settings.risk.max_overnight_gap_atr_multiple:.1f}x ATR)."
                         ),
                     }
@@ -2671,6 +2808,28 @@ class LiveTradingCopilotEngine:
                 if ai_sent >= 0.25:
                     base_conv = min(99.0, base_conv + min(8.0, ai_sent * 12.0))
 
+                spy_ind_dt = spy_inds.get(latest_bar.bar_date)
+                spy_regime_str = (
+                    f"SPY ${float(spy_ind_dt.close):.2f} > 200d MA ${float(spy_ind_dt.sma_200):.2f} (Primary Bull Trend)"
+                    if (spy_ind_dt and spy_ind_dt.sma_200 and spy_ind_dt.close >= spy_ind_dt.sma_200)
+                    else f"SPY ${float(spy_ind_dt.close):.2f}" if spy_ind_dt else "US Large-Cap Benchmark"
+                )
+                sec_rank_val = sector_rank_map.get(sector, 1)
+                if ai_sent >= 0.20 and ai_note:
+                    ai_factor_str = f"AI Catalyst Boost ({ai_sent:+.2f}): {ai_note[:90]}"
+                elif ai_note:
+                    ai_factor_str = f"AI / Catalyst Check ({ai_sent:+.2f} Neutral — No Bearish Flags): {ai_note[:80]}"
+                else:
+                    ai_factor_str = "AI / News Check: Clear (No bearish catalyst flags or upcoming 2d earnings blackout)"
+                reward_per_sh = max(0.01, tp_p - ref_price)
+                rr_ratio = round(reward_per_sh / risk_per_sh, 2)
+                buy_factors = [
+                    f"Market & Sector: {spy_regime_str} · {sector} (Sector RS Rank #{sec_rank_val})",
+                    f"Technical Setup ({strat.name}): {sig.reason}",
+                    f"AI & Catalyst Check: {ai_factor_str}",
+                    f"Risk & Sizing Math: Max Stop Risk -${decision.estimated_risk_usd:,.0f} ({round((decision.estimated_risk_usd / total_eq) * 100.0, 2):.2f}% of account) · Target +${round(reward_per_sh * shares, 0):,.0f} ({rr_ratio:.1f}x Reward/Risk)",
+                ]
+
                 buy_actions.append(
                     {
                         "action": "BUY",
@@ -2701,6 +2860,8 @@ class LiveTradingCopilotEngine:
                         "ai_catalyst_sentiment": round(ai_sent, 2),
                         "ai_catalyst_note": ai_note,
                         "ai_catalyst_source": ai_source,
+                        "why_summary": f"{strat.name}: {sig.reason} ({rr_ratio:.1f}x Reward/Risk · -${decision.estimated_risk_usd:,.0f} max stop risk)",
+                        "factors_considered": buy_factors,
                         "order_timing_guidance": "Place Limit Order for Market Open (9:30–9:45 AM ET); NEVER trade illiquid pre-market/after-hours.",
                         "if_entry_not_hit_rule": f"Cancel/Skip if open gaps above Max Chase (${max_chase_p:.2f}) or breaks below ${buy_zone_low:.2f}.",
                         "if_target_not_hit_rule": f"At +1.0R (${ratchet_1r_p:.2f}), raise Stop to Breakeven (${ref_price:.2f}); exit on Day {strat.holding_period_max_days} (Time-Stop) if Target (${tp_p:.2f}) not hit.",
@@ -2724,6 +2885,8 @@ class LiveTradingCopilotEngine:
                         "strategy": f"{strat.strategy_id} v{strat.version}",
                         "reference_price": ref_price,
                         "veto_rule": decision.rule_triggered,
+                        "removed_by": "Portfolio Risk / Cash Cap",
+                        "technical_trigger": sig.reason,
                         "reason": decision.veto_reason,
                     }
                 )

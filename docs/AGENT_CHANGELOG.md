@@ -4,6 +4,31 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-08] — Synchronized Paper & Live AI Catalyst Execution, Concise 4-Factor Trade Explanations (`Factors Considered` + `Removed Setups`), Step-by-Step Copilot UX & Anti-Race-Condition Loading Lock
+
+### Summary
+- **IDE `run` Directly Impacts Both Paper Trading & Live Copilot (`core/execution/paper_broker.py`, `infrastructure/scheduler/orchestrator.py`)**:
+  - Updated `PaperTradingEngine.run_trading_session_for_strategies()` to enforce the exact same AI catalyst rules as `LiveTradingCopilotEngine`:
+    1. **Hard Veto (`sentiment <= -0.35`)**: Vetoes `BUY` setups with bearish breaking news and records an audited `REJECTED` order (`"Removed by AI Catalyst Filter: ..."`).
+    2. **Pre-Allocation Conviction Re-Ranking (`sentiment >= +0.25`)**: Boosts positive-catalyst setups (`+0.35 * sentiment`) *before* allocating cash so top catalysts are funded first.
+    3. **Emergency Bearish Catalyst Exit (`sentiment <= -0.50` from `IDE_AI_RESEARCH`)**: Automatically exits open paper positions hit by severe overnight/`AMC`/`BMO` catalyst shocks.
+  - Added `PaperTradingEngine.sync_ai_catalysts_to_paper_accounts()` and wired it into `AutonomousWorkflowOrchestrator.apply_ide_ai_cycle()` so running `run` immediately syncs emergency exits and catalyst notes across `paper_main_100k` and all 5 `paper_strat_*` pods.
+- **Concise 4-Factor Trade Explanations (`factors_considered`) & `Removed / Filtered Setups` in Both Live & Paper Tabs (`core/execution/paper_broker.py`, `dashboard/streamlit_app.py`)**:
+  - Attached structured, non-overwhelming `factors_considered` bullets (`Market & Sector`, `Technical Setup`, `AI & Catalyst Check`, `Risk & Sizing Math`) to every `BUY` and `SELL` action in `get_daily_action_plan()`.
+  - Added `removed_by` categorization (`Removed by Latest AI Findings`, `Removed by Pre-Open Gap Filter`, `Removed by Portfolio Risk / Cash Cap`) and rendered `_render_removed_signals_section()` in both **Tab 1 (`Live Copilot`)** and **Tab 2 (`Paper Portfolio`)**.
+  - Added **"Planned Paper Execution (`Next Open`) — Close · Open · Removed"** in Tab 2 (`Paper Portfolio`) for whichever `$100k` Paper Book (`Master Combined` or any of the `5 Strategy Pods`) is selected.
+- **Step-by-Step User Action Flow & Anti-Race-Condition Loading Lock (`dashboard/streamlit_app.py`)**:
+  - Added a 3-step visual progress bar (`STEP 1 · 8:45–9:25 AM ET Pre-Open` → `STEP 2 · 9:30–9:35 AM ET Exits & Stops` → `STEP 3 · 9:30–9:45 AM ET New Entries`) and structured sections (`STEP 2A`, `STEP 2B`, `STEP 3`) in `Live Copilot`.
+  - Added a global CSS lock (`body:has([data-testid="stStatusWidget"])`) that disables buttons/inputs (`pointer-events: none; opacity: 0.52; cursor: wait;`) and displays a fixed top loading banner (`"Updating portfolio & reconciling ledger — controls locked..."`) whenever Streamlit is running, and wrapped all mutating buttons in `with st.spinner(...)`.
+
+### Modules Added / Modified
+- `core/execution/paper_broker.py`
+- `infrastructure/scheduler/orchestrator.py`
+- `dashboard/streamlit_app.py` (`_code_version = "2026-11-08-v19"`)
+- `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-08] — Two-Stage Institutional Swing Execution (`Post-Close Structural Scan` + `Pre-Open Live Quote, Gap & AI Catalyst Gate`)
 
 ### Summary

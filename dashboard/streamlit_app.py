@@ -79,6 +79,32 @@ CLASSY_MINIMAL_CSS = """
     letter-spacing: -0.015em !important;
     font-weight: 600 !important;
   }
+  /* Anti-Race-Condition Lock: Automatically disable all buttons/inputs & show loading banner while Streamlit is executing */
+  body:has([data-testid="stStatusWidget"]) button,
+  body:has([data-testid="stStatusWidget"]) input,
+  body:has([data-testid="stStatusWidget"]) [data-baseweb="select"] {
+    pointer-events: none !important;
+    opacity: 0.52 !important;
+    cursor: wait !important;
+    transition: opacity 0.12s ease-in-out;
+  }
+  body:has([data-testid="stStatusWidget"])::after {
+    content: "Updating portfolio & reconciling ledger — controls locked...";
+    position: fixed;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(15, 23, 42, 0.94);
+    color: #38bdf8;
+    border: 1px solid rgba(56, 189, 248, 0.45);
+    border-radius: 6px;
+    padding: 6px 16px;
+    font-size: 0.79rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    z-index: 999999;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  }
 </style>
 """
 
@@ -395,6 +421,52 @@ def _render_tab_header(st: Any, summary: str, guide_title: str, guide_markdown: 
                 st.markdown(guide_markdown)
 
 
+def _format_factors_html(factors: List[str]) -> str:
+    """Format concise trade confidence factors into a clean, scannable HTML block."""
+    if not factors:
+        return ""
+    items_html = "".join(
+        f"<div style='margin-top:2px;'>• {f}</div>" for f in factors[:4]
+    )
+    return (
+        "<div style='background:rgba(15,23,42,0.55);border-left:2px solid #38bdf8;"
+        "padding:6px 10px;margin-top:5px;border-radius:4px;font-size:0.78rem;color:#94a3b8;'>"
+        "<strong style='color:#cbd5e1;'>Factors Considered:</strong>"
+        f"{items_html}</div>"
+    )
+
+
+def _render_removed_signals_section(st: Any, vetoed_sigs: List[Dict[str, Any]], context_label: str = "Live Copilot") -> None:
+    """Render a clear, transparent summary of setups removed by AI findings, pre-open gaps, or risk caps."""
+    if not vetoed_sigs:
+        return
+    ai_or_gap_removed = [
+        v for v in vetoed_sigs
+        if v.get("veto_rule") in ("AI_BEARISH_CATALYST_VETO", "PRE_OPEN_GAP_BREAKDOWN", "OVERNIGHT_EXTREME_GAP_UP")
+    ]
+    header_lbl = (
+        f"Removed / Filtered Setups ({len(vetoed_sigs)}) — {len(ai_or_gap_removed)} Removed by Latest AI / Gap Check"
+        if ai_or_gap_removed
+        else f"Removed / Filtered Setups ({len(vetoed_sigs)} — Filtered by Cash / Exposure Caps)"
+    )
+    with st.expander(header_lbl, expanded=bool(ai_or_gap_removed)):
+        for v in vetoed_sigs:
+            removed_by = str(v.get("removed_by") or v.get("veto_rule") or "Risk Cap")
+            is_ai = "AI" in removed_by or "AI" in str(v.get("veto_rule", ""))
+            badge_color = "#f87171" if is_ai else ("#f59e0b" if "Gap" in removed_by else "#94a3b8")
+            trig_txt = f" · Technical Setup: {v['technical_trigger']}" if v.get("technical_trigger") else ""
+            st.markdown(
+                f"<div style='padding:6px 10px;margin-bottom:6px;background:rgba(15,23,42,0.5);"
+                f"border-left:3px solid {badge_color};border-radius:4px;font-size:0.81rem;'>"
+                f"<strong>{v.get('ticker', '')}</strong> (<code>{v.get('strategy', '')}</code> · Ref <code>${float(v.get('reference_price') or 0.0):.2f}</code>) — "
+                f"<span style='color:{badge_color};font-weight:600;'>{removed_by}</span><br/>"
+                f"<span style='color:#cbd5e1;'>{v.get('reason', '')}</span>"
+                f"<span style='color:#64748b;font-size:0.76rem;'>{trig_txt}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+
 def main() -> None:
     try:
         import streamlit as st
@@ -413,7 +485,7 @@ def main() -> None:
     st.markdown(CLASSY_MINIMAL_CSS, unsafe_allow_html=True)
 
     app = PlatformApplication()
-    _code_version = "2026-11-08-v18"
+    _code_version = "2026-11-08-v19"
     import api.server as _srv_mod
     if (
         getattr(_srv_mod, "_STREAMLIT_SYNC_VERSION", None) != _code_version
@@ -554,7 +626,8 @@ def main() -> None:
             width="stretch",
             help="Resets the simulated $100,000 paper books to $100,000.00 cash (0 trades).",
         ):
-            app.orchestrator.paper_engine.reset_account_to_starting_capital()
+            with st.spinner("Resetting all 6 $100k paper books..."):
+                app.orchestrator.paper_engine.reset_account_to_starting_capital()
             st.rerun()
 
     # Sleek Minimalist Top Masthead
@@ -661,13 +734,15 @@ def main() -> None:
                 dw_amt = st.number_input("Amount ($)", min_value=1.0, value=1000.0, step=250.0, key="copilot_dw_amt")
                 dw_c1, dw_c2 = st.columns(2)
                 if dw_c1.button("+ Deposit", width="stretch"):
-                    app.orchestrator.live_copilot.adjust_cash_deposit_withdrawal(float(dw_amt))
-                    st.session_state["_copilot_flash_msg"] = f"Deposited +${float(dw_amt):,.2f}."
+                    with st.spinner("Recording deposit & reconciling ledger..."):
+                        app.orchestrator.live_copilot.adjust_cash_deposit_withdrawal(float(dw_amt))
+                        st.session_state["_copilot_flash_msg"] = f"Deposited +${float(dw_amt):,.2f}."
                     st.rerun()
                 if dw_c2.button("- Withdraw", width="stretch"):
                     try:
-                        app.orchestrator.live_copilot.adjust_cash_deposit_withdrawal(-float(dw_amt))
-                        st.session_state["_copilot_flash_msg"] = f"Withdrew -${float(dw_amt):,.2f}."
+                        with st.spinner("Recording withdrawal & reconciling ledger..."):
+                            app.orchestrator.live_copilot.adjust_cash_deposit_withdrawal(-float(dw_amt))
+                            st.session_state["_copilot_flash_msg"] = f"Withdrew -${float(dw_amt):,.2f}."
                         st.rerun()
                     except ValueError as err:
                         st.error(str(err))
@@ -697,31 +772,33 @@ def main() -> None:
                 lt_tp = lt_c8.number_input("Target $ (0=Auto)", min_value=0.0, value=0.0, step=0.50, key="lt_tp_inp")
                 if st.button(f"Record {lt_side} {int(lt_qty)} {lt_tkr}", width="stretch", key="btn_record_manual_trade"):
                     if lt_side == "BUY":
-                        app.orchestrator.live_copilot.confirm_buy_execution(
-                            ticker=lt_tkr,
-                            strategy_id=active_champ_id,
-                            strategy_version=active_champ_ver,
-                            quantity=int(lt_qty),
-                            fill_price=float(lt_px),
-                            fees_usd=float(lt_fee),
-                            stop_loss_price=float(lt_sl) if lt_sl > 0 else None,
-                            take_profit_price=float(lt_tp) if lt_tp > 0 else None,
-                            fill_date=lt_date.strip() or latest_bar_date,
-                            notes="Logged via Copilot",
-                        )
-                        st.session_state["_copilot_flash_msg"] = f"Logged BUY {int(lt_qty)} {lt_tkr} @ ${float(lt_px):.2f}."
-                        st.rerun()
-                    else:
-                        try:
-                            app.orchestrator.live_copilot.confirm_sell_execution(
+                        with st.spinner("Recording BUY fill & updating holdings..."):
+                            app.orchestrator.live_copilot.confirm_buy_execution(
                                 ticker=lt_tkr,
+                                strategy_id=active_champ_id,
+                                strategy_version=active_champ_ver,
                                 quantity=int(lt_qty),
                                 fill_price=float(lt_px),
                                 fees_usd=float(lt_fee),
+                                stop_loss_price=float(lt_sl) if lt_sl > 0 else None,
+                                take_profit_price=float(lt_tp) if lt_tp > 0 else None,
                                 fill_date=lt_date.strip() or latest_bar_date,
                                 notes="Logged via Copilot",
                             )
-                            st.session_state["_copilot_flash_msg"] = f"Logged SELL {int(lt_qty)} {lt_tkr} @ ${float(lt_px):.2f}."
+                            st.session_state["_copilot_flash_msg"] = f"Logged BUY {int(lt_qty)} {lt_tkr} @ ${float(lt_px):.2f}."
+                        st.rerun()
+                    else:
+                        try:
+                            with st.spinner("Recording SELL fill & updating cash..."):
+                                app.orchestrator.live_copilot.confirm_sell_execution(
+                                    ticker=lt_tkr,
+                                    quantity=int(lt_qty),
+                                    fill_price=float(lt_px),
+                                    fees_usd=float(lt_fee),
+                                    fill_date=lt_date.strip() or latest_bar_date,
+                                    notes="Logged via Copilot",
+                                )
+                                st.session_state["_copilot_flash_msg"] = f"Logged SELL {int(lt_qty)} {lt_tkr} @ ${float(lt_px):.2f}."
                             st.rerun()
                         except KeyError as err:
                             st.error(str(err))
@@ -731,8 +808,9 @@ def main() -> None:
                 st.caption("Clears all trades and holdings and resets your account to a fresh initial deposit.")
                 reset_dep = st.number_input("Initial Cash Deposit ($)", min_value=100.0, value=float(real_acc["starting_cash"]), step=1000.0, key="reset_init_dep_inp")
                 if st.button("Confirm Reset", width="stretch"):
-                    app.orchestrator.live_copilot.reset_copilot_account(starting_cash=float(reset_dep))
-                    st.session_state["_copilot_flash_msg"] = f"Reset account to ${float(reset_dep):,.2f} initial deposit."
+                    with st.spinner("Resetting account ledger..."):
+                        app.orchestrator.live_copilot.reset_copilot_account(starting_cash=float(reset_dep))
+                        st.session_state["_copilot_flash_msg"] = f"Reset account to ${float(reset_dep):,.2f} initial deposit."
                     st.rerun()
         with ctrl_c5:
             with st.popover("? Rules", width="stretch"):
@@ -744,19 +822,21 @@ def main() -> None:
                 )
 
         st.markdown("---")
-        # Section 1: Today's Action Checklist
+        # Section 1: Today's Step-by-Step Required Actions
         chk_hdr_c1, chk_hdr_c2, chk_hdr_c3 = st.columns([3.2, 1.0, 1.0])
-        chk_hdr_c1.markdown(f"##### 1. Action Checklist — `{today_iso}` ({today_weekday_name})")
+        chk_hdr_c1.markdown(f"##### 1. Step-by-Step Required Actions — `{today_iso}` ({today_weekday_name})")
         if dismissed_count > 0:
             if chk_hdr_c2.button(f"Restore Skipped ({dismissed_count})", key="btn_restore_skipped", width="stretch"):
-                restored_n = app.orchestrator.live_copilot.restore_dismissed_signals(latest_bar_date)
-                st.session_state["_copilot_flash_msg"] = f"Restored {restored_n} skipped signal(s)."
+                with st.spinner("Restoring skipped setups..."):
+                    restored_n = app.orchestrator.live_copilot.restore_dismissed_signals(latest_bar_date)
+                    st.session_state["_copilot_flash_msg"] = f"Restored {restored_n} skipped signal(s)."
                 st.rerun()
         if real_history:
             last_t = real_history[0]
             if chk_hdr_c3.button(f"Undo Last ({last_t['side']} {last_t['ticker']})", key="btn_quick_undo", width="stretch"):
-                app.orchestrator.live_copilot.undo_last_trade()
-                st.session_state["_copilot_flash_msg"] = f"Undid {last_t['side']} {last_t['quantity']} {last_t['ticker']}."
+                with st.spinner("Undoing last trade & replaying ledger..."):
+                    app.orchestrator.live_copilot.undo_last_trade()
+                    st.session_state["_copilot_flash_msg"] = f"Undid {last_t['side']} {last_t['quantity']} {last_t['ticker']}."
                 st.rerun()
 
         show_signals_today = is_today_trading_day
@@ -771,23 +851,37 @@ def main() -> None:
                 value=False,
                 key="copilot_preview_non_trading_day",
             )
-            if show_signals_today:
-                st.caption(
-                    f"**Two-Stage Preview (`{latest_bar_date}` Close → `{next_trading_day_iso}` Open)**: "
-                    f"Setups below are computed from the `{latest_bar_date}` (`4:00 PM ET`) closing candle. "
-                    f"**Best Practice (`8:45–9:25 AM ET` on `{next_trading_day_iso}`)**: Type `run` in IDE before the open so overnight/`BMO` news vetoes bearish setups (`<= -0.35`), boosts top catalysts (`>= +0.25`), and checks pre-market gaps. "
-                    f"**If you skip `run`**: GitHub Actions also syncs pre-open (`9:00 AM ET`), and placing a **Day Limit Order inside the Buy-Zone (`<= Max Chase`)** automatically protects you against overnight gaps."
-                )
 
         sell_actions = raw_sell_actions if show_signals_today else []
         buy_actions = raw_buy_actions if show_signals_today else []
         ratchet_alerts = [
             h for h in hold_updates if h.get("stop_mode") and h.get("stop_mode") != "Initial ATR Stop"
         ] if show_signals_today else []
+        vetoed_sigs = (plan.get("vetoed_signals") or []) if show_signals_today else []
 
         if show_signals_today:
+            ai_status_txt = (
+                f"Verified (`{last_ide_run_ts}`)"
+                if ide_ran_today
+                else "Deterministic Ready · Optional: type `run` in IDE at `8:45–9:25 AM ET` (`8:45–9:25 PM SGT`)"
+            )
+            st.markdown(
+                f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px;margin:4px 0 12px 0;font-size:0.8rem;'>"
+                f"<div style='background:rgba(15,23,42,0.55);border:1px solid rgba(148,163,184,0.16);border-radius:6px;padding:8px 12px;'>"
+                f"<strong style='color:#38bdf8;'>STEP 1 · 8:45–9:25 AM ET (Pre-Open)</strong><br/>"
+                f"<span style='color:#cbd5e1;'>{ai_status_txt}</span></div>"
+                f"<div style='background:rgba(15,23,42,0.55);border:1px solid rgba(148,163,184,0.16);border-radius:6px;padding:8px 12px;'>"
+                f"<strong style='color:#f59e0b;'>STEP 2 · 9:30–9:35 AM ET (Exits &amp; Stops)</strong><br/>"
+                f"<span style='color:#cbd5e1;'><strong>{len(sell_actions)}</strong> Position(s) to Close · <strong>{len(ratchet_alerts)}</strong> Stop Ratchet(s)</span></div>"
+                f"<div style='background:rgba(15,23,42,0.55);border:1px solid rgba(148,163,184,0.16);border-radius:6px;padding:8px 12px;'>"
+                f"<strong style='color:#10b981;'>STEP 3 · 9:30–9:45 AM ET (New Entries)</strong><br/>"
+                f"<span style='color:#cbd5e1;'><strong>{len(buy_actions)}</strong> Position(s) to Open (Day Limit &le; Max Chase + GTC Bracket)</span></div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
             if sell_actions:
-                st.caption("PRIORITY 1 · SELL EXITS (9:30–9:35 AM ET — EXECUTE FIRST)")
+                st.caption("STEP 2A · POSITIONS TO CLOSE AT MARKET OPEN (9:30–9:35 AM ET — EXECUTE FIRST TO FREE CASH)")
                 for idx, sa in enumerate(sell_actions):
                     sc_info, sc_qty, sc_px, sc_btn1, sc_btn2 = st.columns([2.7, 0.75, 0.85, 0.85, 0.65])
                     s_qty_sig = f"{sa['ticker']}_{sa['quantity_to_sell']}_{sa['reference_exit_price']}_{sa.get('signal_date', latest_bar_date)}"
@@ -806,41 +900,45 @@ def main() -> None:
                         key=f"sell_px_{s_qty_sig}_{idx}",
                     )
                     live_est_pnl = round((float(s_price) - float(sa["avg_entry_price"])) * int(s_qty), 2)
+                    sell_factors_html = _format_factors_html(sa.get("factors_considered") or [])
                     with sc_info:
                         st.markdown(
                             f"**SELL `{s_qty}` `{sa['ticker']}`** · Est. P&L **`${live_est_pnl:+,.2f}`**  \n"
                             f"<span style='color:#94a3b8;font-size:0.82rem;'>Entry `${sa['avg_entry_price']:.2f}` → Exit `${float(s_price):.2f}` (Close `{sa.get('signal_date', latest_bar_date)}`) · "
-                            f"{sa['strategy_id']} v{sa['strategy_version']} · {sa['reason']}</span>",
+                            f"{sa['strategy_id']} v{sa['strategy_version']}</span>"
+                            f"{sell_factors_html}",
                             unsafe_allow_html=True,
                         )
                     with sc_btn1:
                         st.write("")
                         if st.button(f"Sold {sa['ticker']}", key=f"btn_sell_{s_qty_sig}_{idx}", width="stretch"):
-                            app.orchestrator.live_copilot.confirm_sell_execution(
-                                ticker=sa["ticker"],
-                                quantity=int(s_qty),
-                                fill_price=float(s_price),
-                                fees_usd=0.0,
-                                notes=sa["reason"],
-                            )
-                            st.session_state["_copilot_flash_msg"] = (
-                                f"Confirmed SELL {int(s_qty)} {sa['ticker']} @ ${float(s_price):.2f} (${live_est_pnl:+,.2f})."
-                            )
+                            with st.spinner(f"Confirming SELL {sa['ticker']} & updating cash..."):
+                                app.orchestrator.live_copilot.confirm_sell_execution(
+                                    ticker=sa["ticker"],
+                                    quantity=int(s_qty),
+                                    fill_price=float(s_price),
+                                    fees_usd=0.0,
+                                    notes=sa["reason"],
+                                )
+                                st.session_state["_copilot_flash_msg"] = (
+                                    f"Confirmed SELL {int(s_qty)} {sa['ticker']} @ ${float(s_price):.2f} (${live_est_pnl:+,.2f})."
+                                )
                             st.rerun()
                     with sc_btn2:
                         st.write("")
                         if st.button("Hold", key=f"btn_skip_sell_{s_qty_sig}_{idx}", width="stretch"):
-                            app.orchestrator.live_copilot.dismiss_signal(
-                                signal_date=sa["signal_date"],
-                                strategy_id=sa["strategy_id"],
-                                ticker=sa["ticker"],
-                                action="SELL",
-                            )
-                            st.session_state["_copilot_flash_msg"] = f"Held {sa['ticker']} for today."
+                            with st.spinner(f"Holding {sa['ticker']} for today..."):
+                                app.orchestrator.live_copilot.dismiss_signal(
+                                    signal_date=sa["signal_date"],
+                                    strategy_id=sa["strategy_id"],
+                                    ticker=sa["ticker"],
+                                    action="SELL",
+                                )
+                                st.session_state["_copilot_flash_msg"] = f"Held {sa['ticker']} for today."
                             st.rerun()
 
             if ratchet_alerts:
-                st.caption("PRIORITY 2 · RAISE GTC STOP-LOSS BRACKETS")
+                st.caption("STEP 2B · RAISE GTC STOP-LOSS BRACKETS IN YOUR BROKER")
                 for r_h in ratchet_alerts:
                     st.info(
                         f"**`{r_h['ticker']}` (`{r_h['quantity']} sh`)** reached `+1R+`: "
@@ -849,7 +947,7 @@ def main() -> None:
                     )
 
             if buy_actions:
-                st.caption("PRIORITY 3 · NEW BUY ENTRIES (9:30–9:45 AM ET LIMIT IN BUY-ZONE + GTC BRACKET)")
+                st.caption("STEP 3 · POSITIONS TO OPEN (9:30–9:45 AM ET — PLACE DAY LIMIT IN BUY-ZONE + ATTACH GTC STOP & TARGET)")
                 for idx, ba in enumerate(buy_actions):
                     bc_info, bc_qty, bc_px, bc_btn1, bc_btn2 = st.columns([2.7, 0.75, 0.85, 0.85, 0.65])
                     b_sig = f"{ba['ticker']}_{ba['recommended_shares']}_{ba['reference_entry_price']}_{ba.get('signal_date', latest_bar_date)}"
@@ -899,55 +997,56 @@ def main() -> None:
                         )
                     else:
                         gap_badge_html = " · <span style='color:#38bdf8;'>In Buy-Zone</span>"
+                    buy_factors_html = _format_factors_html(ba.get("factors_considered") or [])
                     with bc_info:
                         st.markdown(
                             f"**BUY `{int(b_qty)}` `{ba['ticker']}` @ `${float(b_price):.2f}`** "
                             f"(`${live_cost:,.0f}` · `{live_weight:.1f}%` · Close `{ba.get('signal_date', latest_bar_date)}`) · "
                             f"Buy-Zone **`{buy_zone_str}`**{gap_badge_html}{ai_badge_html}  \n"
-                            f"<span style='color:#cbd5e1;font-size:0.83rem;'>Bracket: <strong>Stop ${adj_stop:.2f}</strong> (-${live_risk:,.0f} risk) · "
-                            f"<strong>Target ${adj_tp:.2f}</strong> · +1R Breakeven ${ratchet_1r:.2f} · {ba['holding_horizon_days']}</span>  \n"
-                            f"<span style='color:#64748b;font-size:0.79rem;'>{ba['strategy_id']} v{ba['strategy_version']} — {ba['reason']}</span>",
+                            f"<span style='color:#cbd5e1;font-size:0.83rem;'>Broker Order: <strong>Day Limit &le; ${float(ba.get('max_chase_price') or ref_px):.2f}</strong> · "
+                            f"Attach Bracket: <strong>GTC Stop ${adj_stop:.2f}</strong> (-${live_risk:,.0f} risk) &amp; "
+                            f"<strong>GTC Target ${adj_tp:.2f}</strong> (+1R Breakeven ${ratchet_1r:.2f} · {ba['holding_horizon_days']})</span>"
+                            f"{buy_factors_html}",
                             unsafe_allow_html=True,
                         )
                     with bc_btn1:
                         st.write("")
                         if st.button(f"Bought {ba['ticker']}", key=f"btn_buy_{b_sig}_{idx}", width="stretch"):
-                            app.orchestrator.live_copilot.confirm_buy_execution(
-                                ticker=ba["ticker"],
-                                strategy_id=ba["strategy_id"],
-                                strategy_version=int(ba["strategy_version"]),
-                                quantity=int(b_qty),
-                                fill_price=float(b_price),
-                                fees_usd=0.0,
-                                stop_loss_price=ba["stop_loss_price"],
-                                take_profit_price=ba["take_profit_price"],
-                                reference_entry_price=ref_px,
-                                sector=ba["sector"],
-                                notes=ba["reason"],
-                            )
-                            st.session_state["_copilot_flash_msg"] = (
-                                f"Confirmed BUY {int(b_qty)} {ba['ticker']} @ ${float(b_price):.2f} "
-                                f"(Stop ${adj_stop:.2f} · Target ${adj_tp:.2f})."
-                            )
+                            with st.spinner(f"Confirming BUY {ba['ticker']} & updating holdings..."):
+                                app.orchestrator.live_copilot.confirm_buy_execution(
+                                    ticker=ba["ticker"],
+                                    strategy_id=ba["strategy_id"],
+                                    strategy_version=int(ba["strategy_version"]),
+                                    quantity=int(b_qty),
+                                    fill_price=float(b_price),
+                                    fees_usd=0.0,
+                                    stop_loss_price=ba["stop_loss_price"],
+                                    take_profit_price=ba["take_profit_price"],
+                                    reference_entry_price=ref_px,
+                                    sector=ba["sector"],
+                                    notes=ba["reason"],
+                                )
+                                st.session_state["_copilot_flash_msg"] = (
+                                    f"Confirmed BUY {int(b_qty)} {ba['ticker']} @ ${float(b_price):.2f} "
+                                    f"(Stop ${adj_stop:.2f} · Target ${adj_tp:.2f})."
+                                )
                             st.rerun()
                     with bc_btn2:
                         st.write("")
                         if st.button("Skip", key=f"btn_skip_{b_sig}_{idx}", width="stretch"):
-                            app.orchestrator.live_copilot.dismiss_signal(
-                                signal_date=ba["signal_date"],
-                                strategy_id=ba["strategy_id"],
-                                ticker=ba["ticker"],
-                                action="BUY",
-                            )
-                            st.session_state["_copilot_flash_msg"] = f"Skipped {ba['ticker']} for today."
+                            with st.spinner(f"Skipping {ba['ticker']} for today..."):
+                                app.orchestrator.live_copilot.dismiss_signal(
+                                    signal_date=ba["signal_date"],
+                                    strategy_id=ba["strategy_id"],
+                                    ticker=ba["ticker"],
+                                    action="BUY",
+                                )
+                                st.session_state["_copilot_flash_msg"] = f"Skipped {ba['ticker']} for today."
                             st.rerun()
             elif not sell_actions:
                 st.caption("No new BUY or SELL actions required today. All open holdings remain within their target brackets.")
 
-            vetoed_sigs = plan.get("vetoed_signals") or []
-            if vetoed_sigs:
-                with st.expander(f"Filtered by Risk Caps ({len(vetoed_sigs)})", expanded=False):
-                    st.dataframe(vetoed_sigs, width="stretch", hide_index=True)
+            _render_removed_signals_section(st, vetoed_sigs, context_label="Live Copilot")
 
         st.markdown("---")
         # Section 2: Active Holdings
@@ -989,17 +1088,18 @@ def main() -> None:
                 )
                 btn_lbl = f"Sell {close_qty}" if int(close_qty) < int(h["quantity"]) else f"Close {h['ticker']}"
                 if hc5.button(btn_lbl, key=f"btn_qclose_{h_sig}_{h_idx}", width="stretch"):
-                    app.orchestrator.live_copilot.confirm_sell_execution(
-                        ticker=h["ticker"],
-                        quantity=int(close_qty),
-                        fill_price=float(close_px),
-                        fees_usd=0.0,
-                        notes="Position exit via Copilot",
-                    )
-                    est_p = round((float(close_px) - float(h["avg_entry_price"])) * int(close_qty), 2)
-                    st.session_state["_copilot_flash_msg"] = (
-                        f"Confirmed SELL {int(close_qty)} {h['ticker']} @ ${float(close_px):.2f} (${est_p:+,.2f})."
-                    )
+                    with st.spinner(f"Recording SELL {int(close_qty)} {h['ticker']} & reconciling portfolio..."):
+                        app.orchestrator.live_copilot.confirm_sell_execution(
+                            ticker=h["ticker"],
+                            quantity=int(close_qty),
+                            fill_price=float(close_px),
+                            fees_usd=0.0,
+                            notes="Position exit via Copilot",
+                        )
+                        est_p = round((float(close_px) - float(h["avg_entry_price"])) * int(close_qty), 2)
+                        st.session_state["_copilot_flash_msg"] = (
+                            f"Confirmed SELL {int(close_qty)} {h['ticker']} @ ${float(close_px):.2f} (${est_p:+,.2f})."
+                        )
                     st.rerun()
                 with hc6:
                     with st.popover("Bracket", width="stretch"):
@@ -1019,8 +1119,9 @@ def main() -> None:
                             key=f"brk_tp_{h_sig}_{h_idx}",
                         )
                         if st.button("Save", key=f"btn_brk_{h_sig}_{h_idx}", width="stretch"):
-                            app.orchestrator.live_copilot.update_position_brackets(h["ticker"], float(new_sl), float(new_tp))
-                            st.session_state["_copilot_flash_msg"] = f"Updated {h['ticker']} bracket."
+                            with st.spinner(f"Saving {h['ticker']} bracket..."):
+                                app.orchestrator.live_copilot.update_position_brackets(h["ticker"], float(new_sl), float(new_tp))
+                                st.session_state["_copilot_flash_msg"] = f"Updated {h['ticker']} bracket."
                             st.rerun()
         elif real_positions:
             st.dataframe(real_positions, width="stretch", hide_index=True)
@@ -1081,20 +1182,22 @@ def main() -> None:
 
                     btn_col1, btn_col2, _ = st.columns([1.2, 1.2, 2.6])
                     if btn_col1.button("Save Changes", key=f"btn_save_tr_{tr_sig}", width="stretch"):
-                        app.orchestrator.live_copilot.edit_trade(
-                            trade_id=editing_trade["trade_id"],
-                            ticker=te_ticker,
-                            side=te_side,
-                            quantity=int(te_qty),
-                            fill_price=float(te_px),
-                            fees_usd=float(te_fee),
-                            fill_date=te_dt.strip() or latest_bar_date,
-                        )
-                        st.session_state["_copilot_flash_msg"] = f"Updated trade {editing_trade['trade_id']}."
+                        with st.spinner(f"Updating trade {editing_trade['trade_id']} & replaying ledger..."):
+                            app.orchestrator.live_copilot.edit_trade(
+                                trade_id=editing_trade["trade_id"],
+                                ticker=te_ticker,
+                                side=te_side,
+                                quantity=int(te_qty),
+                                fill_price=float(te_px),
+                                fees_usd=float(te_fee),
+                                fill_date=te_dt.strip() or latest_bar_date,
+                            )
+                            st.session_state["_copilot_flash_msg"] = f"Updated trade {editing_trade['trade_id']}."
                         st.rerun()
                     if btn_col2.button("Delete Trade", key=f"btn_del_tr_{tr_sig}", width="stretch"):
-                        app.orchestrator.live_copilot.delete_trade(editing_trade["trade_id"])
-                        st.session_state["_copilot_flash_msg"] = f"Deleted trade {editing_trade['trade_id']}."
+                        with st.spinner(f"Deleting trade {editing_trade['trade_id']} & replaying ledger..."):
+                            app.orchestrator.live_copilot.delete_trade(editing_trade["trade_id"])
+                            st.session_state["_copilot_flash_msg"] = f"Deleted trade {editing_trade['trade_id']}."
                         st.rerun()
         else:
             st.caption("No trades recorded yet (`0` fills). Cash, holdings, and P&L update automatically when trades are logged.")
@@ -1105,10 +1208,11 @@ def main() -> None:
     with tabs[1]:
         _render_tab_header(
             st,
-            "Forward $100,000 Paper Books: 1 Master Combined Portfolio + 5 Dedicated Per-Strategy $100k Pods.",
-            "Two-Tier Paper Architecture",
-            "- **Master Combined (`$100k`)**: Runs all active strategies under shared portfolio heat (`5%`) and sector (`30%`) caps.\n"
-            "- **5 Strategy Pods (`$100k` each)**: Isolates each strategy in its own `$100k` account to measure pure forward alpha without cash starvation.",
+            "Forward $100,000 Paper Books: 1 Master Combined Portfolio + 5 Dedicated Per-Strategy $100k Pods (Synchronized with IDE `run` AI Catalysts).",
+            "Two-Tier Paper Architecture & AI Sync",
+            "- **Master Combined (`$100k`)**: Runs all active strategies under shared portfolio heat (`5%`), sector (`30%`), and AI Catalyst rules.\n"
+            "- **5 Strategy Pods (`$100k` each)**: Isolates each strategy in its own `$100k` account to measure pure forward alpha without cash starvation.\n"
+            "- **Live AI Sync**: Typing `run` in the IDE updates both Live Copilot and all 6 Paper Books (vetoing bearish `<= -0.35` setups, triggering emergency `<= -0.50` exits, and re-ranking `>= +0.25` catalysts first).",
         )
 
         all_paper_books = app.orchestrator.paper_engine.get_all_paper_accounts_summary(strats)
@@ -1133,6 +1237,7 @@ def main() -> None:
                 label_visibility="collapsed",
             )
 
+        all_reg_strats = app.orchestrator.registry.list_strategies()
         if selected_book_id == app.orchestrator.paper_engine.DEFAULT_ACCOUNT_ID:
             book_engine = app.orchestrator.paper_engine
             book_acc = acc
@@ -1140,6 +1245,7 @@ def main() -> None:
             book_ledger = ledger
             book_snaps = snapshots
             book_title_label = "Master Combined Portfolio ($100k Shared)"
+            paper_book_strats = [s for s in all_reg_strats if s.status == "PAPER_TRADING"]
         else:
             strat_id_for_book = selected_book_id.replace("paper_", "", 1)
             book_engine = app.orchestrator.paper_engine.get_strategy_account_engine(strat_id_for_book)
@@ -1148,6 +1254,12 @@ def main() -> None:
             book_ledger = book_engine.get_trade_ledger(limit=500)
             book_snaps = book_engine.get_portfolio_snapshots()
             book_title_label = f"Strategy Pod: {strat_id_for_book} ($100k Isolated)"
+            paper_book_strats = [
+                s for s in all_reg_strats
+                if s.strategy_id == strat_id_for_book and s.status == "PAPER_TRADING"
+            ]
+            if not paper_book_strats:
+                paper_book_strats = [s for s in all_reg_strats if s.strategy_id == strat_id_for_book][:1]
 
         book_net_dollar_pnl = round(
             float(book_acc.get("total_pnl_usd", float(book_acc["total_equity"]) - float(book_acc["starting_capital"]))),
@@ -1194,6 +1306,63 @@ def main() -> None:
             f"${book_acc['cash_balance']:,.2f}",
             f"{book_acc['open_positions_count']} open · DD -{book_acc['current_drawdown_pct']:.2f}%",
         )
+
+        # Compute exact Next-Session / Today's Planned Paper Actions + AI & Risk Removals for this Paper Book
+        paper_plan = app.orchestrator.live_copilot.get_daily_action_plan(
+            check_calendar_today=False,
+            custom_account_summary=book_acc,
+            custom_open_positions=book_positions,
+            custom_strategies=paper_book_strats,
+        )
+        p_sells = paper_plan.get("sell_actions") or []
+        p_buys = paper_plan.get("buy_actions") or []
+        p_vetoed = paper_plan.get("vetoed_signals") or []
+
+        st.markdown("---")
+        st.markdown(
+            f"##### Planned Paper Execution (`{next_trading_day_iso}` Open) — "
+            f"`{len(p_sells)}` Close · `{len(p_buys)}` Open · `{len(p_vetoed)}` Removed"
+        )
+        st.caption(
+            f"Shows the exact positions this `$100k` Paper Book is scheduled to close or open at the `{next_trading_day_iso}` open "
+            f"(using the same AI Catalyst filter, Pre-Open Gap check, and ATR risk sizing as Live Copilot)."
+        )
+        if p_sells or p_buys:
+            for psa in p_sells:
+                p_factors_html = _format_factors_html(psa.get("factors_considered") or [])
+                st.markdown(
+                    f"<div style='background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:10px 14px;margin-bottom:8px;'>"
+                    f"<div><strong style='color:#fca5a5;'>CLOSE (`SELL`) · {psa['ticker']}</strong> · "
+                    f"<code>{psa['quantity_to_sell']} sh</code> · Est. Fill <code>${psa['reference_exit_price']:.2f}</code> · "
+                    f"Est. P&L <strong>${psa['estimated_realised_pnl']:+,.2f}</strong> · "
+                    f"<span style='color:#94a3b8;font-size:0.82rem;'>{psa.get('strategy_name', psa.get('strategy_id', ''))} — {psa.get('reason', '')}</span></div>"
+                    f"{p_factors_html}</div>",
+                    unsafe_allow_html=True,
+                )
+            for pba in p_buys:
+                p_factors_html = _format_factors_html(pba.get("factors_considered") or [])
+                ai_sent = float(pba.get("ai_catalyst_sentiment") or 0.0)
+                ai_badge = (
+                    f" · <span style='color:#4ade80;font-weight:600;'>AI Catalyst {ai_sent:+.2f}</span>"
+                    if ai_sent >= 0.25
+                    else f" · <span style='color:#94a3b8;'>AI {ai_sent:+.2f}</span>"
+                )
+                st.markdown(
+                    f"<div style='background:rgba(56,189,248,0.07);border:1px solid rgba(56,189,248,0.28);border-radius:8px;padding:10px 14px;margin-bottom:8px;'>"
+                    f"<div><strong style='color:#38bdf8;'>OPEN (`BUY`) · {pba['ticker']}</strong> ({pba.get('sector', '')}) · "
+                    f"<code>{pba['recommended_shares']} sh</code> @ Limit <code>${pba['reference_entry_price']:.2f}</code> "
+                    f"(Max Chase <code>${float(pba.get('max_chase_price') or pba['reference_entry_price']):.2f}</code>) · "
+                    f"Notional <code>${pba['estimated_cost_usd']:,.0f}</code> ({pba['portfolio_weight_pct']:.1f}% of book) · "
+                    f"Stop <code>${pba['stop_loss_price']:.2f}</code> · Target <code>${pba['take_profit_price']:.2f}</code> · "
+                    f"1R Risk <code>${pba['estimated_risk_usd']:.0f}</code> ({pba['risk_pct_of_equity']:.2f}%) · "
+                    f"<span style='color:#94a3b8;font-size:0.82rem;'>{pba.get('strategy_name', pba.get('strategy_id', ''))}{ai_badge}</span></div>"
+                    f"{p_factors_html}</div>",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.caption("No new paper positions queued to open or close right now.")
+
+        _render_removed_signals_section(st, p_vetoed, context_label=book_title_label)
 
         st.markdown("---")
         p_col1, p_col2 = st.columns([1.05, 1.15])

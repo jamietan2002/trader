@@ -720,11 +720,20 @@ class AutonomousWorkflowOrchestrator:
                 recorded_proposal_id, "PROMOTED" if any_promoted else "REJECTED"
             )
 
+        active_paper_strats = self.registry.list_strategies(status=StrategyStatus.PAPER_TRADING.value)
+        paper_ai_sync = {}
+        if hasattr(self.paper_engine, "sync_ai_catalysts_to_paper_accounts"):
+            paper_ai_sync = self.paper_engine.sync_ai_catalysts_to_paper_accounts(
+                active_strategies=active_paper_strats,
+                session_date=dt_str,
+            )
+
         res_summary = {
             "session_date": dt_str,
             "research_tickers_enriched": updated_tickers,
             "recorded_proposal_id": recorded_proposal_id,
             "tournament_results": tournament_results,
+            "paper_ai_sync": paper_ai_sync,
             "updated_copilot_action_plan": self.live_copilot.get_daily_action_plan(
                 as_of_date=session_date, check_calendar_today=False
             ),
