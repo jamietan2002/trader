@@ -2502,7 +2502,7 @@ class LiveTradingCopilotEngine:
                         "reason": effective_exit_reason,
                         "why_summary": f"Close {int(pos['quantity'])} {ticker}: {effective_exit_reason}",
                         "factors_considered": sell_factors,
-                        "order_timing_guidance": "Execute Market or Limit-at-Bid Order at Market Open (9:30–9:35 AM ET)",
+                        "order_timing_guidance": "Execute Market or Limit-at-Bid Order at Market Open (9:30–9:35 PM SGT / 9:30–9:35 AM ET)",
                         "signal_date": session_date,
                     }
                 )
@@ -2797,13 +2797,13 @@ class LiveTradingCopilotEngine:
                 pre_open_status = "DIPPED_BELOW_BUY_ZONE"
                 pre_open_guidance = (
                     f"Extended-hours ${indicative_px:.2f} ({gap_pct:+.2f}%) < Buy-Zone Low ${buy_zone_low:.2f}: "
-                    f"Wait for 9:30 AM ET reclaim of ${buy_zone_low:.2f} before entering."
+                    f"Wait for 9:30 PM SGT (9:30 AM ET) reclaim of ${buy_zone_low:.2f} before entering."
                 )
             else:
                 pre_open_status = "READY_IN_BUY_ZONE"
                 pre_open_guidance = (
                     f"Inside Buy-Zone (${buy_zone_low:.2f} – ${max_chase_p:.2f}) · "
-                    f"Place Day Limit Order <= ${max_chase_p:.2f} for 9:30–9:45 AM ET."
+                    f"Place Day Limit Order <= ${max_chase_p:.2f} for 9:30–9:45 PM SGT (9:30–9:45 AM ET)."
                 )
 
             # Use Temporary RiskManager without DB alert logging so previewing recommendations doesn't spam paper risk_alerts.
@@ -2914,7 +2914,7 @@ class LiveTradingCopilotEngine:
                         "ai_catalyst_source": ai_source,
                         "why_summary": f"{strat.name}: {sig.reason} ({rr_ratio:.1f}x Reward/Risk · -${decision.estimated_risk_usd:,.0f} max stop risk)",
                         "factors_considered": buy_factors,
-                        "order_timing_guidance": "Place Limit Order for Market Open (9:30–9:45 AM ET); NEVER trade illiquid pre-market/after-hours.",
+                        "order_timing_guidance": "Place Limit Order for Market Open (9:30–9:45 PM SGT / 9:30–9:45 AM ET); NEVER trade illiquid pre-market/after-hours.",
                         "if_entry_not_hit_rule": f"Cancel/Skip if open gaps above Max Chase (${max_chase_p:.2f}) or breaks below ${buy_zone_low:.2f}.",
                         "if_target_not_hit_rule": f"At +1.0R (${ratchet_1r_p:.2f}), raise Stop to Breakeven (${ref_price:.2f}); exit on Day {strat.holding_period_max_days} (Time-Stop) if Target (${tp_p:.2f}) not hit.",
                         "reason": sig.reason,
