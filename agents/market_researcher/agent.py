@@ -369,5 +369,18 @@ class MarketResearchAgent(BaseAgent):
                 deduped.append(rep)
                 if len(deduped) >= limit:
                     break
+        import sys as _sys
+        if deduped and "unittest" not in _sys.modules and hasattr(self.market_data, "fetch_live_quote_snapshots"):
+            try:
+                live_snaps = self.market_data.fetch_live_quote_snapshots([str(d.get("ticker")) for d in deduped])
+                for d in deduped:
+                    t_u = str(d.get("ticker") or "").upper()
+                    snap = live_snaps.get(t_u) or {}
+                    live_px = float(snap.get("indicative_price") or 0.0)
+                    if live_px > 0:
+                        d["reference_close_price"] = d.get("current_price")
+                        d["current_price"] = round(live_px, 2)
+            except Exception:
+                pass
         return deduped
 

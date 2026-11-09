@@ -636,13 +636,14 @@ class MarketDataService:
     def fetch_live_quote_snapshots(
         self,
         tickers: Sequence[str],
-        cache_ttl_seconds: int = 120,
+        cache_ttl_seconds: int = 30,
+        force_refresh: bool = False,
     ) -> Dict[str, Dict[str, Any]]:
-        """Fetch latest trade / extended-hours / pre-market snapshot quotes from Alpaca IEX feed."""
+        """Fetch latest real-time / extended-hours / pre-market snapshot quotes from Alpaca IEX feed."""
         import sys as _sys
 
         clean_tickers = sorted({str(t).strip().upper() for t in tickers if t and str(t).strip()})
-        if not clean_tickers or not self._is_live_api_configured() or self.provider.provider_name != "alpaca":
+        if not clean_tickers or not (self.settings.alpaca_api_key and self.settings.alpaca_secret_key):
             return {}
         if "unittest" in _sys.modules:
             return {}
@@ -650,9 +651,10 @@ class MarketDataService:
         symbols_param = ",".join(clean_tickers)
         url = f"https://data.alpaca.markets/v2/stocks/snapshots?symbols={symbols_param}&feed=iex"
         cache_key = f"alpaca_snapshots:{hashlib.sha256(url.encode('utf-8')).hexdigest()}"
-        cached = self.db.get_cached_response(cache_key)
-        if isinstance(cached, dict):
-            return cached
+        if not force_refresh and cache_ttl_seconds > 0:
+            cached = self.db.get_cached_response(cache_key)
+            if isinstance(cached, dict):
+                return cached
 
         headers = {
             "APCA-API-KEY-ID": self.settings.alpaca_api_key,
@@ -676,7 +678,12 @@ class MarketDataService:
             db_bar = snap.get("dailyBar") or {}
             prev_bar = snap.get("prevDailyBar") or {}
             lt_p = float(lt.get("p") or 0.0)
+            db_o = float(db_bar.get("o") or 0.0)
+            db_h = float(db_bar.get("h") or 0.0)
+            db_l = float(db_bar.get("l") or 0.0)
             db_c = float(db_bar.get("c") or 0.0)
+            db_v = float(db_bar.get("v") or 0.0)
+            db_dt = str(db_bar.get("t") or "")[:10]
             prev_c = float(prev_bar.get("c") or 0.0)
             indicative_p = lt_p if lt_p > 0 else (db_c if db_c > 0 else prev_c)
             if indicative_p > 0:
@@ -685,13 +692,19 @@ class MarketDataService:
                     "indicative_price": round(indicative_p, 2),
                     "latest_trade_price": round(lt_p, 2) if lt_p > 0 else None,
                     "latest_trade_timestamp": str(lt.get("t") or ""),
+                    "daily_bar_date": db_dt,
+                    "daily_open": round(db_o, 2) if db_o > 0 else None,
+                    "daily_high": round(db_h, 2) if db_h > 0 else None,
+                    "daily_low": round(db_l, 2) if db_l > 0 else None,
                     "daily_close": round(db_c, 2) if db_c > 0 else None,
+                    "daily_volume": round(db_v, 0) if db_v > 0 else None,
                     "prev_daily_close": round(prev_c, 2) if prev_c > 0 else None,
                     "bid_price": round(float(lq.get("bp") or 0.0), 2),
                     "ask_price": round(float(lq.get("ap") or 0.0), 2),
                 }
-        expires = (datetime.now(timezone.utc) + timedelta(seconds=cache_ttl_seconds)).isoformat()
-        self.db.set_cached_response(cache_key, "alpaca_snapshots", result, expires)
+        if cache_ttl_seconds > 0:
+            expires = (datetime.now(timezone.utc) + timedelta(seconds=cache_ttl_seconds)).isoformat()
+            self.db.set_cached_response(cache_key, "alpaca_snapshots", result, expires)
         return result
 
     def ingest_universe_and_history(

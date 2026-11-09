@@ -586,23 +586,29 @@ def main() -> None:
                 f"Next Session: **{next_trading_day_iso}**"
             )
 
+        open_sgt = USTradingCalendar.market_open_sgt()
+        open_win_35_sgt = USTradingCalendar.market_open_window_sgt(35)
+        open_win_45_sgt = USTradingCalendar.market_open_window_sgt(45)
+        pre_open_win_sgt = USTradingCalendar.pre_open_window_sgt()
+        close_sgt = USTradingCalendar.market_close_sgt()
+
         st.markdown("---")
         st.markdown("#### Daily Workflow")
         st.caption("Singapore (`SGT`) / Eastern (`ET`)")
         st.checkbox(
-            "1. 8:45–9:25 PM SGT: Type `run` in IDE",
+            f"1. {pre_open_win_sgt}: Type `run` in IDE",
             value=ide_ran_today,
             key="sidebar_chk_ide_run",
-            help="Best run 15–45 mins before 9:30 PM SGT (9:30 AM ET) open (after BMO/AMC earnings & overnight news): vetoes bearish news (<= -0.35), re-ranks top catalysts (>= +0.25), and checks pre-market gaps.",
+            help=f"Best run 15–45 mins before {open_sgt} (9:30 AM ET) open (after BMO/AMC earnings & overnight news): vetoes bearish news (<= -0.35), re-ranks top catalysts (>= +0.25), and checks pre-market gaps.",
         )
         st.checkbox(
-            "2. 9:30 PM SGT: Execute SELLs & Stops",
+            f"2. {open_sgt}: Execute SELLs & Stops",
             value=False,
             key="sidebar_chk_sells_stops",
             help="Execute SELL exits first to free cash and raise GTC stops on holdings at +1R.",
         )
         st.checkbox(
-            "3. 9:30–9:45 PM SGT: Place BUY Limits",
+            f"3. {open_win_45_sgt}: Place BUY Limits",
             value=False,
             key="sidebar_chk_copilot",
             help="Submit Day Limit orders inside the Buy-Zone (<= Max Chase) with an attached GTC Stop-Loss and Take-Profit bracket.",
@@ -822,9 +828,9 @@ def main() -> None:
             with st.popover("? Rules", width="stretch"):
                 st.markdown(
                     "**Two-Stage Institutional Swing Execution (`SGT` / `ET`)**\n\n"
-                    f"1. **Stage 1 — Post-Close Structural Scan (`5:30 AM SGT` / `5:30 PM ET` Auto)**: Daily indicators (`SMA`, `RSI`, `ATR`, `20d High`) require the official `4:00 AM SGT` (`4:00 PM ET`) closing auction (`98%` of daily volume). Stage 1 locks in structural setups (`Close {latest_bar_date}`) and blocks non-PEAD entries within 2 days before `AMC`/`BMO` earnings.\n"
-                    f"2. **Stage 2 — Pre-Open AI & Gap Gate (`8:45–9:25 PM SGT` / `8:45–9:25 AM ET` — Type `run` in IDE)**: Running `run` 15–45 mins before the `{next_trading_day_iso}` open checks overnight/`AMC`/`BMO` earnings and news—**removing** any `BUY` with bearish news (`<= -0.35`), triggering **emergency `SELL` alerts** on holdings with severe news (`<= -0.50`), **re-ranking** positive catalysts (`>= +0.25`) to #1 priority, and checking live pre-market gaps.\n"
-                    "3. **At Open (`9:30–9:45 PM SGT` / `9:30–9:45 AM ET`)**: Execute **`SELL` exits first**, raise `+1R` `GTC Stops`, and place **Day Limit Orders inside the `Buy-Zone (<= Max Chase)`** with attached `GTC Stop + Target` brackets. If a stock gaps above `Max Chase`, your limit order automatically prevents chasing."
+                    f"1. **Stage 1 — Post-Close Structural Scan (`5:30 AM SGT` / `4:30 PM ET` Auto)**: Daily indicators (`SMA`, `RSI`, `ATR`, `20d High`) require the official `{close_sgt}` (`4:00 PM ET`) closing auction (`98%` of daily volume). Stage 1 locks in structural setups (`Close {latest_bar_date}`) and blocks non-PEAD entries within 2 days before `AMC`/`BMO` earnings.\n"
+                    f"2. **Stage 2 — Pre-Open AI & Gap Gate (`{pre_open_win_sgt}` / `8:45–9:25 AM ET` — Type `run` in IDE)**: Running `run` 15–45 mins before the `{next_trading_day_iso}` open (`{open_sgt}`) checks overnight/`AMC`/`BMO` earnings and news—**removing** any `BUY` with bearish news (`<= -0.35`), triggering **emergency `SELL` alerts** on holdings with severe news (`<= -0.50`), **re-ranking** positive catalysts (`>= +0.25`) to #1 priority, and checking live pre-market gaps.\n"
+                    f"3. **At Open (`{open_win_45_sgt}` / `9:30–9:45 AM ET`)**: Execute **`SELL` exits first**, raise `+1R` `GTC Stops`, and place **Day Limit Orders inside the `Buy-Zone (<= Max Chase)`** with attached `GTC Stop + Target` brackets. If a stock gaps above `Max Chase`, your limit order automatically prevents chasing."
                 )
 
         st.markdown("---")
@@ -869,25 +875,25 @@ def main() -> None:
             ai_status_txt = (
                 f"Verified (`{last_ide_run_ts}`)"
                 if ide_ran_today
-                else "Deterministic Ready · Optional: type `run` in IDE at `8:45–9:25 PM SGT` (`8:45–9:25 AM ET`)"
+                else f"Deterministic Ready · Optional: type `run` in IDE at `{pre_open_win_sgt}` (`8:45–9:25 AM ET`)"
             )
             st.markdown(
                 f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px;margin:4px 0 12px 0;font-size:0.8rem;'>"
                 f"<div style='background:rgba(15,23,42,0.55);border:1px solid rgba(148,163,184,0.16);border-radius:6px;padding:8px 12px;'>"
-                f"<strong style='color:#38bdf8;'>STEP 1 · 8:45–9:25 PM SGT (Pre-Open)</strong><br/>"
+                f"<strong style='color:#38bdf8;'>STEP 1 · {pre_open_win_sgt} (Pre-Open)</strong><br/>"
                 f"<span style='color:#cbd5e1;'>{ai_status_txt}</span></div>"
                 f"<div style='background:rgba(15,23,42,0.55);border:1px solid rgba(148,163,184,0.16);border-radius:6px;padding:8px 12px;'>"
-                f"<strong style='color:#f59e0b;'>STEP 2 · 9:30–9:35 PM SGT (Exits &amp; Stops)</strong><br/>"
+                f"<strong style='color:#f59e0b;'>STEP 2 · {open_win_35_sgt} (Exits &amp; Stops)</strong><br/>"
                 f"<span style='color:#cbd5e1;'><strong>{len(sell_actions)}</strong> Position(s) to Close · <strong>{len(ratchet_alerts)}</strong> Stop Ratchet(s)</span></div>"
                 f"<div style='background:rgba(15,23,42,0.55);border:1px solid rgba(148,163,184,0.16);border-radius:6px;padding:8px 12px;'>"
-                f"<strong style='color:#10b981;'>STEP 3 · 9:30–9:45 PM SGT (New Entries)</strong><br/>"
+                f"<strong style='color:#10b981;'>STEP 3 · {open_win_45_sgt} (New Entries)</strong><br/>"
                 f"<span style='color:#cbd5e1;'><strong>{len(buy_actions)}</strong> Position(s) to Open (Day Limit &le; Max Chase + GTC Bracket)</span></div>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
 
             if sell_actions:
-                st.caption("STEP 2A · POSITIONS TO CLOSE AT MARKET OPEN (9:30–9:35 PM SGT — EXECUTE FIRST TO FREE CASH)")
+                st.caption(f"STEP 2A · POSITIONS TO CLOSE AT MARKET OPEN ({open_win_35_sgt} — EXECUTE FIRST TO FREE CASH)")
                 for idx, sa in enumerate(sell_actions):
                     sc_info, sc_qty, sc_px, sc_btn1, sc_btn2 = st.columns([2.7, 0.75, 0.85, 0.85, 0.65])
                     s_qty_sig = f"{sa['ticker']}_{sa['quantity_to_sell']}_{sa['reference_exit_price']}_{sa.get('signal_date', latest_bar_date)}"
@@ -953,7 +959,7 @@ def main() -> None:
                     )
 
             if buy_actions:
-                st.caption("STEP 3 · POSITIONS TO OPEN (9:30–9:45 PM SGT — PLACE DAY LIMIT IN BUY-ZONE + ATTACH GTC STOP & TARGET)")
+                st.caption(f"STEP 3 · POSITIONS TO OPEN ({open_win_45_sgt} — PLACE DAY LIMIT IN BUY-ZONE + ATTACH GTC STOP & TARGET)")
                 for idx, ba in enumerate(buy_actions):
                     bc_info, bc_qty, bc_px, bc_btn1, bc_btn2 = st.columns([2.7, 0.75, 0.85, 0.85, 0.65])
                     b_sig = f"{ba['ticker']}_{ba['recommended_shares']}_{ba['reference_entry_price']}_{ba.get('signal_date', latest_bar_date)}"
@@ -1802,9 +1808,9 @@ def main() -> None:
         step_info = {
             "step_daily_vs_weekly": (
                 "**1. Two-Stage Daily Execution (`Post-Close` + `Pre-Open`) & Weekly Run**\n\n"
-                "- **Stage 1 — Post-Close Structural Scan (`Mon–Fri 5:30 AM SGT` / `21:30 UTC`)**: Computes signals from official `4:00 AM SGT` (`4:00 PM ET`) daily closes, evaluates exits and `+1.0R` stop ratchets on open holdings, and sizes next-session `BUY` setups.\n"
-                "- **Stage 2 — Pre-Open AI & Gap Gate (`Mon–Fri 8:45–9:25 PM SGT` / `8:45–9:25 AM ET`)**: Type **`run`** in the IDE (or rely on the `9:00 PM SGT` GitHub Actions refresh) to scan overnight/`AMC`/`BMO` earnings and news—vetoing bearish catalysts (`<= -0.35`), re-ranking positive catalysts (`>= +0.25`) to #1 priority, and checking pre-market gaps.\n"
-                "- **Market-Open Execution (`9:30–9:45 PM SGT` / `9:30–9:45 AM ET`)**: Execute `SELL` exits first, raise `+1R` `GTC` stops, and place **Day Limit Orders inside the Buy-Zone (`Ref - 0.25 ATR` to `Ref + 0.50 ATR`)** with an attached `GTC` Stop-Loss & Take-Profit bracket.\n"
+                f"- **Stage 1 — Post-Close Structural Scan (`Mon–Fri 5:30 AM SGT` / `21:30 UTC`)**: Computes signals from official `{close_sgt}` (`4:00 PM ET`) daily closes, evaluates exits and `+1.0R` stop ratchets on open holdings, and sizes next-session `BUY` setups.\n"
+                f"- **Stage 2 — Pre-Open AI & Gap Gate (`Mon–Fri {pre_open_win_sgt}` / `8:45–9:25 AM ET`)**: Type **`run`** in the IDE (or rely on the pre-open GitHub Actions refresh) to scan overnight/`AMC`/`BMO` earnings and news—vetoing bearish catalysts (`<= -0.35`), re-ranking positive catalysts (`>= +0.25`) to #1 priority, and checking pre-market gaps.\n"
+                f"- **Market-Open Execution (`{open_win_45_sgt}` / `9:30–9:45 AM ET`)**: Execute `SELL` exits first, raise `+1R` `GTC` stops, and place **Day Limit Orders inside the Buy-Zone (`Ref - 0.25 ATR` to `Ref + 0.50 ATR`)** with an attached `GTC` Stop-Loss & Take-Profit bracket.\n"
                 "- **Weekly Run (`Saturday 10:00 SGT`)**: Evaluates candidate `v+1` upgrades in the 9-gate Out-of-Sample & Walk-Forward tournament."
             ),
             "step_multi_strategy": (

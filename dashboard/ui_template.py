@@ -582,9 +582,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <details class="tab-help">
           <summary>? Daily Order of Operations (By Time, SGT) — What Comes First, When to Set Stop/Target, What If You Forget or Exit Early?</summary>
           <div class="help-body">
-            • <strong>Step 1 (Before 9:30 PM SGT / 9:30 AM ET) — Optional AI Check (<code>type run in IDE</code>):</strong> Searches live web news to veto negative-news traps (&le; -0.35) and boost high-catalyst setups (&ge; +0.25). If you skip this, GitHub Actions already updated your checklist automatically at 5:30 AM SGT!<br/>
-            • <strong>Step 2 (9:30–9:35 PM SGT / 9:30–9:35 AM ET) — Priority #1: Execute SELL Exits &amp; Raise Stops First:</strong> Always sell exits first to free up cash, and update any GTC Stop-Loss orders on holdings that reached +1R.<br/>
-            • <strong>Step 3 (9:30–9:45 PM SGT / 9:30–9:45 AM ET or Pre-Submitted Limit) — Priority #2: Place BUY Limit Orders + Attach GTC Bracket Immediately:</strong> Either pre-submit a Regular-Hours Day Limit order at the <code>Max Chase</code> price with an attached OCO Bracket (<code>Stop-Loss</code> + <code>Take-Profit</code>) before 9:30 PM SGT, or place it live during 9:30–9:45 PM SGT. Set your GTC Stop-Loss &amp; Take-Profit immediately upon buying.<br/>
+            • <strong>Step 1 (Before 10:30 PM SGT / 9:30 AM ET) — Optional AI Check (<code>type run in IDE</code>):</strong> Searches live web news to veto negative-news traps (&le; -0.35) and boost high-catalyst setups (&ge; +0.25). If you skip this, GitHub Actions already updated your checklist automatically at 5:30 AM SGT!<br/>
+            • <strong>Step 2 (10:30–10:35 PM SGT / 9:30–9:35 AM ET) — Priority #1: Execute SELL Exits &amp; Raise Stops First:</strong> Always sell exits first to free up cash, and update any GTC Stop-Loss orders on holdings that reached +1R.<br/>
+            • <strong>Step 3 (10:30–10:45 PM SGT / 9:30–9:45 AM ET or Pre-Submitted Limit) — Priority #2: Place BUY Limit Orders + Attach GTC Bracket Immediately:</strong> Either pre-submit a Regular-Hours Day Limit order at the <code>Max Chase</code> price with an attached OCO Bracket (<code>Stop-Loss</code> + <code>Take-Profit</code>) before 10:30 PM SGT, or place it live during 10:30–10:45 PM SGT. Set your GTC Stop-Loss &amp; Take-Profit immediately upon buying.<br/>
             • <strong>Step 4 — What If You Forget a Day or Exit Early?:</strong> If you miss a BUY, never chase it late—wait for tomorrow's checklist. If you exit a position early on your own, sell in your broker (cancel any old GTC bracket) and click <strong>Close</strong> in Section 2 below.
           </div>
         </details>
@@ -726,7 +726,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       if (!isTradingDay) {
         if (calBanner) {
-          calBanner.innerHTML = `<div style="background:rgba(56,189,248,0.10);border:1px solid rgba(56,189,248,0.35);padding:10px 14px;border-radius:6px;font-size:0.84rem;color:#e2e8f0;"><strong>Market Closed Today (${calDate} — ${statusReason}):</strong> Previewing setups for Next Market Open (<strong>${nextTradingDay} 9:30 PM SGT</strong>, evaluated from ${plan.session_date} close).</div>`;
+          calBanner.innerHTML = `<div style="background:rgba(56,189,248,0.10);border:1px solid rgba(56,189,248,0.35);padding:10px 14px;border-radius:6px;font-size:0.84rem;color:#e2e8f0;"><strong>Market Closed Today (${calDate} — ${statusReason}):</strong> Previewing setups for Next Market Open (<strong>${nextTradingDay} 10:30 PM SGT</strong>, evaluated from ${plan.session_date} close).</div>`;
         }
       } else {
         if (calBanner) {
@@ -758,7 +758,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ` : '<div style="font-size:0.84rem;color:var(--muted);">No SELL exit triggers on your confirmed holdings today.</div>';
 
         document.getElementById('copilot-buy-box').innerHTML = buys.length ? `
-        <div style="font-size:0.84rem;font-weight:600;color:var(--accent);margin:10px 0 6px;">Step B — BUY Candidates (Open Limit 9:30–9:45 PM SGT · Sized to 1% Risk)</div>
+        <div style="font-size:0.84rem;font-weight:600;color:var(--accent);margin:10px 0 6px;">Step B — BUY Candidates (Open Limit 10:30–10:45 PM SGT · Sized to 1% Risk)</div>
         <table>
           <thead><tr><th>Ticker</th><th>Strategy</th><th>Shares</th><th>Fill Price ($)</th><th>Buy-Zone Limit</th><th>Stop / Target</th><th>+1R Ratchet / Plan</th><th>Actions</th></tr></thead>
           <tbody>

@@ -918,6 +918,17 @@ class TestSwingTradingPlatform(unittest.TestCase):
         ide_jobs = [j for j in orch.get_job_history(limit=10) if j["job_name"] == "ide_ai_cycle"]
         self.assertTrue(len(ide_jobs) >= 1)
 
+        # 9. Verify DST-aware SGT market hours & strict regular trading hours check
+        from datetime import date, datetime
+        from zoneinfo import ZoneInfo
+        sgt = ZoneInfo("Asia/Singapore")
+        # November 9, 2026 (EST): 9:45 PM SGT is 8:45 AM EST -> Market Closed
+        self.assertFalse(USTradingCalendar.is_market_open(datetime(2026, 11, 9, 21, 45, tzinfo=sgt)))
+        # November 9, 2026 (EST): 10:35 PM SGT is 9:35 AM EST -> Market Open
+        self.assertTrue(USTradingCalendar.is_market_open(datetime(2026, 11, 9, 22, 35, tzinfo=sgt)))
+        self.assertEqual(USTradingCalendar.market_open_sgt(date(2026, 11, 9)), "10:30 PM SGT")
+        self.assertEqual(USTradingCalendar.market_open_sgt(date(2026, 7, 15)), "9:30 PM SGT")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

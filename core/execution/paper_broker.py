@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 import uuid
 from dataclasses import dataclass, asdict
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+from zoneinfo import ZoneInfo
 
 from core.indicators.technical import compute_indicator_series
 from core.market_data.models import DailyBar, USTradingCalendar
@@ -192,7 +194,47 @@ class PaperTradingEngine:
             "updated_at": acc["updated_at"],
         }
 
+    def refresh_live_positions_mark_to_market(self, cache_ttl_seconds: int = 30) -> Dict[str, float]:
+        """Fetch live Alpaca snapshot quotes and update current_price & highest_price_since_entry on open positions."""
+        import sys as _sys
+
+        if "unittest" in _sys.modules or not hasattr(self.market_data, "fetch_live_quote_snapshots"):
+            return {}
+        rows = self.db.fetch_all(
+            "SELECT ticker, current_price, highest_price_since_entry FROM paper_positions WHERE account_id = ?",
+            (self.account_id,),
+        )
+        if not rows:
+            return {}
+        tickers = [str(r["ticker"]).upper() for r in rows]
+        quotes = self.market_data.fetch_live_quote_snapshots(tickers, cache_ttl_seconds=cache_ttl_seconds) or {}
+        if not quotes:
+            return {}
+        now_iso = utc_now_iso()
+        updated_prices: Dict[str, float] = {}
+        for r in rows:
+            tkr = str(r["ticker"]).upper()
+            q = quotes.get(tkr)
+            if not q:
+                continue
+            live_p = float(q.get("latest_trade_price") or q.get("indicative_price") or 0.0)
+            if live_p <= 0:
+                continue
+            d_high = float(q.get("daily_high") or live_p)
+            new_high = max(float(r["highest_price_since_entry"]), live_p, d_high)
+            self.db.execute(
+                """
+                UPDATE paper_positions
+                SET current_price = ?, highest_price_since_entry = ?, updated_at = ?
+                WHERE account_id = ? AND ticker = ?
+                """,
+                (round(live_p, 4), round(new_high, 4), now_iso, self.account_id, r["ticker"]),
+            )
+            updated_prices[tkr] = round(live_p, 4)
+        return updated_prices
+
     def get_open_positions(self) -> List[Dict[str, Any]]:
+        self.refresh_live_positions_mark_to_market(cache_ttl_seconds=30)
         rows = self.db.fetch_all(
             "SELECT * FROM paper_positions WHERE account_id = ? ORDER BY ticker ASC",
             (self.account_id,),
@@ -787,7 +829,8 @@ class PaperTradingEngine:
             logger.warning(f"Alpaca paper order mirror skipped/failed ({exc}); internal paper ledger remains authoritative.")
 
     def mark_to_market_and_snapshot(self, trading_date: str) -> Dict[str, Any]:
-        """Mark all open positions to `trading_date` market close, process dividends, and save snapshot."""
+        """Mark all open positions to live quote (or `trading_date` market close), process dividends, and save snapshot."""
+        live_prices = self.refresh_live_positions_mark_to_market(cache_ttl_seconds=30)
         positions = self.get_open_positions()
         acc = self.ensure_account_initialized()
         cash = float(acc["cash_balance"])
@@ -795,13 +838,19 @@ class PaperTradingEngine:
 
         for pos in positions:
             ticker = pos["ticker"]
+            tkr_u = str(ticker).upper()
             bars = self.market_data.get_bars(ticker, start_date=trading_date, end_date=trading_date)
-            if not bars:
+            bar = bars[-1] if bars else None
+            if tkr_u in live_prices:
+                curr_p = live_prices[tkr_u]
+                new_high = max(float(pos["highest_price_since_entry"]), curr_p, bar.adj_high if bar else curr_p)
+            elif bar is not None:
+                curr_p = bar.adj_close
+                new_high = max(float(pos["highest_price_since_entry"]), bar.adj_high)
+            else:
                 continue
-            bar = bars[-1]
-            new_high = max(float(pos["highest_price_since_entry"]), bar.adj_high)
             new_days = int(pos["holding_days"]) + (1 if trading_date > pos["opened_date"] else 0)
-            if bar.dividend_amount > 0:
+            if bar is not None and bar.dividend_amount > 0:
                 div_cash = int(pos["quantity"]) * bar.dividend_amount
                 cash = round(cash + div_cash, 2)
 
@@ -811,7 +860,7 @@ class PaperTradingEngine:
                 SET current_price = ?, highest_price_since_entry = ?, holding_days = ?, updated_at = ?
                 WHERE account_id = ? AND ticker = ?
                 """,
-                (bar.adj_close, new_high, new_days, now_iso, self.account_id, ticker),
+                (curr_p, new_high, new_days, now_iso, self.account_id, ticker),
             )
 
         self.db.execute(
@@ -900,13 +949,105 @@ class PaperTradingEngine:
         self,
         active_strategies: Sequence[StrategyConfig],
         trading_date: str,
+        allow_historical_simulation: bool = False,
     ) -> Dict[str, Any]:
-        """Run one full trading day across approved `PAPER_TRADING` strategies."""
+        """Run one trading session across approved `PAPER_TRADING` strategies.
+
+        Strict Market Hours & Live Price Invariants:
+        - In live operation (outside unit tests / explicit historical replay), orders
+          ONLY execute when `USTradingCalendar.is_market_open()` is True (9:30 AM – 4:00 PM ET,
+          which is 10:30 PM – 5:00 AM SGT during EST or 9:30 PM – 4:00 AM SGT during EDT).
+        - If the US market is currently closed, no paper trades are executed and status
+          `MARKET_CLOSED_DEFERRED` is returned.
+        - During open market hours, signals are evaluated from the latest completed daily
+          close and executed against real-time live market quotes (`fetch_live_quote_snapshots`).
+        """
+        import sys as _sys
+
         self.settings.validate_trading_mode()
+        is_test_or_sim = allow_historical_simulation or ("unittest" in _sys.modules)
+
+        if not is_test_or_sim:
+            if not USTradingCalendar.is_market_open():
+                self.refresh_live_positions_mark_to_market(cache_ttl_seconds=30)
+                open_sgt = USTradingCalendar.market_open_sgt()
+                close_sgt = USTradingCalendar.market_close_sgt()
+                return {
+                    "trading_date": trading_date,
+                    "status": "MARKET_CLOSED_DEFERRED",
+                    "message": (
+                        f"NYSE/NASDAQ regular market session is currently closed "
+                        f"(Regular hours: {open_sgt} – {close_sgt} / 9:30 AM – 4:00 PM ET). "
+                        f"Paper trade execution is strictly restricted to open market hours."
+                    ),
+                    "exits_executed": [],
+                    "entries_executed": [],
+                    "vetoed_orders": [],
+                    "account_summary": self.get_account_summary(),
+                }
+            # Market is currently open: execute for today's active US session date using live prices
+            effective_trading_date = USTradingCalendar.current_et_datetime().date().isoformat()
+        else:
+            effective_trading_date = trading_date
+
         universe_meta = self.market_data.get_universe_metadata(include_delisted=True)
-        spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker, end_date=trading_date)
-        spy_inds = compute_indicator_series(spy_bars)
-        spy_ind_today = spy_inds.get(trading_date)
+
+        # Fetch live quotes when running in live market hours
+        live_quotes: Dict[str, Dict[str, Any]] = {}
+        if not is_test_or_sim and hasattr(self.market_data, "fetch_live_quote_snapshots"):
+            try:
+                uni_tickers = sorted(
+                    {str(t).upper() for s in active_strategies for t in s.universe}
+                    | {str(p["ticker"]).upper() for p in self.get_open_positions()}
+                    | {self.settings.benchmark_ticker}
+                )
+                live_quotes = self.market_data.fetch_live_quote_snapshots(uni_tickers, cache_ttl_seconds=15) or {}
+            except Exception as exc:
+                logger.warning(f"Live quote fetch failed ({exc}).")
+
+        now_iso = utc_now_iso()
+
+        def _build_live_bar(ticker: str, fallback_bar: Optional[DailyBar] = None) -> Optional[DailyBar]:
+            """Construct a DailyBar for today's active session using real-time live market quotes."""
+            quote = live_quotes.get(ticker.upper())
+            if not quote:
+                return None
+            live_p = float(quote.get("latest_trade_price") or quote.get("indicative_price") or 0.0)
+            if live_p <= 0:
+                return None
+            live_p = round(live_p, 4)
+            has_today_dbar = quote.get("daily_bar_date") == effective_trading_date
+            d_open = round(float(quote.get("daily_open") or live_p), 4) if has_today_dbar else live_p
+            d_high = round(max(float(quote.get("daily_high") or live_p), live_p, d_open), 4) if has_today_dbar else live_p
+            d_low_raw = float(quote.get("daily_low") or 0.0) if has_today_dbar else 0.0
+            d_low = round(min(d_low_raw, live_p, d_open), 4) if d_low_raw > 0 else round(min(live_p, d_open), 4)
+            d_vol = float(quote.get("daily_volume") or (fallback_bar.volume if fallback_bar else 1_000_000.0))
+            return DailyBar(
+                ticker=ticker.upper(),
+                bar_date=effective_trading_date,
+                open=d_open,
+                high=d_high,
+                low=d_low,
+                close=live_p,
+                volume=d_vol,
+                adj_open=live_p,  # Fill paper orders at the actual live market price
+                adj_high=d_high,
+                adj_low=d_low,
+                adj_close=live_p,
+                adj_volume=d_vol,
+                split_factor=1.0,
+                dividend_amount=0.0,
+                provider_source="alpaca_live",
+                retrieved_at=now_iso,
+            )
+
+        spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker, end_date=effective_trading_date)
+        if not is_test_or_sim and spy_bars and spy_bars[-1].bar_date < effective_trading_date:
+            spy_live_bar = _build_live_bar(self.settings.benchmark_ticker, fallback_bar=spy_bars[-1])
+            spy_bars_with_live = list(spy_bars) + ([spy_live_bar] if spy_live_bar else [])
+        else:
+            spy_bars_with_live = list(spy_bars)
+        spy_inds = compute_indicator_series(spy_bars_with_live)
 
         exits_executed: List[Dict[str, Any]] = []
         entries_executed: List[Dict[str, Any]] = []
@@ -916,14 +1057,12 @@ class PaperTradingEngine:
         fallback_strat = active_strategies[0] if active_strategies else None
 
         # Load latest point-in-time AI / news catalyst sentiment per ticker.
-        # For historical replay dates (> 4 days before today), enforce strict point-in-time trading_date cutoff;
-        # for the active live/weekend session, include IDE AI catalysts published up to today.
         try:
-            td_dt = date.fromisoformat(trading_date[:10])
+            td_dt = date.fromisoformat(effective_trading_date[:10])
             is_live_window = abs((date.today() - td_dt).days) <= 4
         except ValueError:
             is_live_window = False
-        cat_cutoff = max(trading_date, date.today().isoformat()) if is_live_window else trading_date
+        cat_cutoff = max(effective_trading_date, date.today().isoformat()) if is_live_window else effective_trading_date
         catalyst_rows = self.db.fetch_all(
             """
             SELECT ticker, headline, summary, sentiment_score, source_name, catalyst_type, published_date
@@ -946,12 +1085,23 @@ class PaperTradingEngine:
         # 1. Evaluate exits on existing open positions (Technical Exit + Emergency AI Bearish Catalyst Exit <= -0.50)
         for pos in self.get_open_positions():
             ticker = pos["ticker"]
-            bars = self.market_data.get_bars(ticker, end_date=trading_date)
-            if not bars or bars[-1].bar_date != trading_date:
+            bars = self.market_data.get_bars(ticker, end_date=effective_trading_date)
+            if not bars:
                 continue
-            today_bar = bars[-1]
-            inds = compute_indicator_series(bars, spy_bars=spy_bars)
-            ind_today = inds.get(trading_date)
+            if not is_test_or_sim:
+                live_b = _build_live_bar(ticker, fallback_bar=bars[-1])
+                if live_b is None:
+                    continue
+                today_bar = live_b
+                bars_for_exit = (list(bars[:-1]) + [today_bar]) if bars[-1].bar_date == effective_trading_date else (list(bars) + [today_bar])
+            else:
+                if bars[-1].bar_date != effective_trading_date:
+                    continue
+                today_bar = bars[-1]
+                bars_for_exit = bars
+
+            inds = compute_indicator_series(bars_for_exit, spy_bars=spy_bars_with_live)
+            ind_today = inds.get(effective_trading_date)
             if ind_today is None:
                 continue
 
@@ -985,7 +1135,7 @@ class PaperTradingEngine:
                     ticker=ticker,
                     side="SELL",
                     requested_qty=int(pos["quantity"]),
-                    signal_date=trading_date,
+                    signal_date=effective_trading_date,
                     execution_bar=today_bar,
                     sector=pos["sector"],
                     notes=eff_exit_reason,
@@ -1006,12 +1156,27 @@ class PaperTradingEngine:
         ticker_context: Dict[str, Tuple[DailyBar, DailyBar, Any, List[Any]]] = {}
         sector_rs_lists: Dict[str, List[float]] = {}
         for ticker in all_tickers:
-            bars = self.market_data.get_bars(ticker, end_date=trading_date)
-            if len(bars) < 25 or bars[-1].bar_date != trading_date:
+            bars = self.market_data.get_bars(ticker, end_date=effective_trading_date)
+            if len(bars) < 25:
                 continue
-            today_bar = bars[-1]
-            prev_bar = bars[-2]
-            inds = compute_indicator_series(bars[:-1], spy_bars=spy_bars)
+            if not is_test_or_sim:
+                live_b = _build_live_bar(ticker, fallback_bar=bars[-1])
+                if live_b is None:
+                    continue
+                today_bar = live_b
+                if bars[-1].bar_date < effective_trading_date:
+                    prev_bar = bars[-1]
+                    inds = compute_indicator_series(bars, spy_bars=spy_bars)
+                else:
+                    prev_bar = bars[-2]
+                    inds = compute_indicator_series(bars[:-1], spy_bars=spy_bars)
+            else:
+                if bars[-1].bar_date != effective_trading_date:
+                    continue
+                today_bar = bars[-1]
+                prev_bar = bars[-2]
+                inds = compute_indicator_series(bars[:-1], spy_bars=spy_bars)
+
             ind_prev = inds.get(prev_bar.bar_date)
             if ind_prev is None:
                 continue
@@ -1116,8 +1281,11 @@ class PaperTradingEngine:
             summary_now = self.get_account_summary()
             open_gap = today_bar.adj_open - sig.close_at_signal
             max_gap_atr = float(strat.entry_rules.get("max_entry_gap_atr", 1.25))
-            if sig.atr_at_signal and sig.atr_at_signal > 0 and open_gap > max_gap_atr * sig.atr_at_signal:
-                continue
+            if sig.atr_at_signal and sig.atr_at_signal > 0:
+                if open_gap > max_gap_atr * sig.atr_at_signal:
+                    continue
+                if not is_test_or_sim and open_gap < -0.75 * sig.atr_at_signal:
+                    continue
             adj_stop = (
                 round(max(0.01, sig.stop_loss_price + open_gap), 2)
                 if sig.stop_loss_price is not None
@@ -1144,7 +1312,7 @@ class PaperTradingEngine:
             sector = meta.sector if meta else "Technology"
             ctx = ticker_context.get(ticker)
             ind_prev_obj = ctx[2] if ctx else None
-            upcoming_ev = self.market_data.get_upcoming_earnings_within_days(ticker, trading_date, 3)
+            upcoming_ev = self.market_data.get_upcoming_earnings_within_days(ticker, effective_trading_date, 3)
             days_to_earn = 1 if upcoming_ev else None
 
             entry_note = sig.reason
@@ -1176,7 +1344,7 @@ class PaperTradingEngine:
                 vetoed_orders.append(res.to_dict())
 
         # 3. End-of-day mark-to-market & snapshot for this account
-        updated_summary = self.mark_to_market_and_snapshot(trading_date)
+        updated_summary = self.mark_to_market_and_snapshot(effective_trading_date)
 
         # 4. When running on the Master Account, also update each strategy's dedicated $100k Paper Account sleeve
         if self.account_id == self.DEFAULT_ACCOUNT_ID and deduped_strategies:
@@ -1184,11 +1352,12 @@ class PaperTradingEngine:
                 strat_engine = self.get_strategy_account_engine(strat.strategy_id)
                 strat_engine.run_trading_session_for_strategies(
                     active_strategies=[strat],
-                    trading_date=trading_date,
+                    trading_date=effective_trading_date,
+                    allow_historical_simulation=allow_historical_simulation,
                 )
 
         return {
-            "trading_date": trading_date,
+            "trading_date": effective_trading_date,
             "exits_executed": exits_executed,
             "entries_executed": entries_executed,
             "vetoed_orders": vetoed_orders,
@@ -1201,6 +1370,16 @@ class PaperTradingEngine:
         session_date: str,
     ) -> Dict[str, Any]:
         """Synchronize latest IDE AI catalyst findings (`run`) to Master & Per-Strategy Paper Accounts."""
+        import sys as _sys
+
+        if "unittest" not in _sys.modules and not USTradingCalendar.is_market_open():
+            self.refresh_live_positions_mark_to_market(cache_ttl_seconds=30)
+            return {
+                "session_date": session_date,
+                "status": "MARKET_CLOSED_DEFERRED",
+                "ai_paper_exits_triggered": [],
+            }
+
         cat_cutoff = max(session_date, date.today().isoformat())
         catalyst_rows = self.db.fetch_all(
             """
@@ -1228,6 +1407,15 @@ class PaperTradingEngine:
                     seen_sids.add(s.strategy_id)
                     all_engines.append(self.get_strategy_account_engine(s.strategy_id))
 
+        live_quotes: Dict[str, Dict[str, Any]] = {}
+        if "unittest" not in _sys.modules and hasattr(self.market_data, "fetch_live_quote_snapshots"):
+            open_tkrs = sorted({str(p["ticker"]).upper() for eng in all_engines for p in eng.get_open_positions()})
+            if open_tkrs:
+                live_quotes = self.market_data.fetch_live_quote_snapshots(open_tkrs, cache_ttl_seconds=15) or {}
+
+        live_dt = USTradingCalendar.current_et_datetime().date().isoformat() if "unittest" not in _sys.modules else session_date
+        now_iso = utc_now_iso()
+
         ai_exits: List[Dict[str, Any]] = []
         for eng in all_engines:
             for pos in eng.get_open_positions():
@@ -1237,15 +1425,34 @@ class PaperTradingEngine:
                     continue
                 sent = float(c_info["sentiment_score"])
                 note = str(c_info.get("headline") or c_info.get("summary") or "")
-                # Emergency exit if open position has severe bearish AI catalyst (<= -0.50),
-                # or if position was opened on session_date and AI vetoed it (<= -0.35)
-                should_exit = (sent <= -0.50) or (sent <= -0.35 and str(pos.get("opened_date")) == session_date)
+                should_exit = (sent <= -0.50) or (sent <= -0.35 and str(pos.get("opened_date")) in (session_date, live_dt))
                 if not should_exit:
                     continue
                 bars = eng.market_data.get_bars(tkr, end_date=session_date)
                 if not bars:
                     continue
                 exec_bar = bars[-1]
+                q = live_quotes.get(tkr)
+                if q:
+                    lp = float(q.get("latest_trade_price") or q.get("indicative_price") or 0.0)
+                    if lp > 0:
+                        lp = round(lp, 4)
+                        exec_bar = DailyBar(
+                            ticker=tkr,
+                            bar_date=live_dt,
+                            open=lp,
+                            high=max(exec_bar.high, lp),
+                            low=min(exec_bar.low, lp),
+                            close=lp,
+                            volume=exec_bar.volume,
+                            adj_open=lp,
+                            adj_high=max(exec_bar.adj_high, lp),
+                            adj_low=min(exec_bar.adj_low, lp),
+                            adj_close=lp,
+                            adj_volume=exec_bar.adj_volume,
+                            provider_source="alpaca_live",
+                            retrieved_at=now_iso,
+                        )
                 strat = strat_by_id.get((pos["strategy_id"], int(pos["strategy_version"])), fallback_strat)
                 if strat is None:
                     continue
@@ -1256,14 +1463,14 @@ class PaperTradingEngine:
                     ticker=tkr,
                     side="SELL",
                     requested_qty=int(pos["quantity"]),
-                    signal_date=session_date,
+                    signal_date=exec_bar.bar_date,
                     execution_bar=exec_bar,
                     sector=pos["sector"],
                     notes=f"AI Catalyst Exit ({sent:+.2f}): {note[:90]}",
                 )
                 if res.status in ("FILLED", "PARTIALLY_FILLED"):
                     ai_exits.append({"account_id": eng.account_id, **res.to_dict()})
-            eng.mark_to_market_and_snapshot(session_date)
+            eng.mark_to_market_and_snapshot(live_dt)
 
         return {"session_date": session_date, "ai_paper_exits_triggered": ai_exits}
 
@@ -1421,7 +1628,7 @@ class LiveTradingCopilotEngine:
         return dict(row)
 
     def sync_market_prices(self, as_of_date: Optional[str] = None) -> None:
-        """Mark all confirmed real positions to the latest closing price and update holding days."""
+        """Mark all confirmed real positions to the latest live or closing price and update holding days."""
         rows = self.db.fetch_all(
             "SELECT * FROM shadow_positions WHERE account_id = ? ORDER BY ticker ASC",
             (self.account_id,),
@@ -1433,18 +1640,39 @@ class LiveTradingCopilotEngine:
             self.market_data.ensure_latest_market_data()
 
         spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker, end_date=as_of_date)
+        latest_session_date = spy_bars[-1].bar_date if spy_bars else None
+        use_live_quotes = (
+            "unittest" not in sys.modules
+            and hasattr(self.market_data, "fetch_live_quote_snapshots")
+            and (as_of_date is None or (latest_session_date is not None and as_of_date >= latest_session_date))
+        )
+        live_snapshots: Dict[str, Dict[str, Any]] = {}
+        if use_live_quotes:
+            try:
+                live_snapshots = self.market_data.fetch_live_quote_snapshots([str(r["ticker"]) for r in rows])
+            except Exception:
+                live_snapshots = {}
+
         for r in rows:
             ticker = r["ticker"]
             opened_dt = str(r["opened_date"])
             bars = self.market_data.get_bars(ticker, end_date=as_of_date)
+            snap = live_snapshots.get(str(ticker).upper()) or {}
+            live_px = float(snap.get("indicative_price") or 0.0)
+            live_high = float(snap.get("daily_high") or live_px or 0.0)
             if bars:
                 latest_bar = bars[-1]
-                curr_price = float(latest_bar.adj_close)
-                high_since = max(float(r["highest_price_since_entry"]), float(latest_bar.adj_high), curr_price)
+                curr_price = round(live_px, 2) if live_px > 0 else float(latest_bar.adj_close)
+                high_since = max(
+                    float(r["highest_price_since_entry"]),
+                    float(latest_bar.adj_high),
+                    curr_price,
+                    live_high,
+                )
                 hold_days = sum(1 for b in bars if b.bar_date > opened_dt)
             else:
-                curr_price = float(r["current_price"])
-                high_since = max(float(r["highest_price_since_entry"]), curr_price)
+                curr_price = round(live_px, 2) if live_px > 0 else float(r["current_price"])
+                high_since = max(float(r["highest_price_since_entry"]), curr_price, live_high)
                 hold_days = sum(1 for b in spy_bars if b.bar_date > opened_dt) if spy_bars else int(r["holding_days"])
             self.db.execute(
                 """
@@ -2438,6 +2666,22 @@ class LiveTradingCopilotEngine:
         # 1. Evaluate SELL / HOLD status for every confirmed position the user actually holds
         #    Always uses the exact strategy (pos['strategy_id'] v{pos['strategy_version']}) that opened the position,
         #    plus Emergency AI Bearish Catalyst Exit (sentiment <= -0.50 from IDE AI research).
+        use_live_quotes_plan = (
+            "unittest" not in sys.modules
+            and hasattr(self.market_data, "fetch_live_quote_snapshots")
+            and (as_of_date is None or as_of_date >= session_date)
+        )
+        pos_live_snapshots: Dict[str, Dict[str, Any]] = {}
+        if use_live_quotes_plan and open_positions:
+            try:
+                pos_live_snapshots = self.market_data.fetch_live_quote_snapshots([str(p["ticker"]) for p in open_positions])
+            except Exception:
+                pos_live_snapshots = {}
+
+        open_window_35_sgt = USTradingCalendar.market_open_window_sgt(35, calendar_today_dt)
+        open_window_45_sgt = USTradingCalendar.market_open_window_sgt(45, calendar_today_dt)
+        open_time_sgt = USTradingCalendar.market_open_sgt(calendar_today_dt)
+
         sell_actions: List[Dict[str, Any]] = []
         hold_updates: List[Dict[str, Any]] = []
         for pos in open_positions:
@@ -2477,15 +2721,20 @@ class LiveTradingCopilotEngine:
                 else None
             )
             effective_exit_reason = exit_sig.reason if exit_sig is not None else ai_emergency_exit_reason
+            pos_snap = pos_live_snapshots.get(str(ticker).upper()) or {}
+            ref_exit_px = round(
+                float(pos_snap.get("indicative_price") or pos.get("current_price") or bars[-1].adj_close),
+                2,
+            )
 
             if effective_exit_reason is not None and not (check_calendar_today and not is_today_trading_day):
                 est_pnl_val = round(
-                    (float(bars[-1].adj_close) - float(pos["avg_entry_price"])) * int(pos["quantity"]), 2
+                    (ref_exit_px - float(pos["avg_entry_price"])) * int(pos["quantity"]), 2
                 )
                 sell_factors = [
                     f"Exit Trigger: {effective_exit_reason}",
                     f"Entry Strategy Rule: Bound to {pos['strategy_id']} v{pos['strategy_version']} ({int(pos['holding_days'])}d held)",
-                    f"P&L Outcome: Entry ${float(pos['avg_entry_price']):.2f} → Ref Exit ${float(bars[-1].adj_close):.2f} ({est_pnl_val:+,.2f})",
+                    f"P&L Outcome: Entry ${float(pos['avg_entry_price']):.2f} → Ref Exit ${ref_exit_px:.2f} ({est_pnl_val:+,.2f})",
                 ]
                 sell_actions.append(
                     {
@@ -2496,13 +2745,13 @@ class LiveTradingCopilotEngine:
                         "strategy_version": pos["strategy_version"],
                         "quantity_to_sell": int(pos["quantity"]),
                         "avg_entry_price": float(pos["avg_entry_price"]),
-                        "reference_exit_price": round(float(bars[-1].adj_close), 2),
+                        "reference_exit_price": ref_exit_px,
                         "estimated_realised_pnl": est_pnl_val,
                         "holding_days": int(pos["holding_days"]),
                         "reason": effective_exit_reason,
                         "why_summary": f"Close {int(pos['quantity'])} {ticker}: {effective_exit_reason}",
                         "factors_considered": sell_factors,
-                        "order_timing_guidance": "Execute Market or Limit-at-Bid Order at Market Open (9:30–9:35 PM SGT / 9:30–9:35 AM ET)",
+                        "order_timing_guidance": f"Execute Market or Limit-at-Bid Order at Market Open ({open_window_35_sgt} / 9:30–9:35 AM ET)",
                         "signal_date": session_date,
                     }
                 )
@@ -2710,12 +2959,15 @@ class LiveTradingCopilotEngine:
 
         interleaved.sort(key=_effective_candidate_conviction, reverse=True)
 
-        # Fetch live extended-hours / pre-market / intraday quotes when running in live / preview mode (as_of_date is None)
-        live_snapshots: Dict[str, Dict[str, Any]] = {}
-        if as_of_date is None and hasattr(self.market_data, "fetch_live_quote_snapshots"):
+        # Fetch live extended-hours / pre-market / intraday quotes when running in live / preview mode
+        live_snapshots: Dict[str, Dict[str, Any]] = dict(pos_live_snapshots)
+        if use_live_quotes_plan:
             snap_tickers = sorted({item[1] for item in interleaved} | {p["ticker"] for p in open_positions})
             if snap_tickers:
-                live_snapshots = self.market_data.fetch_live_quote_snapshots(snap_tickers)
+                try:
+                    live_snapshots = self.market_data.fetch_live_quote_snapshots(snap_tickers)
+                except Exception:
+                    pass
 
         seen_buy_candidates: set[str] = set()
         for strat, ticker, latest_bar, sig in interleaved:
@@ -2748,7 +3000,7 @@ class LiveTradingCopilotEngine:
                 )
                 continue
 
-            # Pre-Open / Extended-Hours Gap Gate
+            # Pre-Open / Extended-Hours / Live Intraday Quote & Gap Gate
             snap_info = live_snapshots.get(ticker.upper()) or {}
             indicative_px = float(snap_info.get("indicative_price") or ref_price)
             gap_usd = round(indicative_px - ref_price, 2)
@@ -2764,7 +3016,7 @@ class LiveTradingCopilotEngine:
                         "removed_by": "Pre-Open Gap Filter",
                         "technical_trigger": sig.reason,
                         "reason": (
-                            f"Removed by Pre-Open Gap Filter: Extended-hours quote ${indicative_px:.2f} ({gap_pct:+.2f}%, {gap_atr:+.2f} ATR) "
+                            f"Removed by Pre-Open Gap Filter: Live/extended-hours quote ${indicative_px:.2f} ({gap_pct:+.2f}%, {gap_atr:+.2f} ATR) "
                             f"broke below Buy-Zone Low (${buy_zone_low:.2f})."
                         ),
                     }
@@ -2780,7 +3032,7 @@ class LiveTradingCopilotEngine:
                         "removed_by": "Pre-Open Gap Filter",
                         "technical_trigger": sig.reason,
                         "reason": (
-                            f"Removed by Pre-Open Gap Filter: Extended-hours quote ${indicative_px:.2f} ({gap_pct:+.2f}%, {gap_atr:+.2f} ATR) "
+                            f"Removed by Pre-Open Gap Filter: Live/extended-hours quote ${indicative_px:.2f} ({gap_pct:+.2f}%, {gap_atr:+.2f} ATR) "
                             f"exceeds max overnight gap ({self.settings.risk.max_overnight_gap_atr_multiple:.1f}x ATR)."
                         ),
                     }
@@ -2790,20 +3042,20 @@ class LiveTradingCopilotEngine:
             if indicative_px > max_chase_p:
                 pre_open_status = "EXTENDED_ABOVE_MAX_CHASE"
                 pre_open_guidance = (
-                    f"Extended-hours ${indicative_px:.2f} ({gap_pct:+.2f}%) > Max Chase ${max_chase_p:.2f}: "
+                    f"Live/extended-hours ${indicative_px:.2f} ({gap_pct:+.2f}%) > Max Chase ${max_chase_p:.2f}: "
                     f"DO NOT CHASE at open; place Day Limit <= ${max_chase_p:.2f} in case of pullback."
                 )
             elif indicative_px < buy_zone_low:
                 pre_open_status = "DIPPED_BELOW_BUY_ZONE"
                 pre_open_guidance = (
-                    f"Extended-hours ${indicative_px:.2f} ({gap_pct:+.2f}%) < Buy-Zone Low ${buy_zone_low:.2f}: "
-                    f"Wait for 9:30 PM SGT (9:30 AM ET) reclaim of ${buy_zone_low:.2f} before entering."
+                    f"Live/extended-hours ${indicative_px:.2f} ({gap_pct:+.2f}%) < Buy-Zone Low ${buy_zone_low:.2f}: "
+                    f"Wait for {open_time_sgt} (9:30 AM ET) reclaim of ${buy_zone_low:.2f} before entering."
                 )
             else:
                 pre_open_status = "READY_IN_BUY_ZONE"
                 pre_open_guidance = (
                     f"Inside Buy-Zone (${buy_zone_low:.2f} – ${max_chase_p:.2f}) · "
-                    f"Place Day Limit Order <= ${max_chase_p:.2f} for 9:30–9:45 PM SGT (9:30–9:45 AM ET)."
+                    f"Place Day Limit Order <= ${max_chase_p:.2f} for {open_window_45_sgt} (9:30–9:45 AM ET)."
                 )
 
             # Use Temporary RiskManager without DB alert logging so previewing recommendations doesn't spam paper risk_alerts.
@@ -2914,7 +3166,7 @@ class LiveTradingCopilotEngine:
                         "ai_catalyst_source": ai_source,
                         "why_summary": f"{strat.name}: {sig.reason} ({rr_ratio:.1f}x Reward/Risk · -${decision.estimated_risk_usd:,.0f} max stop risk)",
                         "factors_considered": buy_factors,
-                        "order_timing_guidance": "Place Limit Order for Market Open (9:30–9:45 PM SGT / 9:30–9:45 AM ET); NEVER trade illiquid pre-market/after-hours.",
+                        "order_timing_guidance": f"Place Limit Order for Market Open ({open_window_45_sgt} / 9:30–9:45 AM ET); NEVER trade illiquid pre-market/after-hours.",
                         "if_entry_not_hit_rule": f"Cancel/Skip if open gaps above Max Chase (${max_chase_p:.2f}) or breaks below ${buy_zone_low:.2f}.",
                         "if_target_not_hit_rule": f"At +1.0R (${ratchet_1r_p:.2f}), raise Stop to Breakeven (${ref_price:.2f}); exit on Day {strat.holding_period_max_days} (Time-Stop) if Target (${tp_p:.2f}) not hit.",
                         "reason": sig.reason,

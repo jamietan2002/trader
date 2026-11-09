@@ -274,16 +274,31 @@ class AutonomousWorkflowOrchestrator:
         )
 
         # 2. Market Hours: Paper Trading Execution across approved PAPER_TRADING strategies
+        #    In live operation (outside unit tests), paper trades execute ONLY during regular US market hours
+        #    (9:30 AM – 4:00 PM ET / 10:30 PM – 5:00 AM SGT in EST, 9:30 PM – 4:00 AM SGT in EDT).
+        #    Do not lock daily_market_execution in job_executions when deferred outside market hours.
+        import sys as _sys
         active_strats = self.registry.list_strategies(status=StrategyStatus.PAPER_TRADING.value)
-        market_exec_res = self.run_idempotent_job(
-            job_name="daily_market_execution",
-            idempotency_key=f"daily_market_execution:{trading_date}",
-            fn=lambda: self.paper_engine.run_trading_session_for_strategies(
+        if "unittest" not in _sys.modules and not USTradingCalendar.is_market_open():
+            market_exec_res = self.paper_engine.run_trading_session_for_strategies(
                 active_strategies=active_strats,
                 trading_date=trading_date,
-            ),
-            force=force,
-        )
+            )
+        else:
+            live_exec_date = (
+                USTradingCalendar.current_et_datetime().date().isoformat()
+                if "unittest" not in _sys.modules
+                else trading_date
+            )
+            market_exec_res = self.run_idempotent_job(
+                job_name="daily_market_execution",
+                idempotency_key=f"daily_market_execution:{live_exec_date}",
+                fn=lambda: self.paper_engine.run_trading_session_for_strategies(
+                    active_strategies=active_strats,
+                    trading_date=live_exec_date,
+                ),
+                force=force,
+            )
 
         # 3. Post-Close: Reconciliation, Risk Audit, and Performance Analyst Review
         def _post_close_fn() -> Dict[str, Any]:
@@ -545,9 +560,23 @@ class AutonomousWorkflowOrchestrator:
             t for t in self.paper_engine.get_trade_ledger(limit=30) if t.get("side") == "SELL"
         ][:8]
 
+        import sys as _sys
+        live_spy_px = round(float(spy_ind.close), 2) if spy_ind else None
+        if "unittest" not in _sys.modules and hasattr(self.market_data, "fetch_live_quote_snapshots"):
+            try:
+                spy_snap = self.market_data.fetch_live_quote_snapshots([self.settings.benchmark_ticker])
+                spy_info = spy_snap.get(self.settings.benchmark_ticker.upper()) or {}
+                if spy_info.get("indicative_price"):
+                    live_spy_px = round(float(spy_info["indicative_price"]), 2)
+            except Exception:
+                pass
+
         return {
             "calendar_date": date.today().isoformat(),
             "is_trading_day": USTradingCalendar.is_trading_day(date.today()),
+            "is_market_open": USTradingCalendar.is_market_open(),
+            "market_open_sgt": USTradingCalendar.market_open_sgt(),
+            "market_close_sgt": USTradingCalendar.market_close_sgt(),
             "market_status_reason": USTradingCalendar.non_trading_reason(date.today()),
             "next_trading_day": USTradingCalendar.next_trading_day(
                 date.today(), include_same_day=USTradingCalendar.is_trading_day(date.today())
@@ -555,7 +584,8 @@ class AutonomousWorkflowOrchestrator:
             "session_date": latest_date,
             "market_regime": {
                 "regime": regime,
-                "spy_close": round(float(spy_ind.close), 2) if spy_ind else None,
+                "spy_close": live_spy_px,
+                "spy_last_daily_close": round(float(spy_ind.close), 2) if spy_ind else None,
                 "spy_rsi_14": round(float(spy_ind.rsi_14), 2) if (spy_ind and spy_ind.rsi_14) else None,
                 "spy_return_20d_pct": round(float(spy_ind.ret_20d_pct), 2) if (spy_ind and spy_ind.ret_20d_pct is not None) else None,
                 "spy_volatility_20d_pct": round(float(spy_ind.realised_vol_20d_annualised), 2) if (spy_ind and spy_ind.realised_vol_20d_annualised is not None) else None,

@@ -57,14 +57,14 @@ This platform runs a systematic **swing-trading engine** (holding liquid US larg
         - **Severe Gap Breakdown (`<= -0.75 ATR`) or Runaway Gap (`> +2.5 ATR`)**: Automatically vetoes the `BUY` setup (`PRE_OPEN_GAP_VETO`).
         - **Extended Above `Max Chase` (`> Close + 0.50 ATR`)**: Flags **`Extended — Do Not Chase`**; keep your Limit Order at `<= Max Chase` so you only buy if price pulls back into the Buy-Zone after `9:30 AM ET`.
 
-### Daily User Actions (Concise 4-Step Checklist, `ET` & `SGT`)
-1. **`8:45–9:25 AM ET` (`8:45–9:25 PM SGT`) — Pre-Open AI & Gap Check (`type run in IDE`)**:
-   - Type **`run`** in the IDE after `BMO` earnings (`8:30 AM ET`) and before the `9:30 AM ET` open so overnight news vetoes, catalyst re-rankings, and pre-market gap checks update your `Live Copilot` checklist.
-   - *What if you skip `run`?* GitHub Actions automatically runs both Post-Close (`21:30 UTC`) and Pre-Open (`13:00 UTC` / `9:00 AM ET`), and your **Buy-Zone Limit Order (`<= Max Chase`)** automatically protects you from chasing overnight gap-ups.
-2. **`9:30–9:35 AM ET` (`9:30–9:35 PM SGT`) — Execute `SELL` Exits & Raise `+1R` Stops First**:
+### Daily User Actions (Concise 4-Step Checklist, `SGT` & `ET`)
+1. **`9:45–10:25 PM SGT` (`8:45–9:25 AM EST` / `8:45–9:25 PM SGT` in EDT) — Pre-Open AI & Gap Check (`type run in IDE`)**:
+   - Type **`run`** in the IDE after `BMO` earnings (`8:30 AM ET`) and before the `10:30 PM SGT` (`9:30 AM EST`, or `9:30 PM SGT` during EDT) open so overnight news vetoes, catalyst re-rankings, and pre-market gap checks update your `Live Copilot` checklist. Running `run` before market open **never** executes paper trades prematurely (`MARKET_CLOSED_DEFERRED`).
+   - *What if you skip `run`?* GitHub Actions automatically runs Post-Close (`21:30 UTC`), Pre-Open (`13:00/14:00 UTC`), and Market-Open (`13:35/14:35 UTC`), and your **Buy-Zone Limit Order (`<= Max Chase`)** automatically protects you from chasing overnight gap-ups.
+2. **`10:30–10:35 PM SGT` (`9:30–9:35 AM EST`) — Execute `SELL` Exits & Raise `+1R` Stops First**:
    - Execute **`SELL` cards first** to free cash and lock in P&L, then raise your broker's `GTC Stop-Loss` on any holding showing a **`Raise Stop`** alert (`+1R` Breakeven / Chandelier).
-3. **`9:30–9:45 AM ET` (or Pre-Set `RTH` Limit) — Place `BUY` Limit Orders in `Buy-Zone` + `GTC Bracket`**:
-   - Submit a **Regular-Hours (`RTH`) Day Limit Order** inside the **`Buy-Zone ($Low – $MaxChase)`** and immediately attach your **`GTC Stop-Loss` + `GTC Take-Profit`** bracket. Never trade illiquid pre-market or after-hours sessions.
+3. **`10:30–10:45 PM SGT` (`9:30–9:45 AM EST`, or Pre-Set `RTH` Limit) — Place `BUY` Limit Orders in `Buy-Zone` + `GTC Bracket`**:
+   - Submit a **Regular-Hours (`RTH`) Day Limit Order** inside the **`Buy-Zone ($Low – $MaxChase)`** and immediately attach your **`GTC Stop-Loss` + `GTC Take-Profit`** bracket. Paper accounts execute strictly during Regular Trading Hours (`10:30 PM – 5:00 AM SGT` in EST / `9:30 AM – 4:00 PM ET`) using live Alpaca IEX quotes. Never trade illiquid pre-market or after-hours sessions.
 4. **Post-Fill — Click `Sold` / `Bought` in `Live Copilot`**:
    - Confirm your actual broker fill price and shares in Tab 1 (or edit/add/remove any trade in Section 3 `Account Ledger`). Cash, holdings, and P&L reconcile automatically from your ledger.
 

@@ -4,6 +4,28 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-09] — Strict US Market-Hours Paper Execution Gate (`10:30 PM – 5:00 AM SGT` in EST), Live Alpaca Intraday Quote Pricing & DST-Aware SGT UI Times
+
+### Summary
+- **Strict Regular-Market-Hours Gate (`USTradingCalendar.is_market_open()`) (`core/market_data/models.py`, `core/execution/paper_broker.py`, `infrastructure/scheduler/orchestrator.py`)**:
+  - Added `USTradingCalendar.is_market_open()`, `current_et_datetime()`, `market_open_sgt()`, `market_open_window_sgt()`, `pre_open_window_sgt()`, and `market_close_sgt()` using `America/New_York` and `Asia/Singapore` timezones so EST (`10:30 PM – 5:00 AM SGT`) and EDT (`9:30 PM – 4:00 AM SGT`) are handled automatically.
+  - Updated `PaperTradingEngine.run_trading_session_for_strategies()` and `sync_ai_catalysts_to_paper_accounts()` to strictly require `USTradingCalendar.is_market_open() == True` in live operation (returning `"status": "MARKET_CLOSED_DEFERRED"` when called outside `9:30 AM – 4:00 PM ET` / `10:30 PM – 5:00 AM SGT`), and updated `AutonomousWorkflowOrchestrator.run_daily_workflow()` so deferred pre-open runs never lock `daily_market_execution` in `job_executions`.
+- **Real-Time Live Alpaca Quotes Across Paper Execution, Open Positions, Copilot & Research (`core/market_data/providers.py`, `core/execution/paper_broker.py`, `agents/market_researcher/agent.py`, `infrastructure/scheduler/orchestrator.py`)**:
+  - Enhanced `MarketDataService.fetch_live_quote_snapshots()` to return full live trade & intraday bar fields (`indicative_price`, `latest_trade_price`, `daily_open`, `daily_high`, `daily_low`, `daily_close`, `daily_volume`, `bid_price`, `ask_price`) with a 30-second cache TTL.
+  - Updated `PaperTradingEngine.run_trading_session_for_strategies()` so live market-hours sessions evaluate signals from the latest completed daily close (`bars[-1]`) and execute fills at real-time live Alpaca prices (`_build_live_bar`), rather than back-filling yesterday's historical `adj_open`.
+  - Added `PaperTradingEngine.refresh_live_positions_mark_to_market()` and wired live quotes into `PaperTradingEngine.get_open_positions()`, `LiveTradingCopilotEngine.sync_market_prices()`, `LiveTradingCopilotEngine.get_daily_action_plan()`, `MarketResearchAgent.get_latest_reports()`, and `AutonomousWorkflowOrchestrator.export_ide_ai_context()`.
+- **DST-Aware SGT UI Times & Database Cleanup (`dashboard/streamlit_app.py`, `dashboard/ui_template.py`, `.github/workflows/autonomous_trading.yml`, `data/swing_trader.db`)**:
+  - Replaced hardcoded `9:30 PM SGT` / `8:45–9:25 PM SGT` / `4:00 AM SGT` UI strings with DST-aware SGT times (`10:30 PM SGT` open, `10:30–10:35 PM SGT` exits, `10:30–10:45 PM SGT` entries, `9:45–10:25 PM SGT` pre-open check, `5:00 AM SGT` close in EST).
+  - Cleaned up the premature pre-market paper fills from `data/swing_trader.db` and executed the live market-hours session with real-time Alpaca quotes.
+
+### Modules Added / Modified
+- `core/market_data/models.py`, `core/market_data/providers.py`, `core/execution/paper_broker.py`
+- `infrastructure/scheduler/orchestrator.py`, `agents/market_researcher/agent.py`
+- `dashboard/streamlit_app.py`, `dashboard/ui_template.py`, `.github/workflows/autonomous_trading.yml`
+- `USER_GUIDE.md`, `docs/AGENT_CHANGELOG.md`, `data/swing_trader.db`
+
+---
+
 ## [2026-11-08] — End-to-End System Audit & Fixes (10 Logic, Causality, Reconciliation & UI Edge Cases)
 
 ### Summary

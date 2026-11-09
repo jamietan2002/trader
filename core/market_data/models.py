@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 
 @dataclass(frozen=True)
@@ -174,4 +175,60 @@ class USTradingCalendar:
         if d.weekday() == 6:
             return "Weekend (Sunday — US Markets Closed)"
         return "NYSE / NASDAQ Market Holiday (US Markets Closed)"
+
+    # ── Intraday Market Hours ───────────────────────────────────────────
+    _ET = ZoneInfo("America/New_York")
+    _SGT = ZoneInfo("Asia/Singapore")
+    _MARKET_OPEN_ET = time(9, 30)
+    _MARKET_CLOSE_ET = time(16, 0)
+
+    @classmethod
+    def current_et_datetime(cls, at: Optional[datetime] = None) -> datetime:
+        """Return the current datetime in America/New_York timezone."""
+        return (at or datetime.now(timezone.utc)).astimezone(cls._ET)
+
+    @classmethod
+    def is_market_open(cls, at: Optional[datetime] = None) -> bool:
+        """Return True if NYSE/NASDAQ regular trading session is currently open.
+
+        Checks: (1) today in ET is a trading day, (2) current ET time is between
+        9:30 AM and 4:00 PM ET (10:30 PM – 5:00 AM SGT during EST; 9:30 PM – 4:00 AM SGT during EDT).
+        """
+        now_et = cls.current_et_datetime(at)
+        if not cls.is_trading_day(now_et.date()):
+            return False
+        return cls._MARKET_OPEN_ET <= now_et.time() < cls._MARKET_CLOSE_ET
+
+    @classmethod
+    def market_open_sgt(cls, for_date: Optional[date] = None) -> str:
+        """Return the NYSE open time expressed in SGT (e.g. '10:30 PM SGT' during EST,
+        '9:30 PM SGT' during EDT). Accounts for US daylight-saving transitions."""
+        d = for_date or cls.current_et_datetime().date()
+        open_et = datetime.combine(d, cls._MARKET_OPEN_ET, tzinfo=cls._ET)
+        open_sgt = open_et.astimezone(cls._SGT)
+        return open_sgt.strftime("%-I:%M %p SGT")
+
+    @classmethod
+    def market_open_window_sgt(cls, end_minute: int = 45, for_date: Optional[date] = None) -> str:
+        """Return the NYSE opening execution window in SGT (e.g. '10:30–10:45 PM SGT' during EST)."""
+        d = for_date or cls.current_et_datetime().date()
+        start_sgt = datetime.combine(d, cls._MARKET_OPEN_ET, tzinfo=cls._ET).astimezone(cls._SGT)
+        end_sgt = datetime.combine(d, time(9, end_minute), tzinfo=cls._ET).astimezone(cls._SGT)
+        return f"{start_sgt.strftime('%-I:%M')}–{end_sgt.strftime('%-I:%M %p')} SGT"
+
+    @classmethod
+    def pre_open_window_sgt(cls, for_date: Optional[date] = None) -> str:
+        """Return the pre-open AI & gap check window (8:45–9:25 AM ET) in SGT (e.g. '9:45–10:25 PM SGT' during EST)."""
+        d = for_date or cls.current_et_datetime().date()
+        start_sgt = datetime.combine(d, time(8, 45), tzinfo=cls._ET).astimezone(cls._SGT)
+        end_sgt = datetime.combine(d, time(9, 25), tzinfo=cls._ET).astimezone(cls._SGT)
+        return f"{start_sgt.strftime('%-I:%M')}–{end_sgt.strftime('%-I:%M %p')} SGT"
+
+    @classmethod
+    def market_close_sgt(cls, for_date: Optional[date] = None) -> str:
+        """Return the NYSE close time expressed in SGT (e.g. '5:00 AM SGT' during EST, '4:00 AM SGT' during EDT)."""
+        d = for_date or cls.current_et_datetime().date()
+        close_et = datetime.combine(d, cls._MARKET_CLOSE_ET, tzinfo=cls._ET)
+        close_sgt = close_et.astimezone(cls._SGT)
+        return close_sgt.strftime("%-I:%M %p SGT")
 
