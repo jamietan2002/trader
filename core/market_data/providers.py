@@ -636,75 +636,165 @@ class MarketDataService:
     def fetch_live_quote_snapshots(
         self,
         tickers: Sequence[str],
-        cache_ttl_seconds: int = 30,
+        cache_ttl_seconds: int = 10,
         force_refresh: bool = False,
     ) -> Dict[str, Dict[str, Any]]:
-        """Fetch latest real-time / extended-hours / pre-market snapshot quotes from Alpaca IEX feed."""
+        """Fetch latest real-time & extended-hours (pre-market / regular / after-hours) quotes.
+
+        Combines Alpaca IEX snapshots (when configured) with Yahoo Finance's consolidated
+        1-minute extended-hours feed (`includePrePost=true`), selecting the freshest live print
+        for every ticker so positions and watchlist prices stay live 24/7 (including on
+        Streamlit Community Cloud without local `.env` keys).
+        """
+        import concurrent.futures
         import sys as _sys
 
-        clean_tickers = sorted({str(t).strip().upper() for t in tickers if t and str(t).strip()})
-        if not clean_tickers or not (self.settings.alpaca_api_key and self.settings.alpaca_secret_key):
-            return {}
-        if "unittest" in _sys.modules:
+        clean_tickers = sorted({str(t).strip().upper() for t in tickers if t and str(t).strip() and "DELIST" not in str(t).upper()})
+        if not clean_tickers or "unittest" in _sys.modules:
             return {}
 
         symbols_param = ",".join(clean_tickers)
-        url = f"https://data.alpaca.markets/v2/stocks/snapshots?symbols={symbols_param}&feed=iex"
-        cache_key = f"alpaca_snapshots:{hashlib.sha256(url.encode('utf-8')).hexdigest()}"
+        cache_key = f"live_snapshots_v2:{hashlib.sha256(symbols_param.encode('utf-8')).hexdigest()}"
         if not force_refresh and cache_ttl_seconds > 0:
             cached = self.db.get_cached_response(cache_key)
-            if isinstance(cached, dict):
+            if isinstance(cached, dict) and cached:
                 return cached
 
-        headers = {
-            "APCA-API-KEY-ID": self.settings.alpaca_api_key,
-            "APCA-API-SECRET-KEY": self.settings.alpaca_secret_key,
-            "Accept": "application/json",
-        }
-        try:
-            req = urllib.request.Request(url, headers=headers, method="GET")
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                raw_data = json.loads(resp.read().decode("utf-8"))
-        except Exception as exc:
-            logger.warning(f"Alpaca live snapshot fetch failed ({exc}); using daily close prices.")
-            return {}
-
         result: Dict[str, Dict[str, Any]] = {}
-        for sym, snap in (raw_data or {}).items():
-            if not isinstance(snap, dict):
-                continue
-            lt = snap.get("latestTrade") or {}
-            lq = snap.get("latestQuote") or {}
-            db_bar = snap.get("dailyBar") or {}
-            prev_bar = snap.get("prevDailyBar") or {}
-            lt_p = float(lt.get("p") or 0.0)
-            db_o = float(db_bar.get("o") or 0.0)
-            db_h = float(db_bar.get("h") or 0.0)
-            db_l = float(db_bar.get("l") or 0.0)
-            db_c = float(db_bar.get("c") or 0.0)
-            db_v = float(db_bar.get("v") or 0.0)
-            db_dt = str(db_bar.get("t") or "")[:10]
-            prev_c = float(prev_bar.get("c") or 0.0)
-            indicative_p = lt_p if lt_p > 0 else (db_c if db_c > 0 else prev_c)
-            if indicative_p > 0:
-                result[str(sym).upper()] = {
-                    "ticker": str(sym).upper(),
-                    "indicative_price": round(indicative_p, 2),
-                    "latest_trade_price": round(lt_p, 2) if lt_p > 0 else None,
-                    "latest_trade_timestamp": str(lt.get("t") or ""),
-                    "daily_bar_date": db_dt,
-                    "daily_open": round(db_o, 2) if db_o > 0 else None,
-                    "daily_high": round(db_h, 2) if db_h > 0 else None,
-                    "daily_low": round(db_l, 2) if db_l > 0 else None,
-                    "daily_close": round(db_c, 2) if db_c > 0 else None,
-                    "daily_volume": round(db_v, 0) if db_v > 0 else None,
+
+        # 1. Fetch Alpaca IEX snapshots when credentials are configured
+        if self.settings.alpaca_api_key and self.settings.alpaca_secret_key:
+            url = f"https://data.alpaca.markets/v2/stocks/snapshots?symbols={symbols_param}&feed=iex"
+            headers = {
+                "APCA-API-KEY-ID": self.settings.alpaca_api_key,
+                "APCA-API-SECRET-KEY": self.settings.alpaca_secret_key,
+                "Accept": "application/json",
+            }
+            try:
+                req = urllib.request.Request(url, headers=headers, method="GET")
+                with urllib.request.urlopen(req, timeout=6) as resp:
+                    raw_data = json.loads(resp.read().decode("utf-8"))
+                for sym, snap in (raw_data or {}).items():
+                    if not isinstance(snap, dict):
+                        continue
+                    lt = snap.get("latestTrade") or {}
+                    lq = snap.get("latestQuote") or {}
+                    db_bar = snap.get("dailyBar") or {}
+                    prev_bar = snap.get("prevDailyBar") or {}
+                    lt_p = float(lt.get("p") or 0.0)
+                    db_o = float(db_bar.get("o") or 0.0)
+                    db_h = float(db_bar.get("h") or 0.0)
+                    db_l = float(db_bar.get("l") or 0.0)
+                    db_c = float(db_bar.get("c") or 0.0)
+                    db_v = float(db_bar.get("v") or 0.0)
+                    db_dt = str(db_bar.get("t") or "")[:10]
+                    prev_c = float(prev_bar.get("c") or 0.0)
+                    indicative_p = lt_p if lt_p > 0 else (db_c if db_c > 0 else prev_c)
+                    if indicative_p > 0:
+                        result[str(sym).upper()] = {
+                            "ticker": str(sym).upper(),
+                            "indicative_price": round(indicative_p, 2),
+                            "latest_trade_price": round(lt_p, 2) if lt_p > 0 else round(indicative_p, 2),
+                            "latest_trade_timestamp": str(lt.get("t") or ""),
+                            "daily_bar_date": db_dt,
+                            "daily_open": round(db_o, 2) if db_o > 0 else None,
+                            "daily_high": round(db_h, 2) if db_h > 0 else None,
+                            "daily_low": round(db_l, 2) if db_l > 0 else None,
+                            "daily_close": round(db_c, 2) if db_c > 0 else None,
+                            "daily_volume": round(db_v, 0) if db_v > 0 else None,
+                            "prev_daily_close": round(prev_c, 2) if prev_c > 0 else None,
+                            "bid_price": round(float(lq.get("bp") or 0.0), 2),
+                            "ask_price": round(float(lq.get("ap") or 0.0), 2),
+                            "quote_source": "alpaca_iex",
+                        }
+            except Exception as exc:
+                logger.warning(f"Alpaca live snapshot fetch failed ({exc}); falling back to consolidated pre/post feed.")
+
+        # 2. Fetch consolidated 1-minute live & extended-hours (pre-market / after-hours) quotes
+        def _fetch_yahoo_prepost(sym: str) -> Optional[Dict[str, Any]]:
+            y_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1m&range=1d&includePrePost=true"
+            try:
+                y_req = urllib.request.Request(y_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(y_req, timeout=5) as y_resp:
+                    y_data = json.loads(y_resp.read().decode("utf-8"))
+                chart_res = ((y_data.get("chart") or {}).get("result") or [None])[0]
+                if not isinstance(chart_res, dict):
+                    return None
+                meta = chart_res.get("meta") or {}
+                ts_list = chart_res.get("timestamp") or []
+                q_block = ((chart_res.get("indicators") or {}).get("quote") or [{}])[0]
+                closes = q_block.get("close") or []
+                opens = q_block.get("open") or []
+                highs = q_block.get("high") or []
+                lows = q_block.get("low") or []
+                valid_pts = [
+                    (int(ts_list[i]), float(closes[i]))
+                    for i in range(min(len(ts_list), len(closes)))
+                    if closes[i] is not None and float(closes[i]) > 0
+                ]
+                reg_px = float(meta.get("regularMarketPrice") or 0.0)
+                prev_c = float(meta.get("chartPreviousClose") or meta.get("previousClose") or 0.0)
+                if valid_pts:
+                    last_ts_epoch, last_1m_px = valid_pts[-1]
+                    last_ts_iso = datetime.fromtimestamp(last_ts_epoch, tz=timezone.utc).isoformat()
+                else:
+                    last_1m_px = reg_px if reg_px > 0 else prev_c
+                    reg_time = int(meta.get("regularMarketTime") or 0)
+                    last_ts_iso = datetime.fromtimestamp(reg_time, tz=timezone.utc).isoformat() if reg_time > 0 else ""
+                if last_1m_px <= 0:
+                    return None
+                valid_opens = [float(o) for o in opens if o is not None and float(o) > 0]
+                valid_highs = [float(h) for h in highs if h is not None and float(h) > 0]
+                valid_lows = [float(l) for l in lows if l is not None and float(l) > 0]
+                reg_h = float(meta.get("regularMarketDayHigh") or (max(valid_highs) if valid_highs else last_1m_px))
+                reg_l = float(meta.get("regularMarketDayLow") or (min(valid_lows) if valid_lows else last_1m_px))
+                reg_v = float(meta.get("regularMarketVolume") or 0.0)
+                reg_dt = ""
+                if meta.get("regularMarketTime"):
+                    reg_dt = datetime.fromtimestamp(int(meta["regularMarketTime"]), tz=timezone.utc).strftime("%Y-%m-%d")
+                return {
+                    "ticker": sym,
+                    "indicative_price": round(last_1m_px, 2),
+                    "latest_trade_price": round(last_1m_px, 2),
+                    "latest_trade_timestamp": last_ts_iso,
+                    "daily_bar_date": reg_dt,
+                    "daily_open": round(valid_opens[0], 2) if valid_opens else (round(reg_px, 2) if reg_px > 0 else None),
+                    "daily_high": round(max(reg_h, last_1m_px), 2),
+                    "daily_low": round(min(reg_l, last_1m_px), 2) if reg_l > 0 else round(last_1m_px, 2),
+                    "daily_close": round(reg_px, 2) if reg_px > 0 else round(last_1m_px, 2),
+                    "daily_volume": round(reg_v, 0) if reg_v > 0 else None,
                     "prev_daily_close": round(prev_c, 2) if prev_c > 0 else None,
-                    "bid_price": round(float(lq.get("bp") or 0.0), 2),
-                    "ask_price": round(float(lq.get("ap") or 0.0), 2),
+                    "bid_price": round(last_1m_px, 2),
+                    "ask_price": round(last_1m_px, 2),
+                    "quote_source": "consolidated_prepost",
                 }
-        if cache_ttl_seconds > 0:
+            except Exception:
+                return None
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, max(1, len(clean_tickers)))) as pool:
+                for y_snap in pool.map(_fetch_yahoo_prepost, clean_tickers):
+                    if not y_snap:
+                        continue
+                    sym_u = y_snap["ticker"]
+                    existing = result.get(sym_u)
+                    if not existing:
+                        result[sym_u] = y_snap
+                    else:
+                        # Compare ISO timestamps so extended-hours consolidated prints override older IEX regular-session prints
+                        ex_ts = str(existing.get("latest_trade_timestamp") or "")[:19]
+                        y_ts = str(y_snap.get("latest_trade_timestamp") or "")[:19]
+                        if y_ts > ex_ts and y_snap.get("indicative_price"):
+                            existing["indicative_price"] = y_snap["indicative_price"]
+                            existing["latest_trade_price"] = y_snap["latest_trade_price"]
+                            existing["latest_trade_timestamp"] = y_snap["latest_trade_timestamp"]
+                            existing["quote_source"] = "consolidated_prepost"
+        except Exception as exc:
+            logger.warning(f"Consolidated pre/post quote fetch warning: {exc}")
+
+        if cache_ttl_seconds > 0 and result:
             expires = (datetime.now(timezone.utc) + timedelta(seconds=cache_ttl_seconds)).isoformat()
-            self.db.set_cached_response(cache_key, "alpaca_snapshots", result, expires)
+            self.db.set_cached_response(cache_key, "live_snapshots_v2", result, expires)
         return result
 
     def ingest_universe_and_history(

@@ -1323,6 +1323,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     loadDashboardState();
+    setInterval(() => {
+      if (!document.hidden && (!document.activeElement || document.activeElement.tagName !== 'INPUT')) {
+        loadDashboardState();
+      }
+    }, 15000);
   </script>
 </body>
 </html>

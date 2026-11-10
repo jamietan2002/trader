@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List
+from zoneinfo import ZoneInfo
 
 # Ensure repository root is on sys.path when Streamlit runs `dashboard/streamlit_app.py`
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -484,7 +485,7 @@ def main() -> None:
     )
     st.markdown(CLASSY_MINIMAL_CSS, unsafe_allow_html=True)
 
-    _code_version = "2026-11-10-v21"
+    _code_version = "2026-11-10-v22"
     import api.server as _srv_mod
     import core.market_data.models as _md_mod
     if (
@@ -595,6 +596,40 @@ def main() -> None:
         pre_open_win_sgt = USTradingCalendar.pre_open_window_sgt() if hasattr(USTradingCalendar, "pre_open_window_sgt") else "9:45–10:25 PM SGT"
         close_sgt = USTradingCalendar.market_close_sgt() if hasattr(USTradingCalendar, "market_close_sgt") else "5:00 AM SGT"
 
+        now_sgt_str = datetime.now(ZoneInfo("Asia/Singapore")).strftime("%H:%M:%S SGT")
+        st.caption(f"Live Quote Feed: **24/7 Extended + RTH** (`{now_sgt_str}`)")
+        auto_live_refresh = st.checkbox(
+            "Auto-Refresh Live Prices (15s)",
+            value=True,
+            key="sidebar_auto_live_refresh",
+            help="Automatically refreshes open position prices and P&L every 15 seconds using live & extended-hours quotes (Pre-Market, Regular Session & After-Hours).",
+        )
+        if st.button(
+            "Refresh Live Prices Now",
+            width="stretch",
+            key="btn_refresh_live_now",
+            help="Force an immediate live quote fetch (including pre-market & after-hours prints) across all open positions.",
+        ):
+            with st.spinner("Fetching live & extended-hours quotes..."):
+                app.orchestrator.paper_engine.refresh_live_positions_mark_to_market(
+                    force_refresh=True, all_accounts=True
+                )
+                app.orchestrator.live_copilot.sync_market_prices()
+            st.rerun()
+
+        if auto_live_refresh and hasattr(st, "fragment"):
+            @st.fragment(run_every=15)
+            def _live_mtm_heartbeat() -> None:
+                prev_map = {p["ticker"]: float(p["current_price"]) for p in positions}
+                updated = app.orchestrator.paper_engine.refresh_live_positions_mark_to_market(
+                    cache_ttl_seconds=10, force_refresh=True, all_accounts=True
+                )
+                app.orchestrator.live_copilot.sync_market_prices()
+                if any(abs(float(px) - prev_map.get(tkr, 0.0)) >= 0.005 for tkr, px in updated.items()):
+                    st.rerun()
+
+            _live_mtm_heartbeat()
+
         st.markdown("---")
         st.markdown("#### Daily Workflow")
         st.caption("Singapore (`SGT`) / Eastern (`ET`)")
@@ -688,9 +723,21 @@ def main() -> None:
             "SELECT ticker, close FROM market_bars_daily "
             "WHERE (ticker, bar_date) IN (SELECT ticker, MAX(bar_date) FROM market_bars_daily GROUP BY ticker)"
         )
-        latest_px_by_tkr = {r["ticker"]: float(r["current_price"]) for r in state["research_reports"]}
+        latest_px_by_tkr: dict[str, float] = {}
         for _dbr in db_latest_rows:
             latest_px_by_tkr[str(_dbr["ticker"])] = float(_dbr["close"])
+        for _rr in state["research_reports"]:
+            if float(_rr.get("current_price") or 0.0) > 0:
+                latest_px_by_tkr[str(_rr["ticker"])] = float(_rr["current_price"])
+        try:
+            _live_snaps = app.orchestrator.market_data.fetch_live_quote_snapshots(
+                universe_tickers, cache_ttl_seconds=10
+            )
+            for _ltkr, _lsnap in _live_snaps.items():
+                if float(_lsnap.get("price") or 0.0) > 0:
+                    latest_px_by_tkr[str(_ltkr)] = round(float(_lsnap["price"]), 2)
+        except Exception:
+            pass
 
         # 1. KPI Strip (100% Ledger-Calculated)
         total_real_pnl = round(float(real_acc["realised_pnl"]) + float(real_acc["unrealised_pnl"]), 2)
@@ -1004,14 +1051,12 @@ def main() -> None:
                         )
                     elif pre_open_status == "DIPPED_BELOW_BUY_ZONE":
                         gap_badge_html = (
-                            f" · <span style='color:#f59e0b;font-weight:600;'>Pre-Open ${ind_px:.2f} ({gap_pct:+.1f}%) — Wait for Buy-Zone Reclaim</span>"
+                            f" · <span style='color:#f59e0b;font-weight:600;'>Live Quote ${ind_px:.2f} ({gap_pct:+.1f}%) — Wait for Buy-Zone Reclaim</span>"
                         )
-                    elif abs(gap_pct) >= 0.05:
+                    else:
                         gap_badge_html = (
                             f" · <span style='color:#38bdf8;'>Live Quote ${ind_px:.2f} ({gap_pct:+.1f}% · In Buy-Zone)</span>"
                         )
-                    else:
-                        gap_badge_html = " · <span style='color:#38bdf8;'>In Buy-Zone</span>"
                     buy_factors_html = _format_factors_html(ba.get("factors_considered") or [])
                     with bc_info:
                         st.markdown(
@@ -1362,11 +1407,14 @@ def main() -> None:
                     if ai_sent >= 0.25
                     else f" · <span style='color:#94a3b8;'>AI {ai_sent:+.2f}</span>"
                 )
+                p_ind_px = float(pba.get("indicative_price") or pba["reference_entry_price"])
+                p_gap_pct = float(pba.get("overnight_gap_pct") or 0.0)
                 st.markdown(
                     f"<div style='background:rgba(56,189,248,0.07);border:1px solid rgba(56,189,248,0.28);border-radius:8px;padding:10px 14px;margin-bottom:8px;'>"
                     f"<div><strong style='color:#38bdf8;'>OPEN (`BUY`) · {pba['ticker']}</strong> ({pba.get('sector', '')}) · "
                     f"<code>{pba['recommended_shares']} sh</code> @ Limit <code>${pba['reference_entry_price']:.2f}</code> "
-                    f"(Max Chase <code>${float(pba.get('max_chase_price') or pba['reference_entry_price']):.2f}</code>) · "
+                    f"(Max Chase <code>${float(pba.get('max_chase_price') or pba['reference_entry_price']):.2f}</code> · "
+                    f"<span style='color:#38bdf8;'>Live Quote <code>${p_ind_px:.2f}</code> ({p_gap_pct:+.1f}%)</span>) · "
                     f"Notional <code>${pba['estimated_cost_usd']:,.0f}</code> ({pba['portfolio_weight_pct']:.1f}% of book) · "
                     f"Stop <code>${pba['stop_loss_price']:.2f}</code> · Target <code>${pba['take_profit_price']:.2f}</code> · "
                     f"1R Risk <code>${pba['estimated_risk_usd']:.0f}</code> ({pba['risk_pct_of_equity']:.2f}%) · "
@@ -1382,7 +1430,8 @@ def main() -> None:
         st.markdown("---")
         p_col1, p_col2 = st.columns([1.05, 1.15])
         with p_col1:
-            st.markdown("##### Open Positions (Selected Book)")
+            st.markdown("##### Open Positions (Selected Book — Live 24/7 Mark-to-Market)")
+            st.caption("Prices and P&L update continuously with live regular-session, pre-market, and after-hours prints.")
             if book_positions:
                 clean_pos = [
                     {
@@ -1392,7 +1441,7 @@ def main() -> None:
                         "Hold": f"{p['holding_days']}d",
                         "Qty": p["quantity"],
                         "Entry": f"${p['avg_entry_price']:.2f}",
-                        "Now": f"${p['current_price']:.2f}",
+                        "Live Price": f"${p['current_price']:.2f}",
                         "Stop / Target": f"${p['stop_loss_price']:.2f} / ${p['take_profit_price']:.2f}" if p.get("stop_loss_price") else "—",
                         "Unrealised P&L": f"${p['unrealised_pnl']:+,.2f} ({p['unrealised_return_pct']:+.2f}%)",
                     }

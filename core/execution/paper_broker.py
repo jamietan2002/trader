@@ -194,20 +194,35 @@ class PaperTradingEngine:
             "updated_at": acc["updated_at"],
         }
 
-    def refresh_live_positions_mark_to_market(self, cache_ttl_seconds: int = 30) -> Dict[str, float]:
-        """Fetch live Alpaca snapshot quotes and update current_price & highest_price_since_entry on open positions."""
+    def refresh_live_positions_mark_to_market(
+        self,
+        cache_ttl_seconds: int = 10,
+        force_refresh: bool = False,
+        all_accounts: bool = True,
+    ) -> Dict[str, float]:
+        """Fetch live & extended-hours quotes and update current_price & highest_price_since_entry on open positions."""
         import sys as _sys
 
         if "unittest" in _sys.modules or not hasattr(self.market_data, "fetch_live_quote_snapshots"):
             return {}
-        rows = self.db.fetch_all(
-            "SELECT ticker, current_price, highest_price_since_entry FROM paper_positions WHERE account_id = ?",
-            (self.account_id,),
-        )
+        if all_accounts:
+            rows = self.db.fetch_all(
+                "SELECT account_id, ticker, current_price, highest_price_since_entry FROM paper_positions"
+            )
+        else:
+            rows = self.db.fetch_all(
+                "SELECT account_id, ticker, current_price, highest_price_since_entry FROM paper_positions WHERE account_id = ?",
+                (self.account_id,),
+            )
         if not rows:
             return {}
-        tickers = [str(r["ticker"]).upper() for r in rows]
-        quotes = self.market_data.fetch_live_quote_snapshots(tickers, cache_ttl_seconds=cache_ttl_seconds) or {}
+        tickers = sorted({str(r["ticker"]).upper() for r in rows})
+        quotes = (
+            self.market_data.fetch_live_quote_snapshots(
+                tickers, cache_ttl_seconds=cache_ttl_seconds, force_refresh=force_refresh
+            )
+            or {}
+        )
         if not quotes:
             return {}
         now_iso = utc_now_iso()
@@ -228,13 +243,13 @@ class PaperTradingEngine:
                 SET current_price = ?, highest_price_since_entry = ?, updated_at = ?
                 WHERE account_id = ? AND ticker = ?
                 """,
-                (round(live_p, 4), round(new_high, 4), now_iso, self.account_id, r["ticker"]),
+                (round(live_p, 2), round(new_high, 2), now_iso, r["account_id"], r["ticker"]),
             )
-            updated_prices[tkr] = round(live_p, 4)
+            updated_prices[tkr] = round(live_p, 2)
         return updated_prices
 
     def get_open_positions(self) -> List[Dict[str, Any]]:
-        self.refresh_live_positions_mark_to_market(cache_ttl_seconds=30)
+        self.refresh_live_positions_mark_to_market(cache_ttl_seconds=10)
         rows = self.db.fetch_all(
             "SELECT * FROM paper_positions WHERE account_id = ? ORDER BY ticker ASC",
             (self.account_id,),
@@ -1684,6 +1699,8 @@ class LiveTradingCopilotEngine:
             )
 
     def get_open_positions(self) -> List[Dict[str, Any]]:
+        if "unittest" not in sys.modules:
+            self.sync_market_prices()
         rows = self.db.fetch_all(
             "SELECT * FROM shadow_positions WHERE account_id = ? ORDER BY ticker ASC",
             (self.account_id,),
@@ -2781,6 +2798,7 @@ class LiveTradingCopilotEngine:
                 stop_note = ""
                 if stop_mode != "Initial ATR Stop" and eff_stop is not None:
                     stop_note = f" · Raise Stop → ${eff_stop:.2f} ({stop_mode})"
+                live_hold_pnl = round((ref_exit_px - float(pos["avg_entry_price"])) * int(pos["quantity"]), 2)
                 hold_updates.append(
                     {
                         "ticker": ticker,
@@ -2788,8 +2806,8 @@ class LiveTradingCopilotEngine:
                         "strategy_name": strat.name,
                         "quantity": int(pos["quantity"]),
                         "avg_entry_price": float(pos["avg_entry_price"]),
-                        "current_price": float(pos["current_price"]),
-                        "unrealised_pnl": float(pos["unrealised_pnl"]),
+                        "current_price": ref_exit_px,
+                        "unrealised_pnl": live_hold_pnl,
                         "stop_loss_price": eff_stop if eff_stop is not None else pos.get("stop_loss_price"),
                         "initial_stop_price": pos.get("stop_loss_price"),
                         "stop_mode": stop_mode,

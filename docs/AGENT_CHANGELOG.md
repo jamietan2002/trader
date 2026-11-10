@@ -4,6 +4,26 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-10] — 24/7 Live + Extended-Hours Consolidated Quote Feed, Live Position Auto-Refresh (`15s`) & Opening-Price Ledger Reconciliation
+
+### Summary
+- **24/7 Consolidated Live + Extended-Hours Quote Feed (`core/market_data/providers.py`)**:
+  - Upgraded `MarketDataService.fetch_live_quote_snapshots()` (default `cache_ttl_seconds=10`) to combine Alpaca IEX snapshots with Yahoo Finance's zero-key consolidated 1-minute extended-hours feed (`includePrePost=true`) fetched in parallel via `ThreadPoolExecutor`.
+  - Compares trade timestamps (`latest_trade_timestamp`) per symbol and selects the freshest print so pre-market (`4:00–9:30 AM ET`), regular-hours (`9:30 AM–4:00 PM ET`), and after-hours (`4:00–8:00 PM ET`) prices are always live—even on Streamlit Community Cloud where `.env` is absent.
+- **All-Account Live Position Mark-to-Market & Auto-Refresh UI (`core/execution/paper_broker.py`, `dashboard/streamlit_app.py`, `dashboard/ui_template.py`)**:
+  - Updated `PaperTradingEngine.refresh_live_positions_mark_to_market(all_accounts=True)` to batch-refresh `current_price` and `highest_price_since_entry` across `paper_main_100k` and all 5 `paper_strat_*` pods in a single call, and wired `LiveTradingCopilotEngine.get_open_positions()` and `hold_updates` in `get_daily_action_plan()` to always reflect live/extended-hours quotes.
+  - Fixed `latest_px_by_tkr` in `dashboard/streamlit_app.py` so DB closes are loaded first and overlaid with live quotes (rather than overwriting live quotes with yesterday's close).
+  - Added a 15-second auto-refresh heartbeat (`@st.fragment(run_every=15)` in `dashboard/streamlit_app.py` + `setInterval` in `dashboard/ui_template.py`) and a `Refresh Live Prices Now` sidebar button (`_code_version = "2026-11-10-v22"`).
+- **Official Opening-Price Paper Ledger Reconciliation (`core/execution/paper_broker.py`, `data/swing_trader.db`)**:
+  - Updated `_build_live_bar` (`adj_open=d_open`) so `MARKET_ON_OPEN` paper orders fill at the official session opening price (`dailyBar.o`) plus spread/slippage, and reconciled the `2026-11-09` paper trade ledger (`AAPL @ $345.1948`, `LLY @ $1,375.5061`, `MSFT @ $544.7845`).
+
+### Modules Added / Modified
+- `core/market_data/providers.py`, `core/execution/paper_broker.py`
+- `dashboard/streamlit_app.py`, `dashboard/ui_template.py`
+- `docs/AGENT_CHANGELOG.md`, `data/swing_trader.db`
+
+---
+
 ## [2026-11-09] — Strict US Market-Hours Paper Execution Gate (`10:30 PM – 5:00 AM SGT` in EST), Live Alpaca Intraday Quote Pricing & DST-Aware SGT UI Times
 
 ### Summary
