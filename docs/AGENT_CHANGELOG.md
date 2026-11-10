@@ -14,8 +14,9 @@ This log tracks architectural additions, strategy changes, schema updates, and v
   - Enhanced `MarketDataService.fetch_live_quote_snapshots()` to return full live trade & intraday bar fields (`indicative_price`, `latest_trade_price`, `daily_open`, `daily_high`, `daily_low`, `daily_close`, `daily_volume`, `bid_price`, `ask_price`) with a 30-second cache TTL.
   - Updated `PaperTradingEngine.run_trading_session_for_strategies()` so live market-hours sessions evaluate signals from the latest completed daily close (`bars[-1]`) and execute fills at real-time live Alpaca prices (`_build_live_bar`), rather than back-filling yesterday's historical `adj_open`.
   - Added `PaperTradingEngine.refresh_live_positions_mark_to_market()` and wired live quotes into `PaperTradingEngine.get_open_positions()`, `LiveTradingCopilotEngine.sync_market_prices()`, `LiveTradingCopilotEngine.get_daily_action_plan()`, `MarketResearchAgent.get_latest_reports()`, and `AutonomousWorkflowOrchestrator.export_ide_ai_context()`.
-- **DST-Aware SGT UI Times & Database Cleanup (`dashboard/streamlit_app.py`, `dashboard/ui_template.py`, `.github/workflows/autonomous_trading.yml`, `data/swing_trader.db`)**:
+- **DST-Aware SGT UI Times, Streamlit Hot-Reload Rebinding & Database Cleanup (`dashboard/streamlit_app.py`, `dashboard/ui_template.py`, `.github/workflows/autonomous_trading.yml`, `data/swing_trader.db`)**:
   - Replaced hardcoded `9:30 PM SGT` / `8:45–9:25 PM SGT` / `4:00 AM SGT` UI strings with DST-aware SGT times (`10:30 PM SGT` open, `10:30–10:35 PM SGT` exits, `10:30–10:45 PM SGT` entries, `9:45–10:25 PM SGT` pre-open check, `5:00 AM SGT` close in EST).
+  - Bumped `_code_version = "2026-11-10-v21"` in `dashboard/streamlit_app.py`, rebound `USTradingCalendar = _md_mod.USTradingCalendar` after `importlib.reload`, and added `hasattr(USTradingCalendar, ...)` fallbacks so Streamlit Cloud hot-reloads never reference a stale cached `USTradingCalendar` class.
   - Cleaned up the premature pre-market paper fills from `data/swing_trader.db` and executed the live market-hours session with real-time Alpaca quotes.
 
 ### Modules Added / Modified

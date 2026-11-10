@@ -2678,9 +2678,21 @@ class LiveTradingCopilotEngine:
             except Exception:
                 pos_live_snapshots = {}
 
-        open_window_35_sgt = USTradingCalendar.market_open_window_sgt(35, calendar_today_dt)
-        open_window_45_sgt = USTradingCalendar.market_open_window_sgt(45, calendar_today_dt)
-        open_time_sgt = USTradingCalendar.market_open_sgt(calendar_today_dt)
+        open_window_35_sgt = (
+            USTradingCalendar.market_open_window_sgt(35, calendar_today_dt)
+            if hasattr(USTradingCalendar, "market_open_window_sgt")
+            else "10:30–10:35 PM SGT"
+        )
+        open_window_45_sgt = (
+            USTradingCalendar.market_open_window_sgt(45, calendar_today_dt)
+            if hasattr(USTradingCalendar, "market_open_window_sgt")
+            else "10:30–10:45 PM SGT"
+        )
+        open_time_sgt = (
+            USTradingCalendar.market_open_sgt(calendar_today_dt)
+            if hasattr(USTradingCalendar, "market_open_sgt")
+            else "10:30 PM SGT"
+        )
 
         sell_actions: List[Dict[str, Any]] = []
         hold_updates: List[Dict[str, Any]] = []

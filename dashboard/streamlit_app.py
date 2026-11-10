@@ -484,12 +484,12 @@ def main() -> None:
     )
     st.markdown(CLASSY_MINIMAL_CSS, unsafe_allow_html=True)
 
-    app = PlatformApplication()
-    _code_version = "2026-11-08-v20"
+    _code_version = "2026-11-10-v21"
     import api.server as _srv_mod
+    import core.market_data.models as _md_mod
     if (
         getattr(_srv_mod, "_STREAMLIT_SYNC_VERSION", None) != _code_version
-        or not hasattr(app.orchestrator, "live_copilot")
+        or not hasattr(_md_mod.USTradingCalendar, "market_open_sgt")
     ):
         import importlib
 
@@ -517,15 +517,18 @@ def main() -> None:
             if _mod_name in sys.modules:
                 importlib.reload(sys.modules[_mod_name])
         import api.server as _srv_mod
-        import core.execution.paper_broker as _pb_mod
+        import core.market_data.models as _md_mod
 
         setattr(_srv_mod, "_STREAMLIT_SYNC_VERSION", _code_version)
-        app = _srv_mod.PlatformApplication()
-        app.db.initialize_schema()
-        if not hasattr(app.orchestrator, "live_copilot"):
-            app.orchestrator.live_copilot = _pb_mod.LiveTradingCopilotEngine(
-                app.settings, app.db, app.orchestrator.market_data, app.orchestrator.risk_manager, app.orchestrator.registry
-            )
+
+    USTradingCalendar = _md_mod.USTradingCalendar
+    app = _srv_mod.PlatformApplication()
+    app.db.initialize_schema()
+    if not hasattr(app.orchestrator, "live_copilot"):
+        import core.execution.paper_broker as _pb_mod
+        app.orchestrator.live_copilot = _pb_mod.LiveTradingCopilotEngine(
+            app.settings, app.db, app.orchestrator.market_data, app.orchestrator.risk_manager, app.orchestrator.registry
+        )
     if not app.orchestrator.registry.list_strategies():
         with st.spinner("Initializing baseline strategies (Backtesting only — Paper Account stays at $100k)..."):
             app.orchestrator.bootstrap_baseline_system()
@@ -586,11 +589,11 @@ def main() -> None:
                 f"Next Session: **{next_trading_day_iso}**"
             )
 
-        open_sgt = USTradingCalendar.market_open_sgt()
-        open_win_35_sgt = USTradingCalendar.market_open_window_sgt(35)
-        open_win_45_sgt = USTradingCalendar.market_open_window_sgt(45)
-        pre_open_win_sgt = USTradingCalendar.pre_open_window_sgt()
-        close_sgt = USTradingCalendar.market_close_sgt()
+        open_sgt = USTradingCalendar.market_open_sgt() if hasattr(USTradingCalendar, "market_open_sgt") else "10:30 PM SGT"
+        open_win_35_sgt = USTradingCalendar.market_open_window_sgt(35) if hasattr(USTradingCalendar, "market_open_window_sgt") else "10:30–10:35 PM SGT"
+        open_win_45_sgt = USTradingCalendar.market_open_window_sgt(45) if hasattr(USTradingCalendar, "market_open_window_sgt") else "10:30–10:45 PM SGT"
+        pre_open_win_sgt = USTradingCalendar.pre_open_window_sgt() if hasattr(USTradingCalendar, "pre_open_window_sgt") else "9:45–10:25 PM SGT"
+        close_sgt = USTradingCalendar.market_close_sgt() if hasattr(USTradingCalendar, "market_close_sgt") else "5:00 AM SGT"
 
         st.markdown("---")
         st.markdown("#### Daily Workflow")
