@@ -1030,7 +1030,7 @@ class PaperTradingEngine:
                 low=d_low,
                 close=live_p,
                 volume=d_vol,
-                adj_open=live_p,  # Fill paper orders at the actual live market price
+                adj_open=d_open,  # Fill paper orders at today's live market opening price (daily_open)
                 adj_high=d_high,
                 adj_low=d_low,
                 adj_close=live_p,
