@@ -4,6 +4,21 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-11] — Fix GitHub Actions Scheduled Run `HTTP 403` Failure (Default Branch Sync + Live Bar Preservation)
+
+### Summary
+- **Root-Cause Fix for Morning Scheduled Workflow Failure (`run_id=42938497353` at `2026-11-11 09:22 SGT` / `01:22 UTC`)**:
+  - Identified that GitHub's repository `default_branch` was still set to `feat/swing-trading-ai-platform` (stuck at commit `f5b05904` from Nov 7, before `&feed=iex` was added to `AlpacaDataProvider.fetch_daily_bars()`), causing GitHub Actions `schedule` runs to execute against `f5b05904` and fail with `urllib.error.HTTPError: HTTP Error 403: Forbidden` when querying Alpaca's paid SIP feed.
+  - Updated the repository's `default_branch` to `main` via the GitHub API, fast-forwarded `feat/swing-trading-ai-platform` to match `main`, and updated `.github/workflows/autonomous_trading.yml` to keep both branches synchronized and set `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"`.
+- **Live DB Bar Preservation on Transient Provider Errors (`core/market_data/providers.py`)**:
+  - Added `AlpacaDataProvider._has_existing_live_bars()` so if Alpaca ever returns an error or empty response for an active symbol that already has `alpaca` bars in `market_bars_daily`, existing real market bars are preserved (`return []`) rather than falling back to synthetic `local_seeded` bars.
+
+### Modules Added / Modified
+- `core/market_data/providers.py`, `.github/workflows/autonomous_trading.yml`
+- `docs/AGENT_CHANGELOG.md`, `data/swing_trader.db`
+
+---
+
 ## [2026-11-10] — 24/7 Live + Extended-Hours Consolidated Quote Feed, Live Position Auto-Refresh (`15s`) & Opening-Price Ledger Reconciliation
 
 ### Summary

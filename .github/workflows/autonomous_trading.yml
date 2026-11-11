@@ -24,6 +24,7 @@ jobs:
   autonomous-trading-cycle:
     runs-on: ubuntu-latest
     env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       TRADING_MODE: paper
       MARKET_DATA_PROVIDER: alpaca
       ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
@@ -94,8 +95,9 @@ jobs:
           git add data/swing_trader.db
           if ! git diff --staged --quiet; then
             git commit -m "chore(state): autonomous paper trading & strategy registry update [skip ci]"
-            git pull --rebase origin main || true
-            git push
+            git pull --rebase origin main || git rebase --abort || true
+            git push origin HEAD:main
+            git push origin HEAD:feat/swing-trading-ai-platform || true
           else
             echo "No state changes to commit."
           fi

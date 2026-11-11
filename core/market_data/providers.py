@@ -445,8 +445,20 @@ class AlpacaDataProvider(MarketDataProvider):
     def get_universe(self) -> List[EquityMetadata]:
         return self.fallback.get_universe()
 
+    def _has_existing_live_bars(self, ticker: str) -> bool:
+        if "DELIST" in ticker.upper():
+            return False
+        row = self.db.fetch_one(
+            "SELECT COUNT(*) AS cnt FROM market_bars_daily WHERE ticker = ? AND provider_source = ?",
+            (ticker, self.provider_name),
+        )
+        return bool(row and int(row["cnt"] or 0) > 0)
+
     def fetch_daily_bars(self, ticker: str, start_date: str, end_date: str) -> List[DailyBar]:
         if not self.settings.alpaca_api_key or not self.settings.alpaca_secret_key:
+            if self._has_existing_live_bars(ticker):
+                logger.info(f"Alpaca API credentials not configured; preserving existing live bars for {ticker}.")
+                return []
             logger.info("Alpaca API credentials not configured; falling back to local_seeded data.")
             return self.fallback.fetch_daily_bars(ticker, start_date, end_date)
         url = (
@@ -460,10 +472,15 @@ class AlpacaDataProvider(MarketDataProvider):
         try:
             data = self.client.get_json(url, headers=headers)
         except Exception as exc:
+            if self._has_existing_live_bars(ticker):
+                logger.warning(f"Alpaca bar fetch for {ticker} failed ({exc}); preserving existing live DB bars.")
+                return []
             logger.warning(f"Alpaca bar fetch for {ticker} failed ({exc}); using local_seeded fallback.")
             return self.fallback.fetch_daily_bars(ticker, start_date, end_date)
         raw_bars = data.get("bars", []) or []
         if not raw_bars:
+            if self._has_existing_live_bars(ticker):
+                return []
             return self.fallback.fetch_daily_bars(ticker, start_date, end_date)
         now_iso = utc_now_iso()
         bars: List[DailyBar] = []
