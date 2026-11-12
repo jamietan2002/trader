@@ -3357,9 +3357,20 @@ class AlpacaPaperPodManager:
             headers["Content-Type"] = "application/json"
             data_bytes = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=data_bytes, headers=headers, method=method)
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            raw = resp.read().decode("utf-8")
-            return json.loads(raw) if raw.strip() else {}
+        try:
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                raw = resp.read().decode("utf-8")
+                return json.loads(raw) if raw.strip() else {}
+        except Exception as exc:
+            if hasattr(exc, "read"):
+                try:
+                    err_body = exc.read().decode("utf-8", errors="ignore")
+                    raise RuntimeError(f"{exc} — {err_body}") from exc
+                except RuntimeError:
+                    raise
+                except Exception:
+                    pass
+            raise
 
     def reset_alpaca_paper_account(self, pod_id: str = "pod_1_breakout") -> Dict[str, Any]:
         """Cancel all open orders and liquidate all positions on the specified Alpaca Paper pod."""
@@ -3409,12 +3420,17 @@ class AlpacaPaperPodManager:
                 raw_cash = round(float(acc_raw.get("cash") or equity), 2)
                 starting_cap = 100_000.0
 
-                # Identify any open legacy liquidation orders (from DELETE /v2/positions cleanup, not starting with pod_)
+                # Identify any open legacy market liquidation orders (from DELETE /v2/positions cleanup, type=market and not starting with pod_)
                 legacy_liquidation_syms: set[str] = set()
                 for o in ord_raw:
                     o_st = str(o.get("status") or "").lower()
+                    o_type = str(o.get("type") or "").lower()
                     c_id = str(o.get("client_order_id") or "")
-                    if o_st in ("new", "accepted", "pending_new", "partially_filled", "held") and not c_id.startswith("pod_"):
+                    if (
+                        o_st in ("new", "accepted", "pending_new", "partially_filled")
+                        and o_type == "market"
+                        and not c_id.startswith("pod_")
+                    ):
                         legacy_liquidation_syms.add(str(o.get("symbol") or "").upper())
 
                 # Separate clean long positions from any legacy positions pending liquidation
@@ -4022,7 +4038,7 @@ class AlpacaPaperPodManager:
                     continue
 
                 # Technical BUY signal DID fire! Now check AI Catalyst, Already Held, Pre-Open Buy-Zone, and Risk Caps:
-                client_oid = f"{pod_id}:{strat.strategy_id}:v{strat.version}:{session_date}:{tkr}"[:48]
+                client_oid = f"{pod_id}:{tkr}:{session_date}:v{strat.version}"[:48]
                 existing_open_ord = open_orders_by_tkr.get(tkr)
 
                 # Check A: Already held in this Pod?
