@@ -4,6 +4,32 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-12] — Broker-Native 3-Pod Alpaca Paper Architecture (`AlpacaPaperPodManager`), 4 Senior Quant Upgrades & "Why No Trades Today" Decision Engine
+
+### Summary
+- **Clean Reset of Polluted 2025 Demo Positions on Alpaca Paper (`PA3GP0WMH`) & Historical Replay Guard (`core/execution/paper_broker.py`)**:
+  - Disabled the legacy `_mirror_order_to_alpaca_paper` hook inside `PaperTradingEngine.submit_and_execute_order()` so `cmd_demo()` historical replays never leak market orders into the live Alpaca Paper account.
+  - Executed `DELETE /v2/positions?cancel_orders=true` on `PA3GP0WMH` to close all 13 legacy 2025 demo/short positions at the market open and added `AlpacaPaperPodManager.reset_alpaca_paper_account()`.
+- **Broker-Native 3-Pod Alpaca Paper Manager & 4 Senior Quant Profit-Maximizing Upgrades (`core/execution/paper_broker.py`, `infrastructure/configuration/settings.py`, `infrastructure/database/db.py`)**:
+  - Added `ALPACA_API_KEY_2` / `ALPACA_SECRET_KEY_2` and `ALPACA_API_KEY_3` / `ALPACA_SECRET_KEY_3` to `Settings`, `.env.example`, and `.github/workflows/autonomous_trading.yml`.
+  - Added SQLite Tables 21 & 22 (`alpaca_position_attribution` and `daily_decision_logs`) to `SCHEMA_SQL` in `infrastructure/database/db.py`.
+  - Implemented `AlpacaPaperPodManager` (`NOMINATED_PODS` for `#1 Volatility Breakout`, `#2 Mean Reversion Pullback`, `#3 RS Momentum Trend`) with:
+    1. **Two-Stage Progressive Profit Ratchet**: Stage 1 (`>= +1.0R`) raises Stop-Loss to `Entry + 0.10R`; Stage 2 (`>= +1.65R`) raises Stop-Loss to `max(Entry + 1.0R, Live - 1.8*ATR)` and patches active Alpaca stop legs via `PATCH /v2/orders/{stop_order_id}`.
+    2. **Conviction-Weighted Fractional Kelly Sizing**: Scales per-trade equity risk between `0.75%` (defensive high-vol), `1.00%` (standard), and `1.30%` (`Tier-1 A+ Catalyst >= +0.70 & 20d RS >= +5.0% & Sector Rank <= 2`).
+    3. **Pre-Open Queued Day-Limit Bracket Orders (`limit_price = Max Chase`, `extended_hours = False`) + Smart Idempotent `client_order_id` Sync**: Leaves valid open/filled Alpaca orders untouched when `run` is executed again, cancels only downgraded (`<= -0.35`) or gap-down (`< Buy-Zone Low`) unfilled orders, and submits newly approved brackets.
+    4. **A+ Catalyst Runner Target (`4.5x ATR`)**: Extends Take-Profit bracket leg on `BREAKOUT` and `MOMENTUM_TREND` when `AI Catalyst >= +0.80`.
+- **Full "Why Traded / 4-Way Exit Plan" & "Why No Trades Today" Dashboard Hub (`dashboard/streamlit_app.py`, `api/server.py`, `infrastructure/scheduler/orchestrator.py`)**:
+  - Wired `AlpacaPaperPodManager` into `AutonomousWorkflowOrchestrator` (`run_daily_workflow`, `run_pre_open_refresh`, `export_ide_ai_context`, `apply_ide_ai_cycle`) and `PlatformApplication.get_dashboard_state()`.
+  - Redesigned **Tab 1 (`Paper Pods & Strategy Decisions`)** (`_code_version = "2026-11-12-v23"`) to showcase the Top 3 Nominated Strategy Pods, Strategy Blueprint (Entry & 4-Way Exit Strategy), Today's Strategy Decisions, the full 15-stock `"Why No Trades Today"` diagnostic table (`_explain_missing_technical_signal()`), Live Alpaca Paper Positions & Active 4-Way Exit Brackets, and the Day-by-Day Strategy Decision Journal.
+
+### Modules Added / Modified
+- `infrastructure/configuration/settings.py`, `infrastructure/database/db.py`, `infrastructure/scheduler/orchestrator.py`
+- `core/execution/paper_broker.py`, `api/server.py`, `dashboard/streamlit_app.py`
+- `.env.example`, `.github/workflows/autonomous_trading.yml`
+- `AGENTS.md`, `GEMINI.md`, `core/AGENTS.md`, `USER_GUIDE.md`, `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-11] — Fix GitHub Actions Scheduled Run `HTTP 403` Failure (Default Branch Sync + Live Bar Preservation)
 
 ### Summary

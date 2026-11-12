@@ -29,6 +29,10 @@ jobs:
       MARKET_DATA_PROVIDER: alpaca
       ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
       ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      ALPACA_API_KEY_2: ${{ secrets.ALPACA_API_KEY_2 }}
+      ALPACA_SECRET_KEY_2: ${{ secrets.ALPACA_SECRET_KEY_2 }}
+      ALPACA_API_KEY_3: ${{ secrets.ALPACA_API_KEY_3 }}
+      ALPACA_SECRET_KEY_3: ${{ secrets.ALPACA_SECRET_KEY_3 }}
       LLM_PROVIDER: ${{ secrets.LLM_PROVIDER }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

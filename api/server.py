@@ -50,10 +50,16 @@ class PlatformApplication:
                 logger.warning(f"Auto market scan refresh skipped: {exc}")
 
         strats_dicts = [s.to_dict() for s in self.orchestrator.registry.list_strategies()]
+        strategy_pods_state = (
+            self.orchestrator.pod_manager.evaluate_and_sync_all_pods(execute_live_orders=False)
+            if hasattr(self.orchestrator, "pod_manager")
+            else {"pods": []}
+        )
         return {
             "settings": self.settings.sanitized_dict(),
             "account": self.orchestrator.paper_engine.get_account_summary(),
             "paper_books": self.orchestrator.paper_engine.get_all_paper_accounts_summary(strats_dicts),
+            "strategy_pods": strategy_pods_state,
             "positions": self.orchestrator.paper_engine.get_open_positions(),
             "orders": self.orchestrator.paper_engine.get_orders(limit=50),
             "trade_ledger": self.orchestrator.paper_engine.get_trade_ledger(limit=100),
@@ -200,6 +206,10 @@ def create_http_handler(app: PlatformApplication) -> type[BaseHTTPRequestHandler
                     self._send_json(200, res)
                 elif path == "/api/account/reset":
                     res = app.orchestrator.paper_engine.reset_account_to_starting_capital()
+                    self._send_json(200, res)
+                elif path == "/api/pods/reset":
+                    pod_id = str(payload.get("pod_id", "pod_1_breakout"))
+                    res = app.orchestrator.pod_manager.reset_alpaca_paper_account(pod_id=pod_id)
                     self._send_json(200, res)
                 elif path == "/api/strategies/revert-baseline":
                     sid = payload.get("strategy_id")

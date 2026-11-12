@@ -39,7 +39,11 @@ from agents.risk_manager.agent import RiskManagerAgent
 from agents.strategy_architect.agent import StrategyDiscoveryAgent
 from agents.strategy_evaluator.agent import StrategyEvaluationAgent
 from core.backtesting.engine import BacktestEngine
-from core.execution.paper_broker import LiveTradingCopilotEngine, PaperTradingEngine
+from core.execution.paper_broker import (
+    AlpacaPaperPodManager,
+    LiveTradingCopilotEngine,
+    PaperTradingEngine,
+)
 from core.market_data.models import USTradingCalendar
 from core.market_data.providers import MarketDataService
 from core.risk.manager import PortfolioRiskManager
@@ -76,6 +80,14 @@ class AutonomousWorkflowOrchestrator:
         )
         self.live_copilot = LiveTradingCopilotEngine(
             settings, db, self.market_data, risk_manager=self.risk_manager, registry=self.registry
+        )
+        self.pod_manager = AlpacaPaperPodManager(
+            settings,
+            db,
+            self.market_data,
+            risk_manager=self.risk_manager,
+            registry=self.registry,
+            paper_engine=self.paper_engine,
         )
 
         self.research_agent = MarketResearchAgent(settings, db, self.market_data)
@@ -331,11 +343,18 @@ class AutonomousWorkflowOrchestrator:
             force=force,
         )
 
+        import sys as _sys
+        pod_sync_res = self.pod_manager.evaluate_and_sync_all_pods(
+            session_date=trading_date,
+            execute_live_orders=("unittest" not in _sys.modules),
+        )
+
         return {
             "trading_date": trading_date,
             "pre_market": pre_market_res,
             "market_execution": market_exec_res,
             "post_close": post_close_res,
+            "strategy_pods_sync": pod_sync_res,
         }
 
     def run_pre_open_refresh(self, session_date: str) -> Dict[str, Any]:
@@ -346,6 +365,11 @@ class AutonomousWorkflowOrchestrator:
             active_strategies=active_strats,
             session_date=session_date,
         )
+        import sys as _sys
+        pod_sync = self.pod_manager.evaluate_and_sync_all_pods(
+            session_date=session_date,
+            execute_live_orders=("unittest" not in _sys.modules),
+        )
         copilot_plan = self.live_copilot.get_daily_action_plan(check_calendar_today=False)
         return {
             "session_date": session_date,
@@ -353,6 +377,7 @@ class AutonomousWorkflowOrchestrator:
             "ai_paper_exits_triggered": len(sync_res.get("ai_paper_exits_triggered") or []),
             "copilot_buys_ready": len(copilot_plan.get("buy_actions") or []),
             "copilot_vetoed_count": len(copilot_plan.get("vetoed_signals") or []),
+            "strategy_pods_synced": len(pod_sync.get("pods") or []),
         }
 
     def run_weekly_workflow(
@@ -597,6 +622,10 @@ class AutonomousWorkflowOrchestrator:
             "live_copilot_action_plan": self.live_copilot.get_daily_action_plan(
                 as_of_date=trading_date, check_calendar_today=False
             ),
+            "strategy_pods": self.pod_manager.evaluate_and_sync_all_pods(
+                session_date=latest_date,
+                execute_live_orders=("unittest" not in _sys.modules),
+            ),
             "daily_workflow_status": daily_res.get("status", "COMPLETED") if isinstance(daily_res, dict) else "COMPLETED",
         }
 
@@ -775,12 +804,19 @@ class AutonomousWorkflowOrchestrator:
                 session_date=dt_str,
             )
 
+        import sys as _sys
+        strategy_pods_sync = self.pod_manager.evaluate_and_sync_all_pods(
+            session_date=dt_str,
+            execute_live_orders=("unittest" not in _sys.modules),
+        )
+
         res_summary = {
             "session_date": dt_str,
             "research_tickers_enriched": updated_tickers,
             "recorded_proposal_id": recorded_proposal_id,
             "tournament_results": tournament_results,
             "paper_ai_sync": paper_ai_sync,
+            "strategy_pods_sync": strategy_pods_sync,
             "updated_copilot_action_plan": self.live_copilot.get_daily_action_plan(
                 as_of_date=session_date, check_calendar_today=False
             ),

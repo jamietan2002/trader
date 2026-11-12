@@ -80,8 +80,15 @@ class Settings:
     llm_model: str = "gemini-2.5-pro"
 
     # API Keys (never logged in plaintext)
+    # Pod 1: strat_volatility_breakout (#1 Champion) -> ALPACA_API_KEY / ALPACA_SECRET_KEY
+    # Pod 2: strat_mean_reversion_bb (#2 Pullback Specialist) -> ALPACA_API_KEY_2 / ALPACA_SECRET_KEY_2
+    # Pod 3: strat_momentum_trend (#3 Momentum Leader) -> ALPACA_API_KEY_3 / ALPACA_SECRET_KEY_3
     alpaca_api_key: str = ""
     alpaca_secret_key: str = ""
+    alpaca_api_key_2: str = ""
+    alpaca_secret_key_2: str = ""
+    alpaca_api_key_3: str = ""
+    alpaca_secret_key_3: str = ""
     alpaca_paper_base_url: str = "https://paper-api.alpaca.markets"
     polygon_api_key: str = ""
     fmp_api_key: str = ""
@@ -142,6 +149,8 @@ class Settings:
             "market_data_provider": self.market_data_provider,
             "llm_provider": self.llm_provider,
             "alpaca_api_key": "***REDACTED***" if self.alpaca_api_key else "(not set)",
+            "alpaca_api_key_2": "***REDACTED***" if self.alpaca_api_key_2 else "(not set)",
+            "alpaca_api_key_3": "***REDACTED***" if self.alpaca_api_key_3 else "(not set)",
             "polygon_api_key": "***REDACTED***" if self.polygon_api_key else "(not set)",
             "fmp_api_key": "***REDACTED***" if self.fmp_api_key else "(not set)",
             "finnhub_api_key": "***REDACTED***" if self.finnhub_api_key else "(not set)",
@@ -199,6 +208,10 @@ def get_settings(env_path: Path | None = None) -> Settings:
         llm_model=os.environ.get("LLM_MODEL", "gemini-2.5-pro"),
         alpaca_api_key=os.environ.get("ALPACA_API_KEY", ""),
         alpaca_secret_key=os.environ.get("ALPACA_SECRET_KEY", ""),
+        alpaca_api_key_2=os.environ.get("ALPACA_API_KEY_2", ""),
+        alpaca_secret_key_2=os.environ.get("ALPACA_SECRET_KEY_2", ""),
+        alpaca_api_key_3=os.environ.get("ALPACA_API_KEY_3", ""),
+        alpaca_secret_key_3=os.environ.get("ALPACA_SECRET_KEY_3", ""),
         alpaca_paper_base_url=os.environ.get("ALPACA_PAPER_BASE_URL", "https://paper-api.alpaca.markets"),
         polygon_api_key=os.environ.get("POLYGON_API_KEY", ""),
         fmp_api_key=os.environ.get("FMP_API_KEY", ""),

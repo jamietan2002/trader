@@ -351,6 +351,52 @@ CREATE TABLE IF NOT EXISTS shadow_dismissed_signals (
     created_at TEXT NOT NULL,
     PRIMARY KEY (account_id, signal_date, strategy_id, ticker, action)
 );
+
+-- 21. Strategy Pod Position Attribution & 4-Way Exit Plan
+CREATE TABLE IF NOT EXISTS alpaca_position_attribution (
+    pod_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    strategy_id TEXT NOT NULL,
+    strategy_version INTEGER NOT NULL,
+    strategy_name TEXT NOT NULL,
+    sector TEXT NOT NULL,
+    entry_date TEXT NOT NULL,
+    entry_price REAL NOT NULL,
+    quantity INTEGER NOT NULL,
+    initial_stop_price REAL NOT NULL,
+    current_stop_price REAL NOT NULL,
+    stage1_ratchet_price REAL NOT NULL,
+    stage2_ratchet_price REAL NOT NULL,
+    take_profit_price REAL NOT NULL,
+    max_hold_days INTEGER NOT NULL DEFAULT 12,
+    conviction_tier TEXT NOT NULL DEFAULT 'STANDARD_1.0R',
+    entry_thesis_summary TEXT NOT NULL,
+    technical_trigger TEXT NOT NULL,
+    ai_catalyst_score REAL NOT NULL DEFAULT 0.0,
+    ai_catalyst_headline TEXT NOT NULL DEFAULT '',
+    factors_json TEXT NOT NULL DEFAULT '[]',
+    alpaca_order_id TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (pod_id, ticker)
+);
+
+-- 22. Daily Strategy Decision Journal (Why Traded / Entry & Exit Plan / Why 0 Trades)
+CREATE TABLE IF NOT EXISTS daily_decision_logs (
+    session_date TEXT NOT NULL,
+    pod_id TEXT NOT NULL,
+    strategy_id TEXT NOT NULL,
+    strategy_version INTEGER NOT NULL,
+    strategy_name TEXT NOT NULL,
+    broker_mode TEXT NOT NULL,
+    alpaca_account_number TEXT,
+    executed_or_queued_json TEXT NOT NULL DEFAULT '[]',
+    ratchets_and_exits_json TEXT NOT NULL DEFAULT '[]',
+    active_holdings_plan_json TEXT NOT NULL DEFAULT '[]',
+    skipped_reasons_json TEXT NOT NULL DEFAULT '[]',
+    summary_headline TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (session_date, pod_id)
+);
 """
 
 

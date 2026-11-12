@@ -485,12 +485,14 @@ def main() -> None:
     )
     st.markdown(CLASSY_MINIMAL_CSS, unsafe_allow_html=True)
 
-    _code_version = "2026-11-10-v22"
+    _code_version = "2026-11-12-v23"
     import api.server as _srv_mod
     import core.market_data.models as _md_mod
+    import core.execution.paper_broker as _pb_check_mod
     if (
         getattr(_srv_mod, "_STREAMLIT_SYNC_VERSION", None) != _code_version
         or not hasattr(_md_mod.USTradingCalendar, "market_open_sgt")
+        or not hasattr(_pb_check_mod, "AlpacaPaperPodManager")
     ):
         import importlib
 
@@ -529,6 +531,16 @@ def main() -> None:
         import core.execution.paper_broker as _pb_mod
         app.orchestrator.live_copilot = _pb_mod.LiveTradingCopilotEngine(
             app.settings, app.db, app.orchestrator.market_data, app.orchestrator.risk_manager, app.orchestrator.registry
+        )
+    if not hasattr(app.orchestrator, "pod_manager"):
+        import core.execution.paper_broker as _pb_mod
+        app.orchestrator.pod_manager = _pb_mod.AlpacaPaperPodManager(
+            app.settings,
+            app.db,
+            app.orchestrator.market_data,
+            app.orchestrator.risk_manager,
+            app.orchestrator.registry,
+            app.orchestrator.paper_engine,
         )
     if not app.orchestrator.registry.list_strategies():
         with st.spinner("Initializing baseline strategies (Backtesting only — Paper Account stays at $100k)..."):
@@ -662,9 +674,18 @@ def main() -> None:
         st.markdown("---")
         st.markdown("#### System Status")
         st.caption(f"Champion: **{active_champ_id} v{active_champ_ver}**")
-        st.caption(f"Paper Mode: **{acc['trading_mode'].upper()}** (`$100k` × 6 Pods)")
+        st.caption(f"Broker Mode: **ALPACA PAPER (`PA3GP0WMH`)** + 3 Strategy Pods")
         st.caption(f"Market Data: **{app.settings.market_data_provider.upper()}**")
         st.caption(f"Validated Models: **{golden_ready_count} / {len(active_paper_strats)} beat SPY**")
+        if st.button(
+            "Sync & Queue Alpaca Paper Orders",
+            width="stretch",
+            key="btn_sidebar_sync_alpaca_pods",
+            help="Evaluates the Top 3 Nominated Strategy Pods, syncs open positions/stops, and queues approved Day Limit Bracket orders to Alpaca Paper.",
+        ):
+            with st.spinner("Evaluating Top 3 Strategy Pods & syncing with Alpaca Paper..."):
+                app.orchestrator.pod_manager.evaluate_and_sync_all_pods(execute_live_orders=True)
+            st.rerun()
         if st.button(
             "Reset Paper Books ($100k)",
             width="stretch",
@@ -692,7 +713,7 @@ def main() -> None:
     tabs = st.tabs(
         [
             "Live Copilot",
-            "Paper Portfolio",
+            "Paper Pods & Strategy Decisions",
             "Strategies & Backtests",
             "AI & Watchlist",
             "Risk & Logs",
@@ -1108,6 +1129,37 @@ def main() -> None:
 
             _render_removed_signals_section(st, vetoed_sigs, context_label="Live Copilot")
 
+            strategy_pods_data = state.get("strategy_pods") or {}
+            pods_list_tab0 = strategy_pods_data.get("pods") or []
+            if pods_list_tab0:
+                champ_pod = pods_list_tab0[0]
+                no_sig_diags = champ_pod.get("no_signal_diagnostics") or []
+                if no_sig_diags:
+                    with st.expander(
+                        f"Why Other Universe Stocks Did Not Trigger Today ({len(no_sig_diags)} Stocks — Exact Technical Thresholds)",
+                        expanded=(not buy_actions and not sell_actions),
+                    ):
+                        st.caption(
+                            f"**{champ_pod.get('No_Trades_Reason') or champ_pod.get('no_trades_reason', '')}**"
+                        )
+                        st.dataframe(
+                            [
+                                {
+                                    "Ticker": d["ticker"],
+                                    "Sector": d["sector"],
+                                    "Close": f"${d['close']:.2f}",
+                                    "20d RS vs SPY": f"{d['rs_20d_vs_spy_pct']:+.2f}%",
+                                    "RSI(14)": f"{d['rsi_14']:.1f}",
+                                    "Vol Ratio": f"{d['volume_ratio_20']:.2f}x",
+                                    "AI Catalyst": f"{d['ai_catalyst_sentiment']:+.2f}",
+                                    "Why No Entry Signal Triggered": d["why_no_signal"],
+                                }
+                                for d in no_sig_diags
+                            ],
+                            width="stretch",
+                            hide_index=True,
+                        )
+
         st.markdown("---")
         # Section 2: Active Holdings
         st.markdown("##### 2. Active Holdings")
@@ -1263,17 +1315,315 @@ def main() -> None:
             st.caption("No trades recorded yet (`0` fills). Cash, holdings, and P&L update automatically when trades are logged.")
 
     # =========================================================================
-    # TAB 1: PAPER PORTFOLIO (MASTER $100K + 5 STRATEGY PODS)
+    # TAB 1: PAPER PODS & STRATEGY DECISIONS (ALPACA PAPER + 3 NOMINATED PODS)
     # =========================================================================
     with tabs[1]:
         _render_tab_header(
             st,
-            "Forward $100,000 Paper Books: 1 Master Combined Portfolio + 5 Dedicated Per-Strategy $100k Pods (Synchronized with IDE `run` AI Catalysts).",
-            "Two-Tier Paper Architecture & AI Sync",
-            "- **Master Combined (`$100k`)**: Runs all active strategies under shared portfolio heat (`5%`), sector (`30%`), and AI Catalyst rules.\n"
-            "- **5 Strategy Pods (`$100k` each)**: Isolates each strategy in its own `$100k` account to measure pure forward alpha without cash starvation.\n"
-            "- **Live AI Sync**: Typing `run` in the IDE updates both Live Copilot and all 6 Paper Books (vetoing bearish `<= -0.35` setups, triggering emergency `<= -0.50` exits, and re-ranking `>= +0.25` catalysts first).",
+            "Top 3 Nominated Swing Strategy Pods (Connected to Alpaca Paper PA3GP0WMH) · Entry/Exit Strategy Blueprint · Daily Trade Decisions & 'Why No Trades Today' Diagnostic.",
+            "Broker-Native Alpaca Paper Pods & 4 Quant Upgrades",
+            "- **Top 3 Nominated Strategy Pods**:\n"
+            "  1. **Pod #1 (`strat_volatility_breakout`)**: Connected to your live **Alpaca Paper Account (`PA3GP0WMH`)** via `ALPACA_API_KEY`.\n"
+            "  2. **Pod #2 (`strat_mean_reversion_bb`)**: Ready for a 2nd Alpaca Paper account via `ALPACA_API_KEY_2`.\n"
+            "  3. **Pod #3 (`strat_momentum_trend`)**: Ready for a 3rd Alpaca Paper account via `ALPACA_API_KEY_3`.\n"
+            "- **4 Profit-Maximizing Upgrades**:\n"
+            "  1. **Two-Stage Profit Ratchet**: Stage 1 (`>= +1.0R`) moves Stop to `Entry + 0.10R`; Stage 2 (`>= +1.65R`) locks `+1.0R` profit.\n"
+            "  2. **Conviction-Weighted Fractional Kelly Sizing**: `1.30%` risk on Tier-1 A+ setups, `1.00%` standard, `0.75%` defensive high-vol.\n"
+            "  3. **Pre-Open Queued Day-Limit Brackets + Smart Idempotent Sync**: Queues `Day Limit <= Max Chase` (`extended_hours=False`) into the `10:30 PM SGT` open without duplicating or cancelling valid orders when `run` is typed again.\n"
+            "  4. **A+ Catalyst Runner Target (`4.5x ATR`)**: Extends Take-Profit target when `AI Catalyst >= +0.80`.",
         )
+
+        pods_bundle = state.get("strategy_pods") or app.orchestrator.pod_manager.evaluate_and_sync_all_pods(
+            execute_live_orders=False
+        )
+        nominated_pods = pods_bundle.get("pods") or []
+
+        if nominated_pods:
+            st.markdown("##### Top 3 Nominated Swing Strategy Pods (Side-by-Side Status)")
+            pod_summary_rows = [
+                {
+                    "Pod": f"Pod #{p['rank']} · {p['label']}",
+                    "Strategy": f"{p['strategy_id']} v{p['strategy_version']}",
+                    "Broker Account": (
+                        f"Alpaca Paper ({p['broker_state'].get('alpaca_account_number', 'PA3GP0WMH')})"
+                        if p["broker_connected"]
+                        else f"Virtual $100k (Set {p['env_key_hint']} for Alpaca)"
+                    ),
+                    "Equity": f"${p['broker_state']['total_equity']:,.2f} ({p['broker_state']['total_return_pct']:+.2f}%)",
+                    "Cash": f"${p['broker_state']['cash_balance']:,.2f}",
+                    "Open Held": f"{p['broker_state']['open_positions_count']} pos",
+                    "Today's Decision": (
+                        f"{len(p['approved_buys'])} Buy(s) · {len(p['sell_decisions'])} Exit(s)"
+                        if (p["approved_buys"] or p["sell_decisions"])
+                        else f"0 Trades ({len(p['filtered_signals'])} Filtered)"
+                    ),
+                    "6M Backtest": f"{p['backtest_metrics']['recent_6m_return_pct']:+.1f}% ({p['backtest_metrics']['recent_6m_win_rate_pct']:.0f}% WR · SQN {p['backtest_metrics']['sqn_score']:.2f})",
+                }
+                for p in nominated_pods
+            ]
+            st.dataframe(pod_summary_rows, width="stretch", hide_index=True)
+
+            pod_sel_c1, pod_sel_c2, pod_sel_c3 = st.columns([2.4, 1.3, 1.3])
+            pod_opts = [p["pod_id"] for p in nominated_pods]
+            pod_lbl_map = {
+                p["pod_id"]: (
+                    f"Pod #{p['rank']}: {p['label']} — "
+                    + (
+                        f"Alpaca {p['broker_state'].get('alpaca_account_number', 'PA3GP0WMH')} (${p['broker_state']['total_equity']:,.2f})"
+                        if p["broker_connected"]
+                        else f"Virtual $100k (${p['broker_state']['total_equity']:,.2f})"
+                    )
+                )
+                for p in nominated_pods
+            }
+            with pod_sel_c1:
+                sel_pod_id = st.selectbox(
+                    "Select Strategy Pod to Inspect",
+                    options=pod_opts,
+                    index=0,
+                    format_func=lambda pid: pod_lbl_map.get(pid, pid),
+                    key="nominated_pod_selector",
+                    label_visibility="collapsed",
+                )
+            active_pod = next((p for p in nominated_pods if p["pod_id"] == sel_pod_id), nominated_pods[0])
+            pod_broker = active_pod["broker_state"]
+
+            with pod_sel_c2:
+                if st.button(
+                    "Sync & Queue Orders Now",
+                    key=f"btn_sync_pod_{active_pod['pod_id']}",
+                    width="stretch",
+                    help="Runs smart idempotent sync with Alpaca Paper: leaves valid queued orders untouched, cancels downgraded/broken orders, and submits newly approved brackets.",
+                ):
+                    with st.spinner("Syncing strategy decisions & orders with Alpaca Paper..."):
+                        app.orchestrator.pod_manager.evaluate_and_sync_all_pods(execute_live_orders=True)
+                    st.rerun()
+            with pod_sel_c3:
+                if active_pod["broker_connected"]:
+                    if st.button(
+                        f"Clean Reset Alpaca ({pod_broker.get('alpaca_account_number', 'PA3GP0WMH')})",
+                        key=f"btn_reset_alpaca_{active_pod['pod_id']}",
+                        width="stretch",
+                        help="Cancels all open orders and liquidates any legacy positions on this Alpaca Paper account.",
+                    ):
+                        with st.spinner("Resetting Alpaca Paper positions & orders..."):
+                            app.orchestrator.pod_manager.reset_alpaca_paper_account(pod_id=active_pod["pod_id"])
+                        st.rerun()
+
+            if pod_broker.get("pending_legacy_cleanup_count", 0) > 0:
+                st.info(
+                    f"**Alpaca Paper Account Cleanup Queued (`{pod_broker.get('alpaca_account_number', 'PA3GP0WMH')}`)**: "
+                    f"`{pod_broker['pending_legacy_cleanup_count']}` legacy 2025 demo position(s) have market-on-open closing orders queued for the `{open_sgt}` (`9:30 AM ET`) opening bell. "
+                    f"Effective clean cash after open: **`${pod_broker['cash_balance']:,.2f}`**."
+                )
+
+            pk1, pk2, pk3, pk4 = st.columns(4)
+            pk1.metric(
+                "Pod Account Equity",
+                f"${pod_broker['total_equity']:,.2f}",
+                f"{pod_broker['total_return_pct']:+.2f}% vs $100k",
+            )
+            pk2.metric(
+                "Available Cash",
+                f"${pod_broker['cash_balance']:,.2f}",
+                f"Broker: {'Alpaca ' + str(pod_broker.get('alpaca_account_number', 'PA3GP0WMH')) if active_pod['broker_connected'] else 'Virtual $100k'}",
+            )
+            pk3.metric(
+                "Open Positions",
+                f"{pod_broker['open_positions_count']} / 10",
+                f"${pod_broker['positions_market_value']:,.2f} invested · Open P&L ${pod_broker['unrealised_pnl']:+,.2f}",
+            )
+            pk4.metric(
+                f"Today's Decision ({active_pod['session_date']})",
+                (
+                    f"{len(active_pod['approved_buys'])} Buy · {len(active_pod['sell_decisions'])} Exit"
+                    if (active_pod["approved_buys"] or active_pod["sell_decisions"])
+                    else "0 Trades (Standing Pat)"
+                ),
+                f"{len(active_pod['filtered_signals'])} Filtered · {len(active_pod['no_signal_diagnostics'])} No Signal",
+            )
+
+            # Strategy Blueprint Banner (Entry & 4-Way Exit Strategy)
+            st.markdown(
+                f"<div style='background:rgba(15,23,42,0.6);border:1px solid rgba(56,189,248,0.28);border-radius:8px;padding:12px 16px;margin:8px 0 14px 0;font-size:0.82rem;'>"
+                f"<div style='color:#38bdf8;font-weight:600;margin-bottom:4px;'>"
+                f"Strategy Blueprint — {active_pod['strategy_name']} (<code>{active_pod['strategy_id']} v{active_pod['strategy_version']}</code> · {active_pod['strategy_family']})</div>"
+                f"<div style='color:#cbd5e1;margin-bottom:4px;'><strong>Why We Enter (Entry Strategy):</strong> {active_pod['archetype_summary']} "
+                f"Executes via Pre-Open Queued <strong>Day Limit Bracket Orders (&le; Max Chase)</strong> sized by Conviction Tier (<code>0.75%</code> defensive / <code>1.00%</code> standard / <code>1.30%</code> Tier-1 A+ setups).</div>"
+                f"<div style='color:#cbd5e1;'><strong>How We Exit (4-Way Exit Strategy):</strong> "
+                f"① <strong>Initial Stop (-1R):</strong> <code>Entry - {active_pod['exit_rules'].get('stop_loss_atr_mult', 1.6)}x ATR</code> · "
+                f"② <strong>Stage 1 Ratchet (+1.0R):</strong> Move Stop to <code>Entry + 0.10R</code> (locks breakeven + fees) · "
+                f"③ <strong>Stage 2 Lock (+1.65R):</strong> Move Stop to <code>Entry + 1.0R</code> (locks +1R gain) · "
+                f"④ <strong>Profit Target &amp; Time-Stop:</strong> <code>Entry + {active_pod['exit_rules'].get('take_profit_atr_mult', 3.2)}x ATR</code> (or <code>4.5x ATR</code> on A+ Catalysts &ge; +0.80) or Close on <code>Day {active_pod['holding_period_max_days']}</code>.</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+            # Section 1: Today's Strategy Decisions (Why We Traded OR Why No Trades Today)
+            st.markdown(
+                f"##### 1. Today's Strategy Decisions (`{active_pod['session_date']}`) — "
+                f"`{len(active_pod['approved_buys'])}` Entry Setup(s) · `{len(active_pod['sell_decisions'])}` Exit(s) · `{len(active_pod['ratchet_actions'])}` Stop Ratchet(s)"
+            )
+
+            if active_pod["sell_decisions"]:
+                for sd in active_pod["sell_decisions"]:
+                    st.markdown(
+                        f"<div style='background:rgba(239,68,68,0.09);border-left:3px solid #ef4444;padding:10px 14px;border-radius:6px;margin-bottom:8px;font-size:0.83rem;'>"
+                        f"<strong style='color:#fca5a5;'>EXIT (`SELL`) · {sd['ticker']} ({sd['qty']} sh)</strong> · "
+                        f"Entry <code>${sd['entry_price']:.2f}</code> → Live <code>${sd['current_price']:.2f}</code> · "
+                        f"Broker Status: <code>{sd['broker_order_status']}</code><br/>"
+                        f"<span style='color:#e2e8f0;'><strong>Why Exiting:</strong> {sd['exit_reason']}</span></div>",
+                        unsafe_allow_html=True,
+                    )
+
+            if active_pod["ratchet_actions"]:
+                for ra in active_pod["ratchet_actions"]:
+                    st.info(
+                        f"**Two-Stage Profit Ratchet (`{ra['ticker']}` at `{ra['r_multiple']:+.2f}R`)**: "
+                        f"Stop-Loss raised from `${ra['old_stop']:.2f}` → **`${ra['new_stop']:.2f}`** (`{ra['stage']}` · `{ra['status']}`)."
+                    )
+
+            if active_pod["approved_buys"]:
+                for ab in active_pod["approved_buys"]:
+                    ep = ab["exit_plan"]
+                    factors_html = _format_factors_html(ab.get("why_entered_factors") or [])
+                    st.markdown(
+                        f"<div style='background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.32);border-radius:8px;padding:12px 15px;margin-bottom:10px;font-size:0.83rem;'>"
+                        f"<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;'>"
+                        f"<div><strong style='color:#34d399;font-size:0.92rem;'>BUY {ab['qty']} {ab['ticker']} ({ab['sector']})</strong> · "
+                        f"Limit <code>${ab['limit_price_max_chase']:.2f}</code> (Buy-Zone <code>${ab['buy_zone_low']:.2f} – ${ab['limit_price_max_chase']:.2f}</code> · Live <code>${ab['live_price']:.2f}</code>)</div>"
+                        f"<div><span style='background:rgba(56,189,248,0.18);color:#38bdf8;padding:2px 8px;border-radius:4px;font-weight:600;font-size:0.76rem;'>"
+                        f"{ab['conviction_tier']} ({ab['risk_pct_of_equity']:.2f}% Risk · ${ab['risk_dollars']:,.0f})</span> · "
+                        f"<span style='background:rgba(16,185,129,0.2);color:#4ade80;padding:2px 8px;border-radius:4px;font-weight:600;font-size:0.76rem;'>"
+                        f"Alpaca: {ab['broker_order_status']}</span></div></div>"
+                        f"<div style='margin-top:6px;color:#cbd5e1;'>"
+                        f"<strong>4-Way Exit Plan:</strong> "
+                        f"① <strong>Hard Stop (-1R):</strong> <code>${ep['initial_stop_loss_1r']:.2f}</code> · "
+                        f"② <strong>Stage 1 (+1.0R @ ${ep['stage_1_ratchet_trigger_1r']:.2f}):</strong> Move Stop → <code>${ep['stage_1_new_stop_0_1r']:.2f}</code> · "
+                        f"③ <strong>Stage 2 (+1.65R @ ${ep['stage_2_ratchet_trigger_1_65r']:.2f}):</strong> Move Stop → <code>${ep['stage_2_new_stop_1r_lock']:.2f}</code> · "
+                        f"④ <strong>Target:</strong> <code>${ep['take_profit_target']:.2f}</code> ({ep['target_mode']}) or <strong>{ep['time_stop']}</strong>.</div>"
+                        f"{factors_html}</div>",
+                        unsafe_allow_html=True,
+                    )
+            elif not active_pod["sell_decisions"]:
+                st.warning(
+                    f"**No Trades Executed Today on `{active_pod['label']}` (`0` Buys, `0` Sells)** — "
+                    f"{active_pod.get('no_trades_reason', 'All candidate signals were filtered by position ownership, AI catalyst checks, or entry rule thresholds.')}"
+                )
+
+            # Transparent Breakdown of Filtered Signals + Why Other Stocks Did Not Trigger
+            filt_sigs = active_pod.get("filtered_signals") or []
+            no_sig_list = active_pod.get("no_signal_diagnostics") or []
+            with st.expander(
+                f"Why Specific Stocks Were Filtered or Did Not Trigger Today ({len(filt_sigs)} Filtered Setups · {len(no_sig_list)} No Technical Signal)",
+                expanded=(len(active_pod["approved_buys"]) == 0),
+            ):
+                if filt_sigs:
+                    st.markdown("**A. Technical Signals That Triggered Today Put on Hold / Filtered Out:**")
+                    for fs in filt_sigs:
+                        st.markdown(
+                            f"<div style='padding:7px 11px;margin-bottom:6px;background:rgba(15,23,42,0.55);border-left:3px solid #f59e0b;border-radius:4px;font-size:0.81rem;'>"
+                            f"<strong>{fs['ticker']}</strong> ({fs.get('sector', '')} · Close <code>${fs['close_price']:.2f}</code> · Live <code>${fs['live_price']:.2f}</code>) — "
+                            f"<span style='color:#fbbf24;font-weight:600;'>{fs['decision']}</span><br/>"
+                            f"<span style='color:#e2e8f0;'><strong>Why Not Traded:</strong> {fs['reason']}</span><br/>"
+                            f"<span style='color:#94a3b8;font-size:0.76rem;'>Technical Trigger: {fs.get('technical_trigger', '')}</span></div>",
+                            unsafe_allow_html=True,
+                        )
+                if no_sig_list:
+                    st.markdown("**B. Universe Stocks With No Entry Signal Today (Exact Numerical Rule Missed):**")
+                    st.dataframe(
+                        [
+                            {
+                                "Ticker": d["ticker"],
+                                "Sector": d["sector"],
+                                "Close": f"${d['close']:.2f}",
+                                "20d RS vs SPY": f"{d['rs_20d_vs_spy_pct']:+.2f}%",
+                                "RSI(14)": f"{d['rsi_14']:.1f}",
+                                "Vol Ratio": f"{d['volume_ratio_20']:.2f}x",
+                                "AI Catalyst": f"{d['ai_catalyst_sentiment']:+.2f}",
+                                "Exact Entry Rule Not Met Today": d["why_no_signal"],
+                            }
+                            for d in no_sig_list
+                        ],
+                        width="stretch",
+                        hide_index=True,
+                    )
+
+            st.markdown("---")
+            # Section 2: Live Alpaca Paper Positions & Active 4-Way Exit Strategy
+            st.markdown(
+                f"##### 2. Live Paper Account Positions & Active 4-Way Exit Plan (`{len(active_pod['open_positions_explained'])}` Open)"
+            )
+            open_pos_exp = active_pod.get("open_positions_explained") or []
+            if open_pos_exp:
+                st.dataframe(
+                    [
+                        {
+                            "Ticker": p["ticker"],
+                            "Qty": p["qty"],
+                            "Entry → Live": f"${p['avg_entry_price']:.2f} → ${p['current_price']:.2f}",
+                            "Unrealised P&L": f"${p['unrealised_pnl']:+,.2f} ({p['unrealised_return_pct']:+.2f}%)",
+                            "R-Multiple": f"{p['r_multiple']:+.2f}R",
+                            "Active Stop Stage": f"${p['active_stop_price']:.2f} ({p['stop_stage']})",
+                            "+1R / +1.65R Triggers": f"${p['stage_1_trigger_px']:.2f} / ${p['stage_2_trigger_px']:.2f}",
+                            "Profit Target": f"${p['take_profit_price']:.2f}",
+                            "Horizon": p["time_stop_horizon"],
+                            "Why We Entered": p["why_entered"],
+                        }
+                        for p in open_pos_exp
+                    ],
+                    width="stretch",
+                    hide_index=True,
+                )
+            else:
+                st.caption(
+                    f"No open long positions currently held in `{active_pod['label']}` (`${pod_broker['cash_balance']:,.2f}` available cash)."
+                )
+
+            open_ords = pod_broker.get("open_orders") or []
+            if open_ords:
+                st.markdown(f"**Queued / Working Alpaca Paper Orders (`{len(open_ords)}`)**")
+                st.dataframe(
+                    [
+                        {
+                            "Client Order ID": o["client_order_id"],
+                            "Ticker": o["ticker"],
+                            "Side": o["side"],
+                            "Class / Type": f"{o['order_class']} {o['type']}",
+                            "Qty": o["qty"],
+                            "Limit Price": f"${o['limit_price']:.2f}" if o.get("limit_price") else "MKT",
+                            "Stop Leg": f"${o['stop_price']:.2f}" if o.get("stop_price") else "—",
+                            "Target Leg": f"${o['take_profit_price']:.2f}" if o.get("take_profit_price") else "—",
+                            "Status": o["status"],
+                            "Submitted": o["submitted_at"],
+                        }
+                        for o in open_ords
+                    ],
+                    width="stretch",
+                    hide_index=True,
+                )
+
+            # Section 3: Day-by-Day Strategy Decision Journal
+            hist_logs = active_pod.get("decision_history") or []
+            if hist_logs:
+                with st.expander(f"3. Day-by-Day Strategy Decision Journal ({len(hist_logs)} Sessions Recorded)", expanded=False):
+                    st.dataframe(
+                        [
+                            {
+                                "Date": h["session_date"],
+                                "Decision": h["decision_status"],
+                                "Trades": h["trades_executed_count"],
+                                "Why Traded / Why No Trades Today": h["no_trade_summary"],
+                                "Updated": str(h.get("updated_at") or "")[:16].replace("T", " "),
+                            }
+                            for h in hist_logs
+                        ],
+                        width="stretch",
+                        hide_index=True,
+                    )
+
+        st.markdown("---")
+        st.markdown("##### Internal Virtual Paper Books (`$100k` Master + 5 Strategy Simulation Books)")
 
         all_paper_books = app.orchestrator.paper_engine.get_all_paper_accounts_summary(strats)
         book_options = [b["account_id"] for b in all_paper_books]
