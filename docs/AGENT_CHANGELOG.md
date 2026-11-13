@@ -4,7 +4,7 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
-## [2026-11-13] — Alpaca Paper Portal Quick Links, Self-Healing GTC OCO Exit Bracket Guardian & Senior Engineer Bug Audit
+## [2026-11-13] — Alpaca Paper Portal Quick Links, Self-Healing GTC OCO Exit Bracket Guardian, Senior Engineer Bug Audit & 8 Senior Quant Upgrades
 
 ### Summary
 - **Alpaca Paper Portal (`PA3GP0WMH`) Quick-Access Links & Live Pod Heartbeat (`dashboard/streamlit_app.py`, `dashboard/ui_template.py`)**:
@@ -24,9 +24,27 @@ This log tracks architectural additions, strategy changes, schema updates, and v
      - Updated `fetch_alpaca_pod_broker_state()` so `OCO` sell orders populate both `take_profit_price` (from top-level `limit_price`) and `stop_price` / `stop_leg_order_id` (from child `legs[0]`).
   6. **Unique `client_order_id` Formatting**:
      - Placed `{ticker}` before strategy metadata (`f"{pod_id}:{tkr}:{session_date}:v{strat.version}"[:48]`) to prevent 48-character truncation collisions across multi-order submissions.
+- **Senior Quantitative Analyst Audit & 8 Alpha/Execution Upgrades (`core/execution/paper_broker.py`, `core/risk/manager.py`, `core/strategies/registry.py`)**:
+  1. **Composite Alpha Rank Sorting (Eliminating Alphabetical Capital & Sector Bias)**:
+     - Computed `composite_alpha_score = conviction_score + 0.20 * ai_sent + 0.01 * rs_20d - 0.03 * sec_rank` across all triggered setups and sorted descending before running `PortfolioRiskManager` sizing and `30%` sector cap allocation.
+  2. **Unclamped Conviction-Tier Sizing (`1.30%` Risk / `20%` Exposure Override)**:
+     - Updated `PortfolioRiskManager.calculate_atr_position_size()` and Gate #7 (`MAX_SINGLE_STOCK_EXPOSURE`) to honor explicit conviction-tier overrides up to `1.50%` risk and `20.0%` exposure when passed.
+  3. **Technical Strategy Exit Rules Wired into Live Pods (`StrategySignalEngine.evaluate_exit`)**:
+     - Wired `exit_below_sma20`, `exit_rsi_above`, and `Chandelier Trail` exit signals (after `holding_period_min_days`) into `AlpacaPaperPodManager`'s daily exit engine.
+  4. **High-Water Mark (`highest_price_since_entry`) Stop Ratchet + Resilient `GTC OCO` Replacement**:
+     - Computed `highest_px_since_entry` from all daily bars `>= entry_date` plus `live_px` so intraday breaches of `+1.0R` / `+1.65R` permanently ratchet stops, and added an automatic cancel-and-replace `GTC OCO` fallback if `PATCH` on an `OCO` child leg is rejected.
+  5. **Mean Reversion Oversold Floor (`min_rsi_14: 30.0`) & Value-Zone Reason Clarity**:
+     - Lowered `strat_mean_reversion_bb v1`'s `min_rsi_14` floor from `50.0` to `30.0` so genuine oversold pullbacks (`30 <= RSI < 50`) in uptrends are captured, and distinguished `LowerBB Oversold` vs `SMA20 Value-Zone Pullback` in signal reasons.
+  6. **Full Risk Vector Passing (`peak_equity`, `20d Pairwise Correlation`, `market_vol_annualised`, `5-Day Earnings Lookahead`)**:
+     - Precomputed 20-day daily return vectors (`rets_20d_by_tkr`) and passed `candidate_returns_20d`, `open_positions_returns_20d`, `pod_peak_equity`, `market_vol_annualised`, and exact `days_to_earn` into `PortfolioRiskManager.evaluate_proposed_entry()`.
+  7. **Asymmetric Family-Specific Buy-Zones**:
+     - Configured `MEAN_REVERSION` setups to use `Close - 0.60 * ATR` to `Close + 0.30 * ATR` (allowing dip-buying at the open without over-chasing gap-ups) and `BREAKOUT`/`MOMENTUM_TREND` setups to use `Close - 0.20 * ATR` to `Close + 0.50 * ATR`.
+  8. **Primary Strategy Signal Check Before Single-Account Regime Fallback**:
+     - Verified whether `Pod #1` (`strat_volatility_breakout`) has any valid leader signals of its own before activating the `SPY < SMA50` single-account fallback to `strat_mean_reversion_bb`.
 
 ### Modules Added / Modified
-- `core/execution/paper_broker.py`, `dashboard/streamlit_app.py`, `dashboard/ui_template.py`
+- `core/execution/paper_broker.py`, `core/risk/manager.py`, `core/strategies/registry.py`
+- `dashboard/streamlit_app.py`, `dashboard/ui_template.py`
 - `docs/AGENT_CHANGELOG.md`, `data/swing_trader.db`
 
 ---

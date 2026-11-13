@@ -85,9 +85,10 @@ class PortfolioRiskManager:
         if portfolio_equity <= 0 or available_cash <= 0 or entry_price <= 0:
             return 0
 
-        effective_risk_pct = min(
-            self.config.max_risk_per_trade_pct,
-            strategy_risk_per_trade_pct or self.config.max_risk_per_trade_pct,
+        effective_risk_pct = (
+            min(0.015, float(strategy_risk_per_trade_pct))
+            if (strategy_risk_per_trade_pct is not None and strategy_risk_per_trade_pct > 0)
+            else self.config.max_risk_per_trade_pct
         )
         # Dynamic Drawdown De-Gearing: scale risk by 0.65x when drawdown reaches 50% of suspension threshold (e.g., >=7.5%)
         half_dd_threshold = 0.5 * self.config.drawdown_suspension_threshold_pct
@@ -108,9 +109,10 @@ class PortfolioRiskManager:
 
         shares_by_risk = int(max_risk_dollars // risk_per_share)
 
-        effective_max_exp_pct = min(
-            self.config.max_single_stock_exposure_pct,
-            strategy_max_exposure_pct or self.config.max_single_stock_exposure_pct,
+        effective_max_exp_pct = (
+            min(0.20, float(strategy_max_exposure_pct))
+            if (strategy_max_exposure_pct is not None and strategy_max_exposure_pct > 0)
+            else self.config.max_single_stock_exposure_pct
         )
         max_position_dollars = min(portfolio_equity * effective_max_exp_pct, available_cash * 0.98)
         shares_by_exposure = int(max_position_dollars // entry_price)
@@ -139,6 +141,7 @@ class PortfolioRiskManager:
         kill_switch_engaged: bool = False,
         strategy_risk_pct: Optional[float] = None,
         strategy_max_exp_pct: Optional[float] = None,
+        market_vol_annualised: Optional[float] = None,
     ) -> RiskDecision:
         """Evaluate all portfolio, drawdown, sector, correlation, liquidity, and event risk constraints."""
         warnings: List[str] = []
@@ -232,7 +235,7 @@ class PortfolioRiskManager:
                 f"non-PEAD entries blocked within {self.config.earnings_blackout_days_before} days.",
             )
 
-        # 6. Calculate ATR Position Size (with dynamic drawdown de-gearing)
+        # 6. Calculate ATR Position Size (with dynamic drawdown de-gearing & vol targeting)
         shares = self.calculate_atr_position_size(
             portfolio_equity=portfolio_equity,
             available_cash=available_cash,
@@ -242,6 +245,7 @@ class PortfolioRiskManager:
             strategy_risk_per_trade_pct=strategy_risk_pct,
             strategy_max_exposure_pct=strategy_max_exp_pct,
             current_drawdown_pct=current_dd,
+            market_vol_annualised=market_vol_annualised,
         )
         if current_dd >= 0.5 * self.config.drawdown_suspension_threshold_pct > 0:
             warnings.append(
@@ -259,9 +263,14 @@ class PortfolioRiskManager:
 
         proposed_value = shares * entry_price
 
-        # 7. Single-Stock Exposure Check (15% cap)
+        # 7. Single-Stock Exposure Check (15% default cap, up to 20% for Conviction Tier-1 override)
+        max_allowed_single_exp = (
+            min(0.20, float(strategy_max_exp_pct))
+            if (strategy_max_exp_pct is not None and strategy_max_exp_pct > 0)
+            else self.config.max_single_stock_exposure_pct
+        )
         stock_exposure_pct = proposed_value / portfolio_equity if portfolio_equity > 0 else 1.0
-        if stock_exposure_pct > self.config.max_single_stock_exposure_pct + 1e-6:
+        if stock_exposure_pct > max_allowed_single_exp + 1e-6:
             return self._veto(
                 account_id,
                 eval_date,
@@ -269,7 +278,7 @@ class PortfolioRiskManager:
                 strategy_id,
                 "MAX_SINGLE_STOCK_EXPOSURE",
                 f"Proposed {ticker} exposure {stock_exposure_pct * 100:.2f}% exceeds "
-                f"{self.config.max_single_stock_exposure_pct * 100:.1f}% limit.",
+                f"{max_allowed_single_exp * 100:.1f}% limit.",
             )
 
         # 8. Sector Concentration Check (30% cap)

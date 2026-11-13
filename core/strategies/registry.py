@@ -318,6 +318,17 @@ class StrategySignalEngine:
                 rs_bonus = max(0.0, (ind.rs_vs_spy_20d or 0.0) / 50.0)
                 ret60_bonus = max(0.0, (ind.ret_60d_pct or 0.0) / 150.0)
                 score = min(0.999, 0.52 + (max_rsi - ind.rsi_14) / 60.0 + rs_bonus + ret60_bonus)
+                if below_bb:
+                    mr_reason = (
+                        f"Mean Reversion Oversold: RSI={ind.rsi_14:.1f} <= {max_rsi}, "
+                        f"Close ${ind.close:.2f} near LowerBB ${ind.bb_lower_20:.2f}"
+                    )
+                else:
+                    dist_sma20_pct = ((ind.close / ind.sma_20) - 1.0) * 100.0 if (ind.sma_20 and ind.sma_20 > 0) else 0.0
+                    mr_reason = (
+                        f"Mean Reversion Value-Zone Pullback: RSI={ind.rsi_14:.1f} <= {max_rsi}, "
+                        f"Close ${ind.close:.2f} ({dist_sma20_pct:+.1f}% vs SMA20 ${ind.sma_20 or ind.close:.2f}, RS20d={ind.rs_vs_spy_20d or 0.0:+.1f}%)"
+                    )
                 return TradeSignal(
                     strategy_id=config.strategy_id,
                     strategy_version=config.version,
@@ -325,10 +336,7 @@ class StrategySignalEngine:
                     ticker=ind.ticker,
                     signal_date=ind.bar_date,
                     action="ENTRY_LONG",
-                    reason=(
-                        f"Mean Reversion Oversold: RSI={ind.rsi_14:.1f} <= {max_rsi}, "
-                        f"Close ${ind.close:.2f} near LowerBB ${ind.bb_lower_20:.2f}"
-                    ),
+                    reason=mr_reason,
                     conviction_score=round(score, 4),
                     atr_at_signal=ind.atr_14,
                     close_at_signal=ind.close,
@@ -724,7 +732,7 @@ def get_all_golden_base_strategies() -> List[StrategyConfig]:
             required_indicators=["rsi_14", "bb_lower_20", "sma_20", "sma_50", "sma_200", "atr_14", "rs_vs_spy_20d"],
             entry_rules={
                 "max_rsi_14": 74.0,
-                "min_rsi_14": 50.0,
+                "min_rsi_14": 30.0,
                 "min_rs_vs_spy_20d": 1.5,
                 "max_dist_above_sma20_pct": 8.0,
                 "require_above_sma200": True,

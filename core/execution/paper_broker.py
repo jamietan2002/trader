@@ -3757,6 +3757,16 @@ class AlpacaPaperPodManager:
         ranked_sectors = sorted(sector_avg.keys(), key=lambda s: sector_avg[s], reverse=True)
         sector_rank_map = {sec: idx + 1 for idx, sec in enumerate(ranked_sectors)}
 
+        # Precompute 20-day daily close-to-close return vectors for Pairwise Correlation Gate (#9)
+        rets_20d_by_tkr: Dict[str, List[float]] = {}
+        for tkr, b_list in bars_by_tkr.items():
+            if len(b_list) >= 21:
+                recent_21 = b_list[-21:]
+                rets_20d_by_tkr[tkr] = [
+                    (float(recent_21[i].adj_close) / max(0.01, float(recent_21[i - 1].adj_close))) - 1.0
+                    for i in range(1, len(recent_21))
+                ]
+
         # Fetch latest live & extended-hours quotes (10s TTL)
         live_quotes: Dict[str, Dict[str, Any]] = {}
         if "unittest" not in _sys.modules:
@@ -3819,22 +3829,43 @@ class AlpacaPaperPodManager:
             strat = sorted(strat_candidates, key=lambda s: s.version, reverse=True)[0]
             fallback_note = ""
             # Single-Alpaca-Account Regime-Adaptive Fallback:
-            # When Pod #1 (Volatility Breakout) has 0 signals (e.g. SPY < SMA50) and ALPACA_API_KEY_2 is not yet linked,
-            # automatically route #2 Mean Reversion Pullback setups to Pod #1 (PA3GP0WMH) so the primary account stays productive!
+            # First check if Pod #1 (Volatility Breakout) has any valid leader signals of its own (e.g. +12% RS leaders).
+            # Only when Pod #1 has 0 signals (e.g. SPY < SMA50) and ALPACA_API_KEY_2 is not yet linked,
+            # route #2 Mean Reversion Pullback setups to Pod #1 (PA3GP0WMH) so the primary account stays productive!
             pod2_has_creds = self._get_pod_credentials(self.NOMINATED_PODS[1])[2]
             if pod_id == "pod_1_breakout" and not pod2_has_creds and spy_below_sma50:
-                fb_cands = [
-                    s for s in all_strats if s.strategy_id == "strat_mean_reversion_bb" and s.status == "PAPER_TRADING"
-                ] or [s for s in all_strats if s.strategy_id == "strat_mean_reversion_bb"]
-                if fb_cands:
-                    strat = sorted(fb_cands, key=lambda s: s.version, reverse=True)[0]
-                    fallback_note = (
-                        f" [Regime-Adaptive Fallback Active: #1 Volatility Breakout paused while SPY < SMA50; "
-                        f"routing #2 {strat.name} setups to PA3GP0WMH until ALPACA_API_KEY_2 is linked]"
-                    )
+                primary_has_signal = False
+                for u_chk in universe:
+                    b_chk = bars_by_tkr.get(u_chk.ticker) or []
+                    if len(b_chk) < 50:
+                        continue
+                    lb_chk = b_chk[-1]
+                    ind_chk = (inds_by_tkr.get(u_chk.ticker) or {}).get(lb_chk.bar_date)
+                    if ind_chk is not None:
+                        sig_chk = StrategySignalEngine.evaluate_entry(
+                            config=strat,
+                            ind=ind_chk,
+                            spy_ind=spy_inds.get(lb_chk.bar_date),
+                            recent_earnings=self.market_data.get_point_in_time_earnings(u_chk.ticker, as_of_date=session_date),
+                            sector_rs_rank=sector_rank_map.get(u_chk.sector, 5),
+                        )
+                        if sig_chk is not None and sig_chk.action == "ENTRY_LONG":
+                            primary_has_signal = True
+                            break
+                if not primary_has_signal:
+                    fb_cands = [
+                        s for s in all_strats if s.strategy_id == "strat_mean_reversion_bb" and s.status == "PAPER_TRADING"
+                    ] or [s for s in all_strats if s.strategy_id == "strat_mean_reversion_bb"]
+                    if fb_cands:
+                        strat = sorted(fb_cands, key=lambda s: s.version, reverse=True)[0]
+                        fallback_note = (
+                            f" [Regime-Adaptive Fallback Active: #1 Volatility Breakout had 0 signals while SPY < SMA50; "
+                            f"routing #2 {strat.name} setups to PA3GP0WMH until ALPACA_API_KEY_2 is linked]"
+                        )
 
             broker_state = self.fetch_alpaca_pod_broker_state(pod_cfg, force_refresh=execute_live_orders)
             pod_equity = max(10_000.0, float(broker_state.get("total_equity") or 100_000.0))
+            pod_peak_equity = max(float(broker_state.get("starting_capital") or 100_000.0), pod_equity)
             sim_cash = max(0.0, float(broker_state.get("cash_balance") or pod_equity))
             open_orders_list = broker_state.get("open_orders") or []
             open_orders_by_tkr = {o["ticker"]: o for o in open_orders_list}
@@ -3888,66 +3919,6 @@ class AlpacaPaperPodManager:
                 tp_mult = float(strat.exit_rules.get("take_profit_atr_mult", 4.0))
 
                 saved_attr = attr_by_tkr.get(tkr)
-                init_stop = float(saved_attr["initial_stop_price"]) if saved_attr else round(avg_entry - sl_mult * atr_val, 2)
-                if init_stop >= avg_entry:
-                    init_stop = round(avg_entry - sl_mult * atr_val, 2)
-                one_r = max(0.01, avg_entry - init_stop)
-                stage1_trigger = round(avg_entry + 1.0 * one_r, 2)
-                stage1_stop = round(avg_entry + 0.10 * one_r, 2)
-                stage2_trigger = round(avg_entry + 1.65 * one_r, 2)
-                stage2_stop = round(max(avg_entry + 1.0 * one_r, live_px - 1.8 * atr_val), 2)
-                tp_price = float(saved_attr["take_profit_price"]) if saved_attr else round(avg_entry + tp_mult * atr_val, 2)
-                if tp_price <= avg_entry:
-                    tp_price = round(avg_entry + tp_mult * atr_val, 2)
-
-                cur_r_mult = round((live_px - avg_entry) / one_r, 2)
-                old_stop = float(saved_attr["current_stop_price"]) if saved_attr else init_stop
-                cur_stop = old_stop
-                stop_stage_label = "Initial ATR Stop (-1.0R)"
-
-                if live_px >= stage2_trigger:
-                    new_stop = max(cur_stop, stage2_stop)
-                    stop_stage_label = f"Stage 2 Profit Lock (+1.0R Locked @ ${new_stop:.2f})"
-                    if new_stop > cur_stop + 0.01:
-                        cur_stop = new_stop
-                        self.db.execute(
-                            "UPDATE alpaca_position_attribution SET current_stop_price = ?, updated_at = ? WHERE pod_id = ? AND ticker = ?",
-                            (cur_stop, now_iso, pod_id, tkr),
-                        )
-                        ratchets_and_exits.append(
-                            {
-                                "action": "RATCHET_STOP_STAGE_2",
-                                "ticker": tkr,
-                                "r_multiple": cur_r_mult,
-                                "old_stop_price": old_stop,
-                                "new_stop_price": cur_stop,
-                                "reason": f"{tkr} reached {cur_r_mult:+.2f}R (>= +1.65R): raised Stop-Loss from ${old_stop:.2f} to ${cur_stop:.2f} (locks +1.0R profit).",
-                            }
-                        )
-                elif live_px >= stage1_trigger:
-                    new_stop = max(cur_stop, stage1_stop)
-                    stop_stage_label = f"Stage 1 Breakeven+0.1R Ratchet (@ ${new_stop:.2f})"
-                    if new_stop > cur_stop + 0.01:
-                        cur_stop = new_stop
-                        self.db.execute(
-                            "UPDATE alpaca_position_attribution SET current_stop_price = ?, updated_at = ? WHERE pod_id = ? AND ticker = ?",
-                            (cur_stop, now_iso, pod_id, tkr),
-                        )
-                        ratchets_and_exits.append(
-                            {
-                                "action": "RATCHET_STOP_STAGE_1",
-                                "ticker": tkr,
-                                "r_multiple": cur_r_mult,
-                                "old_stop_price": old_stop,
-                                "new_stop_price": cur_stop,
-                                "reason": f"{tkr} reached {cur_r_mult:+.2f}R (>= +1.00R): raised Stop-Loss from ${old_stop:.2f} to Breakeven+0.1R (${cur_stop:.2f}).",
-                            }
-                        )
-                elif cur_stop >= stage2_stop - 0.05 and cur_stop > init_stop + 0.50:
-                    stop_stage_label = f"Stage 2 Profit Lock (@ ${cur_stop:.2f})"
-                elif cur_stop >= stage1_stop - 0.05 and cur_stop > init_stop + 0.10:
-                    stop_stage_label = f"Stage 1 Breakeven+0.1R (@ ${cur_stop:.2f})"
-
                 entry_dt = str(saved_attr.get("entry_date") or session_date) if saved_attr else session_date
                 broker_fill_dt = latest_buy_fill_date_by_tkr.get(tkr)
                 if broker_fill_dt and broker_fill_dt > entry_dt:
@@ -3972,7 +3943,72 @@ class AlpacaPaperPodManager:
                     else f"Entered via {strat.name} ({strat.strategy_id} v{strat.version}) in {sector_by_tkr.get(tkr, 'US Equity')}."
                 )
 
-                # Evaluate Non-Bracket Strategy Exits (Time-Stop, Severe Bearish AI Catalyst <= -0.50, or Strategy Exit Rule)
+                t_bars_pos = bars_by_tkr.get(tkr) or []
+                bars_since_entry = [float(b.adj_high) for b in t_bars_pos if b.bar_date >= entry_dt]
+                highest_px_since_entry = round(max([live_px, avg_entry] + bars_since_entry), 2)
+
+                init_stop = float(saved_attr["initial_stop_price"]) if saved_attr else round(avg_entry - sl_mult * atr_val, 2)
+                if init_stop >= avg_entry:
+                    init_stop = round(avg_entry - sl_mult * atr_val, 2)
+                one_r = max(0.01, avg_entry - init_stop)
+                stage1_trigger = round(avg_entry + 1.0 * one_r, 2)
+                stage1_stop = round(avg_entry + 0.10 * one_r, 2)
+                stage2_trigger = round(avg_entry + 1.65 * one_r, 2)
+                stage2_stop = round(max(avg_entry + 1.0 * one_r, highest_px_since_entry - 1.8 * atr_val), 2)
+                tp_price = float(saved_attr["take_profit_price"]) if saved_attr else round(avg_entry + tp_mult * atr_val, 2)
+                if tp_price <= avg_entry:
+                    tp_price = round(avg_entry + tp_mult * atr_val, 2)
+
+                cur_r_mult = round((live_px - avg_entry) / one_r, 2)
+                peak_r_mult = round((highest_px_since_entry - avg_entry) / one_r, 2)
+                old_stop = float(saved_attr["current_stop_price"]) if saved_attr else init_stop
+                cur_stop = old_stop
+                stop_stage_label = "Initial ATR Stop (-1.0R)"
+
+                if highest_px_since_entry >= stage2_trigger:
+                    new_stop = max(cur_stop, stage2_stop)
+                    stop_stage_label = f"Stage 2 Profit Lock (+1.0R Locked @ ${new_stop:.2f})"
+                    if new_stop > cur_stop + 0.01:
+                        cur_stop = new_stop
+                        self.db.execute(
+                            "UPDATE alpaca_position_attribution SET current_stop_price = ?, updated_at = ? WHERE pod_id = ? AND ticker = ?",
+                            (cur_stop, now_iso, pod_id, tkr),
+                        )
+                        ratchets_and_exits.append(
+                            {
+                                "action": "RATCHET_STOP_STAGE_2",
+                                "ticker": tkr,
+                                "r_multiple": peak_r_mult,
+                                "old_stop_price": old_stop,
+                                "new_stop_price": cur_stop,
+                                "reason": f"{tkr} reached {peak_r_mult:+.2f}R high-water mark (>= +1.65R): raised Stop-Loss from ${old_stop:.2f} to ${cur_stop:.2f} (locks +1.0R profit).",
+                            }
+                        )
+                elif highest_px_since_entry >= stage1_trigger:
+                    new_stop = max(cur_stop, stage1_stop)
+                    stop_stage_label = f"Stage 1 Breakeven+0.1R Ratchet (@ ${new_stop:.2f})"
+                    if new_stop > cur_stop + 0.01:
+                        cur_stop = new_stop
+                        self.db.execute(
+                            "UPDATE alpaca_position_attribution SET current_stop_price = ?, updated_at = ? WHERE pod_id = ? AND ticker = ?",
+                            (cur_stop, now_iso, pod_id, tkr),
+                        )
+                        ratchets_and_exits.append(
+                            {
+                                "action": "RATCHET_STOP_STAGE_1",
+                                "ticker": tkr,
+                                "r_multiple": peak_r_mult,
+                                "old_stop_price": old_stop,
+                                "new_stop_price": cur_stop,
+                                "reason": f"{tkr} reached {peak_r_mult:+.2f}R high-water mark (>= +1.00R): raised Stop-Loss from ${old_stop:.2f} to Breakeven+0.1R (${cur_stop:.2f}).",
+                            }
+                        )
+                elif cur_stop >= stage2_stop - 0.05 and cur_stop > init_stop + 0.50:
+                    stop_stage_label = f"Stage 2 Profit Lock (@ ${cur_stop:.2f})"
+                elif cur_stop >= stage1_stop - 0.05 and cur_stop > init_stop + 0.10:
+                    stop_stage_label = f"Stage 1 Breakeven+0.1R (@ ${cur_stop:.2f})"
+
+                # Evaluate Non-Bracket Strategy Exits (Time-Stop, Severe Bearish AI Catalyst <= -0.50, or Strategy Technical Exit Rule)
                 cat_info_pos = ai_cat_by_tkr.get(tkr, {})
                 ai_sent_pos = float(cat_info_pos.get("sentiment_score") or 0.0)
                 ai_note_pos = str(cat_info_pos.get("note") or "")
@@ -3981,6 +4017,22 @@ class AlpacaPaperPodManager:
                     exit_reason_str = f"Emergency Bearish AI Catalyst Exit ({ai_sent_pos:+.2f} <= -0.50): {ai_note_pos[:95]}"
                 elif hold_days >= max_days and entry_dt < session_date:
                     exit_reason_str = f"Max Holding Horizon Time-Stop (Day {hold_days}/{max_days}) reached; rotating capital."
+                elif hold_days >= strat.holding_period_min_days and entry_dt < session_date and ind_snap is not None:
+                    tech_exit_sig = StrategySignalEngine.evaluate_exit(
+                        config=strat,
+                        ind=ind_snap,
+                        entry_price=avg_entry,
+                        highest_price_since_entry=highest_px_since_entry,
+                        holding_days=hold_days,
+                        stop_loss_price=cur_stop,
+                        take_profit_price=tp_price,
+                    )
+                    if tech_exit_sig is not None and (
+                        "Trend exit" in tech_exit_sig.reason
+                        or "RSI Overbought" in tech_exit_sig.reason
+                        or "Chandelier" in tech_exit_sig.reason
+                    ):
+                        exit_reason_str = f"Strategy Technical Exit ({strat.name}): {tech_exit_sig.reason}"
 
                 if exit_reason_str:
                     sell_ord_status = "EXIT_SIGNAL_READY"
@@ -4017,7 +4069,7 @@ class AlpacaPaperPodManager:
                     )
 
                 # If connected to live Alpaca Paper:
-                # (a) PATCH open stop order leg if ratcheted, OR
+                # (a) PATCH open stop order leg if ratcheted (with automatic cancel-and-replace GTC OCO fallback), OR
                 # (b) Self-Healing GTC OCO Bracket Guardian: if position has NO open SELL OCO/stop bracket on Alpaca, attach one!
                 open_sell_ord = open_sell_orders_by_tkr.get(tkr)
                 if has_creds and execute_live_orders and "unittest" not in _sys.modules and not exit_reason_str:
@@ -4035,8 +4087,32 @@ class AlpacaPaperPodManager:
                                 method="PATCH",
                                 payload={"stop_price": str(round(cur_stop, 2))},
                             )
-                        except Exception as exc:
-                            logger.warning(f"Alpaca stop ratchet PATCH for {tkr} skipped: {exc}")
+                        except Exception:
+                            # Fallback for OCO child leg amendment: cancel parent OCO and replace with updated GTC OCO
+                            try:
+                                if open_sell_ord.get("order_id"):
+                                    self._alpaca_request(
+                                        api_key,
+                                        secret_key,
+                                        f"/v2/orders/{open_sell_ord['order_id']}",
+                                        method="DELETE",
+                                    )
+                                oco_replace_payload = {
+                                    "symbol": tkr,
+                                    "qty": str(qty),
+                                    "side": "sell",
+                                    "type": "limit",
+                                    "time_in_force": "gtc",
+                                    "order_class": "oco",
+                                    "client_order_id": f"{pod_id}:{tkr}:oco:{session_date}:s{int(cur_stop)}"[:48],
+                                    "take_profit": {"limit_price": str(round(tp_price, 2))},
+                                    "stop_loss": {"stop_price": str(round(cur_stop, 2))},
+                                }
+                                self._alpaca_request(
+                                    api_key, secret_key, "/v2/orders", method="POST", payload=oco_replace_payload
+                                )
+                            except Exception as exc_rep:
+                                logger.warning(f"Alpaca OCO stop ratchet replacement for {tkr} skipped: {exc_rep}")
                     elif open_sell_ord is None and not pending_cleanup_syms:
                         try:
                             oco_payload = {
@@ -4100,6 +4176,7 @@ class AlpacaPaperPodManager:
             # 2. Evaluate All 15 Active Universe Stocks for Today's Entry Decisions & "Why No Trades" Log
             executed_or_queued: List[Dict[str, Any]] = []
             skipped_reasons: List[Dict[str, Any]] = []
+            triggered_candidates: List[Dict[str, Any]] = []
 
             for u in universe:
                 tkr = u.ticker
@@ -4112,7 +4189,7 @@ class AlpacaPaperPodManager:
                 ind_snap = ind_map.get(latest_bar.bar_date)
                 sec_rank = sector_rank_map.get(sector, 5)
                 earnings = self.market_data.get_point_in_time_earnings(tkr, as_of_date=session_date)
-                upcoming_ev = self.market_data.get_upcoming_earnings_within_days(tkr, session_date, 3)
+                upcoming_ev = self.market_data.get_upcoming_earnings_within_days(tkr, session_date, 5)
 
                 sig = (
                     StrategySignalEngine.evaluate_entry(
@@ -4154,6 +4231,44 @@ class AlpacaPaperPodManager:
                         }
                     )
                     continue
+
+                rs_20d_val = float(ind_snap.rs_vs_spy_20d or 0.0) if ind_snap else 0.0
+                composite_alpha_score = round(
+                    float(sig.conviction_score) + 0.20 * ai_sent + 0.01 * rs_20d_val - 0.03 * sec_rank,
+                    4,
+                )
+                sort_priority = composite_alpha_score + (10.0 if tkr in same_day_filled_tickers else 0.0)
+                triggered_candidates.append(
+                    {
+                        "ticker": tkr,
+                        "sector": sector,
+                        "ind_snap": ind_snap,
+                        "sec_rank": sec_rank,
+                        "upcoming_ev": upcoming_ev,
+                        "sig": sig,
+                        "ai_sent": ai_sent,
+                        "ai_note": ai_note,
+                        "ref_px": ref_px,
+                        "live_px": live_px,
+                        "composite_alpha_score": composite_alpha_score,
+                        "sort_priority": sort_priority,
+                    }
+                )
+
+            # Sort triggered candidates by Composite Alpha Rank descending (eliminates alphabetical bias!)
+            triggered_candidates.sort(key=lambda c: (-c["sort_priority"], c["ticker"]))
+
+            for cand_item in triggered_candidates:
+                tkr = cand_item["ticker"]
+                sector = cand_item["sector"]
+                ind_snap = cand_item["ind_snap"]
+                sec_rank = cand_item["sec_rank"]
+                upcoming_ev = cand_item["upcoming_ev"]
+                sig = cand_item["sig"]
+                ai_sent = cand_item["ai_sent"]
+                ai_note = cand_item["ai_note"]
+                ref_px = cand_item["ref_px"]
+                live_px = cand_item["live_px"]
 
                 # Technical BUY signal DID fire! Now check AI Catalyst, Already Held, Pre-Open Buy-Zone, and Risk Caps:
                 client_oid = f"{pod_id}:{tkr}:{session_date}:v{strat.version}"[:48]
@@ -4205,10 +4320,14 @@ class AlpacaPaperPodManager:
                     )
                     continue
 
-                # Compute Buy-Zone, Conviction-Weighted Sizing & 2-Stage Ratchet / Runner Target
+                # Compute Asymmetric Family-Specific Buy-Zone, Conviction-Weighted Sizing & 2-Stage Ratchet / Runner Target
                 atr_val = float(sig.atr_at_signal) if (sig.atr_at_signal and sig.atr_at_signal > 0) else round(ref_px * 0.02, 2)
-                buy_zone_low = round(max(0.01, ref_px - 0.25 * atr_val), 2)
-                max_chase_px = round(ref_px + 0.50 * atr_val, 2)
+                if strat.strategy_family == "MEAN_REVERSION":
+                    buy_zone_low = round(max(0.01, ref_px - 0.60 * atr_val), 2)
+                    max_chase_px = round(ref_px + 0.30 * atr_val, 2)
+                else:
+                    buy_zone_low = round(max(0.01, ref_px - 0.20 * atr_val), 2)
+                    max_chase_px = round(ref_px + 0.50 * atr_val, 2)
                 gap_pct = round(((live_px / max(0.01, ref_px)) - 1.0) * 100.0, 2)
 
                 # Senior Quant Upgrade 2: Conviction-Weighted Fractional Kelly Sizing
@@ -4275,9 +4394,17 @@ class AlpacaPaperPodManager:
                     )
                     continue
 
-                # Evaluate Portfolio Risk Manager with Conviction-Weighted Sizing
+                # Evaluate Portfolio Risk Manager with Conviction-Weighted Sizing, Pairwise Correlation & True Peak Equity
                 # (If already filled on Alpaca today, use the actual filled position quantity & cost so it stays displayed in Today's Decisions!)
-                days_to_earn = 1 if upcoming_ev else None
+                days_to_earn: Optional[int] = None
+                if upcoming_ev:
+                    try:
+                        days_to_earn = max(
+                            0,
+                            (date.fromisoformat(upcoming_ev[0].report_date) - date.fromisoformat(session_date)).days,
+                        )
+                    except Exception:
+                        days_to_earn = 1
                 if tkr in same_day_filled_tickers and tkr in sim_open_map:
                     held_info = sim_open_map[tkr]
                     shares = int(held_info["quantity"])
@@ -4287,6 +4414,11 @@ class AlpacaPaperPodManager:
                     est_risk_usd = round(max(0.0, (fill_entry_px - stop_px) * shares), 2)
                 else:
                     pod_rm = PortfolioRiskManager(self.settings.risk, db=None)
+                    open_rets_map = {
+                        k: rets_20d_by_tkr[k]
+                        for k in sim_open_map
+                        if k in rets_20d_by_tkr and k != tkr
+                    }
                     decision = pod_rm.evaluate_proposed_entry(
                         account_id=pod_id,
                         eval_date=session_date,
@@ -4298,13 +4430,16 @@ class AlpacaPaperPodManager:
                         stop_loss_price=stop_px,
                         atr_14=atr_val,
                         portfolio_equity=pod_equity,
-                        peak_equity=pod_equity,
+                        peak_equity=pod_peak_equity,
                         available_cash=sim_cash,
                         open_positions=sim_open_map,
                         avg_daily_dollar_volume_20d=ind_snap.avg_dollar_volume_20d if ind_snap else None,
                         upcoming_earnings_days=days_to_earn,
+                        candidate_returns_20d=rets_20d_by_tkr.get(tkr),
+                        open_positions_returns_20d=open_rets_map if open_rets_map else None,
                         strategy_risk_pct=eff_risk_pct,
                         strategy_max_exp_pct=eff_max_exp,
+                        market_vol_annualised=spy_vol_20d,
                     )
 
                     if not decision.approved or decision.recommended_shares <= 0:
