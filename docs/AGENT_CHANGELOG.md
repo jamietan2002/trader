@@ -4,6 +4,33 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-13] — Alpaca Paper Portal Quick Links, Self-Healing GTC OCO Exit Bracket Guardian & Senior Engineer Bug Audit
+
+### Summary
+- **Alpaca Paper Portal (`PA3GP0WMH`) Quick-Access Links & Live Pod Heartbeat (`dashboard/streamlit_app.py`, `dashboard/ui_template.py`)**:
+  - Added direct 1-click links to the Alpaca Paper Dashboard (`Overview`, `Open Positions`, `Orders & GTC Brackets`) in the **Sidebar (`System Status`)**, at the top of **Tab 2 (`Paper Pods & Strategy Decisions`)**, and in the local HTML dashboard (`dashboard/ui_template.py`).
+  - Wired `app.orchestrator.pod_manager.evaluate_and_sync_all_pods(execute_live_orders=False)` into `"Refresh Live Prices Now"` and the 15-second live refresh heartbeat (`_code_version = "2026-11-13-v24"`).
+- **Senior Software Engineer Bug Audit & 6 Production Fixes (`core/execution/paper_broker.py`)**:
+  1. **Multi-Day Swing Bracket Expiration Fix (`time_in_force: "gtc"`) + Self-Healing `GTC OCO` Exit Bracket Guardian**:
+     - Fixed parent `bracket` entry orders to use `"time_in_force": "gtc"` so child `take_profit` and `stop_loss` legs do not expire at `4:00 PM ET` on Day 1.
+     - Added a Self-Healing `GTC OCO` (`One-Cancels-Other`) Exit Bracket Guardian that automatically attaches a live `GTC OCO` exit bracket (`take_profit` + `stop_loss`) on Alpaca Paper whenever any open position is missing an active `SELL` bracket/OCO order (verified live across all 4 open positions: `AAPL`, `AMZN`, `LLY`, `UNH`).
+  2. **Non-Bracket Exit Execution Engine (`sell_decisions`)**:
+     - Implemented live evaluation and Alpaca Paper market-sell execution (cancelling open OCO sell legs first) for `Max Holding Horizon Time-Stop` and `Emergency Bearish AI Catalyst (<= -0.50)`.
+  3. **Persistent Stop Ratchet State (`alpaca_position_attribution`)**:
+     - Persisted ratcheted `current_stop_price` to SQLite (`alpaca_position_attribution`) when Stage 1 (`+1.0R`) or Stage 2 (`+1.65R`) triggers, and recorded `r_multiple` and `old_stop_price` in `ratchets_and_exits`.
+  4. **Same-Session Filled Trade Visibility (`same_day_filled_tickers`) & Broker Fill Reconciliation**:
+     - Reconciled `alpaca_position_attribution` `entry_date` and `entry_price` with actual Alpaca `FILLED` buy orders so trades filled during the current session remain displayed in `approved_buys` (`FILLED_ON_ALPACA (@ $avg_entry_price)`) rather than moving into `filtered_signals` (`Already Held`).
+  5. **Top-Level `limit_price` Parsing on `OCO` Sell Orders**:
+     - Updated `fetch_alpaca_pod_broker_state()` so `OCO` sell orders populate both `take_profit_price` (from top-level `limit_price`) and `stop_price` / `stop_leg_order_id` (from child `legs[0]`).
+  6. **Unique `client_order_id` Formatting**:
+     - Placed `{ticker}` before strategy metadata (`f"{pod_id}:{tkr}:{session_date}:v{strat.version}"[:48]`) to prevent 48-character truncation collisions across multi-order submissions.
+
+### Modules Added / Modified
+- `core/execution/paper_broker.py`, `dashboard/streamlit_app.py`, `dashboard/ui_template.py`
+- `docs/AGENT_CHANGELOG.md`, `data/swing_trader.db`
+
+---
+
 ## [2026-11-12] — Broker-Native 3-Pod Alpaca Paper Architecture (`AlpacaPaperPodManager`), 4 Senior Quant Upgrades & "Why No Trades Today" Decision Engine
 
 ### Summary

@@ -244,6 +244,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <span class="badge badge-info" id="tz-badge" title="US market execution (NYSE/NASDAQ) with Singapore (SGT) reporting.">NYSE/NASDAQ • SGT Reporting</span>
     </div>
     <div style="display:flex; gap:10px; align-items:center;">
+      <a href="https://app.alpaca.markets/paper/dashboard/overview" target="_blank" class="badge badge-info" style="text-decoration:none;" title="Open live Alpaca Paper Account (PA3GP0WMH) Overview">↗ ALPACA PAPER (PA3GP0WMH)</a>
+      <a href="https://app.alpaca.markets/paper/dashboard/positions" target="_blank" class="badge badge-info" style="text-decoration:none;" title="Open live Alpaca Paper Positions">↗ POSITIONS</a>
+      <a href="https://app.alpaca.markets/paper/dashboard/orders" target="_blank" class="badge badge-info" style="text-decoration:none;" title="Open live Alpaca Paper Orders &amp; GTC Brackets">↗ ORDERS</a>
       <span class="badge badge-paper" title="Daily execution runs Mon–Fri at 5:30 AM SGT (21:30 UTC); Weekly strategy discovery runs Saturday at 10:00 SGT. Zero user input required.">AUTONOMOUS SCHEDULE ACTIVE • ZERO INPUT REQUIRED</span>
     </div>
   </header>
@@ -483,7 +486,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <!-- 5. PAPER TRADING -->
     <section id="tab-paper" class="tab-section">
       <div class="tab-intro">
-        <p><strong>Paper Ledger</strong> — Chronological log of every simulated order fill, transaction cost, and strategy P&amp;L contribution.</p>
+        <p><strong>Paper Ledger &amp; Alpaca Paper (<code>PA3GP0WMH</code>)</strong> — Chronological log of order fills, transaction costs, and strategy P&amp;L contribution. Direct links: <a href="https://app.alpaca.markets/paper/dashboard/overview" target="_blank" style="color:#38bdf8;font-weight:600;">↗ Alpaca Overview</a> · <a href="https://app.alpaca.markets/paper/dashboard/positions" target="_blank" style="color:#38bdf8;font-weight:600;">↗ Open Positions</a> · <a href="https://app.alpaca.markets/paper/dashboard/orders" target="_blank" style="color:#38bdf8;font-weight:600;">↗ Orders &amp; Brackets</a></p>
         <details class="tab-help">
           <summary>? How this tab works</summary>
           <div class="help-body">

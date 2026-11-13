@@ -485,7 +485,7 @@ def main() -> None:
     )
     st.markdown(CLASSY_MINIMAL_CSS, unsafe_allow_html=True)
 
-    _code_version = "2026-11-12-v23"
+    _code_version = "2026-11-13-v24"
     import api.server as _srv_mod
     import core.market_data.models as _md_mod
     import core.execution.paper_broker as _pb_check_mod
@@ -627,6 +627,8 @@ def main() -> None:
                     force_refresh=True, all_accounts=True
                 )
                 app.orchestrator.live_copilot.sync_market_prices()
+                if hasattr(app.orchestrator, "pod_manager"):
+                    app.orchestrator.pod_manager.evaluate_and_sync_all_pods(execute_live_orders=False)
             st.rerun()
 
         if auto_live_refresh and hasattr(st, "fragment"):
@@ -638,6 +640,8 @@ def main() -> None:
                 )
                 app.orchestrator.live_copilot.sync_market_prices()
                 if any(abs(float(px) - prev_map.get(tkr, 0.0)) >= 0.005 for tkr, px in updated.items()):
+                    if hasattr(app.orchestrator, "pod_manager"):
+                        app.orchestrator.pod_manager.evaluate_and_sync_all_pods(execute_live_orders=False)
                     st.rerun()
 
             _live_mtm_heartbeat()
@@ -675,6 +679,15 @@ def main() -> None:
         st.markdown("#### System Status")
         st.caption(f"Champion: **{active_champ_id} v{active_champ_ver}**")
         st.caption(f"Broker Mode: **ALPACA PAPER (`PA3GP0WMH`)** + 3 Strategy Pods")
+        st.markdown(
+            "<div style='font-size:0.78rem;margin:4px 0 8px 0;padding:6px 8px;background:rgba(15,23,42,0.65);border:1px solid rgba(56,189,248,0.28);border-radius:6px;'>"
+            "<div style='color:#94a3b8;font-weight:600;margin-bottom:3px;'>Alpaca Paper Account (<code>PA3GP0WMH</code>)</div>"
+            "<a href='https://app.alpaca.markets/paper/dashboard/overview' target='_blank' style='color:#38bdf8;text-decoration:none;font-weight:600;'>↗ Overview</a> · "
+            "<a href='https://app.alpaca.markets/paper/dashboard/positions' target='_blank' style='color:#38bdf8;text-decoration:none;font-weight:600;'>↗ Positions</a> · "
+            "<a href='https://app.alpaca.markets/paper/dashboard/orders' target='_blank' style='color:#38bdf8;text-decoration:none;font-weight:600;'>↗ Orders</a>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
         st.caption(f"Market Data: **{app.settings.market_data_provider.upper()}**")
         st.caption(f"Validated Models: **{golden_ready_count} / {len(active_paper_strats)} beat SPY**")
         if st.button(
@@ -1337,6 +1350,28 @@ def main() -> None:
             execute_live_orders=False
         )
         nominated_pods = pods_bundle.get("pods") or []
+
+        # Quick-Access Alpaca Paper Account Banner
+        st.markdown(
+            "<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;"
+            "background:rgba(15,23,42,0.72);border:1px solid rgba(56,189,248,0.32);border-radius:8px;padding:10px 16px;margin-bottom:12px;'>"
+            "<div style='font-size:0.84rem;color:#e2e8f0;'>"
+            "<strong style='color:#38bdf8;'>Live Alpaca Paper Account (<code>PA3GP0WMH</code>)</strong> — "
+            "View real-time fills, GTC OCO brackets, and P&amp;L directly in your Alpaca Paper portal:"
+            "</div>"
+            "<div style='display:flex;gap:8px;flex-wrap:wrap;'>"
+            "<a href='https://app.alpaca.markets/paper/dashboard/overview' target='_blank' "
+            "style='background:#0284c7;color:#ffffff;padding:5px 12px;border-radius:6px;font-size:0.79rem;font-weight:600;text-decoration:none;'>"
+            "↗ Alpaca Paper Overview</a>"
+            "<a href='https://app.alpaca.markets/paper/dashboard/positions' target='_blank' "
+            "style='background:#0f172a;color:#38bdf8;border:1px solid rgba(56,189,248,0.45);padding:5px 12px;border-radius:6px;font-size:0.79rem;font-weight:600;text-decoration:none;'>"
+            "↗ Open Positions (4)</a>"
+            "<a href='https://app.alpaca.markets/paper/dashboard/orders' target='_blank' "
+            "style='background:#0f172a;color:#38bdf8;border:1px solid rgba(56,189,248,0.45);padding:5px 12px;border-radius:6px;font-size:0.79rem;font-weight:600;text-decoration:none;'>"
+            "↗ Orders &amp; GTC Brackets</a>"
+            "</div></div>",
+            unsafe_allow_html=True,
+        )
 
         if nominated_pods:
             st.markdown("##### Top 3 Nominated Swing Strategy Pods (Side-by-Side Status)")
