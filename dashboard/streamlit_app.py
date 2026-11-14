@@ -302,6 +302,64 @@ def _sentiment_badge_html(score: float, label: str = "") -> str:
     )
 
 
+def _format_sgt_timestamp(iso_str: str) -> str:
+    raw = str(iso_str or "").strip()
+    if not raw:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            from datetime import timezone as _tz
+            dt = dt.replace(tzinfo=_tz.utc)
+        return dt.astimezone(ZoneInfo("Asia/Singapore")).strftime("%Y-%m-%d %H:%M SGT")
+    except Exception:
+        return raw[:19].replace("T", " ")
+
+
+def _summarize_job_row(j: Dict[str, Any]) -> Dict[str, str]:
+    j_name = str(j.get("job_name") or "")
+    s = j.get("summary") or {}
+    if not isinstance(s, dict):
+        s = {}
+    label_map = {
+        "weekly_research_and_validation": "🗓️ Weekly Strategy Tournament",
+        "daily_pre_market": "☀️ Daily Research Scan",
+        "daily_market_execution": "⚡ Daily Market Execution",
+        "daily_post_close": "🌙 Daily Post-Close Audit",
+        "ide_ai_cycle": "🧠 IDE AI Cycle (`run`)",
+    }
+    session_str = str(
+        s.get("week_ending_date")
+        or s.get("trading_date")
+        or s.get("as_of_date")
+        or s.get("session_date")
+        or (str(j.get("idempotency_key") or "").split(":")[1] if ":" in str(j.get("idempotency_key") or "") else "—")
+    )
+    if j_name == "weekly_research_and_validation":
+        cands = s.get("tournament_candidates") or ([] if not s.get("candidate_strategy_id") else [s])
+        prom_cnt = sum(1 for c in cands if c.get("promoted"))
+        tested_str = ", ".join(f"{c.get('candidate_strategy_id')} v{c.get('candidate_version')}" for c in cands[:3])
+        outcome = f"{len(cands)} tested ({tested_str}) · {prom_cnt} promoted (v1 Champions protected)"
+    elif j_name == "ide_ai_cycle":
+        tkrs = ", ".join((s.get("research_tickers_enriched") or [])[:5])
+        outcome = f"Enriched [{tkrs}] · {int(s.get('candidates_tested') or 0)} candidate(s) tested · {int(s.get('promoted_count') or 0)} promoted"
+    elif j_name == "daily_post_close":
+        outcome = f"Regime: {s.get('market_regime', '—')} · Risk Audit & Post-Close Attribution complete"
+    elif j_name == "daily_pre_market":
+        outcome = f"Scanned {s.get('universe_scanned', '—')} equities & ranked top catalysts"
+    elif j_name == "daily_market_execution":
+        outcome = f"{len(s.get('entries_executed') or [])} entry fill(s) · {len(s.get('exits_executed') or [])} exit fill(s)"
+    else:
+        outcome = str(j.get("error_message") or "Completed")
+    return {
+        "Job": label_map.get(j_name, j_name),
+        "Session": session_str,
+        "Status": str(j.get("status") or ""),
+        "Executed (SGT)": _format_sgt_timestamp(str(j.get("completed_at") or j.get("started_at") or "")),
+        "Outcome Summary": outcome,
+    }
+
+
 def main() -> None:
     try:
         import streamlit as st
@@ -406,6 +464,16 @@ def main() -> None:
                 f"{non_trading_reason}\n\nNext Session: **{next_trading_day}**"
             )
 
+        latest_weekly_job = next(
+            (j for j in jobs if j.get("job_name") == "weekly_research_and_validation"),
+            None,
+        )
+        last_weekly_sgt = (
+            _format_sgt_timestamp(str(latest_weekly_job.get("completed_at") or latest_weekly_job.get("started_at") or ""))
+            if latest_weekly_job
+            else "Pending Sat 10:00 AM SGT"
+        )
+
         st.markdown("---")
         st.markdown(
             "#### 🤖 Autonomous Schedule\n"
@@ -415,6 +483,7 @@ def main() -> None:
             "  - `9:35/10:35 PM SGT` · Market-Open Execution\n"
             "• **Weekly Run (`Sat 10:00 AM SGT`)**:\n"
             "  - Mistake Analyzer + 9-Gate Tournament\n"
+            f"  - Last Executed: `{last_weekly_sgt}`\n"
             "• **IDE AI (`type run`)**:\n"
             "  - Live Web Catalyst Search + AI Strategy Tuning"
         )
@@ -1068,6 +1137,30 @@ def main() -> None:
     # TAB 3: STRATEGY TOURNAMENT & MISTAKE ANALYZER
     # =========================================================================
     with tab3:
+        if latest_weekly_job:
+            ws = latest_weekly_job.get("summary") or {}
+            w_cands = ws.get("tournament_candidates") or ([] if not ws.get("candidate_strategy_id") else [ws])
+            w_prom = sum(1 for c in w_cands if c.get("promoted"))
+            w_time = _format_sgt_timestamp(str(latest_weekly_job.get("completed_at") or latest_weekly_job.get("started_at") or ""))
+            w_end = str(ws.get("week_ending_date") or session_dt)
+            cand_badges = " &nbsp;·&nbsp; ".join(
+                f"<code>{html.escape(str(c.get('candidate_strategy_id', '')))} v{c.get('candidate_version', '')}</code> "
+                f"({'🟢 PROMOTED' if c.get('promoted') else '🛡️ REJECTED vs v1 Champion'})"
+                for c in w_cands
+            )
+            st.markdown(
+                f"<div style='background:rgba(15,23,42,0.62);border:1px solid rgba(56,189,248,0.28);"
+                f"border-left:4px solid #10b981;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:0.82rem;'>"
+                f"<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;'>"
+                f"<div><strong style='color:#f8fafc;font-size:0.9rem;'>🗓️ Latest Weekly Self-Improvement Tournament</strong> "
+                f"<span style='color:#94a3b8;'>(Week Ending <code>{html.escape(w_end)}</code> · Executed <code>{html.escape(w_time)}</code>)</span></div>"
+                f"<span style='background:rgba(16,185,129,0.18);color:#34d399;padding:2px 9px;border-radius:999px;font-size:0.74rem;font-weight:700;'>"
+                f"✅ COMPLETED · {len(w_cands)} TESTED · {w_prom} PROMOTED</span></div>"
+                f"<div style='margin-top:5px;color:#cbd5e1;'>{cand_badges or 'All active v1 Golden Champions retained.'}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
         st.markdown("#### 🏆 9-Gate Strategy Leaderboard (6 Long & Short Strategy Families)")
         strat_rows = []
         for s in strategies:
@@ -1211,17 +1304,10 @@ def main() -> None:
         st.markdown("---")
         jc1, jc2 = st.columns(2)
         with jc1:
-            st.markdown("##### ⚙️ Autonomous Job Execution History")
+            st.markdown("##### ⚙️ Autonomous Job Execution History (Daily, Weekly & IDE AI)")
             if jobs:
                 st.dataframe(
-                    [
-                        {
-                            "Job": j.get("job_name", ""),
-                            "Status": j.get("status", ""),
-                            "Started": str(j.get("started_at", ""))[:19].replace("T", " "),
-                        }
-                        for j in jobs[:15]
-                    ],
+                    [_summarize_job_row(j) for j in jobs[:20]],
                     use_container_width=True,
                     hide_index=True,
                 )

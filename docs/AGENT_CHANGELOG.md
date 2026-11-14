@@ -4,6 +4,26 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-14] — v2.5 Weekly Tournament Cron Discrimination, 3-Pod Multi-Candidate Coverage & UI Audit Visibility
+
+### Summary
+- **Hardened GitHub Actions Weekly Schedule Discrimination (`.github/workflows/autonomous_trading.yml`)**:
+  - Wired `INPUT_MODE: ${{ github.event.inputs.mode }}` and `EVENT_SCHEDULE: ${{ github.event.schedule }}` into workflow `env:` so `cron: "0 2 * * 6"` (`Sat 10:00 AM SGT`) and `workflow_dispatch` (`mode=weekly`) deterministically trigger `run_weekly_workflow()`, while delayed Friday `21:30 UTC` Post-Close crons never misclassify as Saturday Weekly runs if GitHub runner queues cross `00:00 UTC`.
+  - Updated rebase step to `git pull --rebase -X theirs origin main` to avoid binary `data/swing_trader.db` rebase aborts.
+- **Expanded Weekly Tournament to Cover All 3 Autonomous Pod Archetypes (`infrastructure/scheduler/orchestrator.py`)**:
+  - Ensured live Saturday `run_weekly_workflow()` runs evaluate at least 3 distinct strategy candidates across `VOLATILITY_BREAKOUT`, `MEAN_REVERSION`, and `MOMENTUM_TREND` (alongside Analyst Proposals and Mistake Analyzer Auto-Tuner patches).
+- **Surfaced Weekly Run Execution Timestamp & Results in Dashboard (`dashboard/streamlit_app.py`)**:
+  - Added `Last Executed` SGT timestamp to the Sidebar Autonomous Schedule card, a **`🗓️ Latest Weekly Self-Improvement Tournament`** status banner at the top of Tab 3, and enriched `SGT` timestamps + outcome summaries in Tab 4's `Autonomous Job Execution History` table.
+
+### Modules Added / Modified
+- `.github/workflows/autonomous_trading.yml`, `infrastructure/scheduler/orchestrator.py`, `dashboard/streamlit_app.py`
+- `DEPLOYMENT.md`, `docs/AGENT_CHANGELOG.md`
+
+### Verification
+- Executed live 3-Pod `run_weekly_workflow(week_ending_date="2026-11-13", force=True)`, restored `2026-11-13` `daily_*` job records in `data/swing_trader.db`, and passed `.venv/bin/python .agents/skills/maintain-project-context/scripts/verify_context.py` (`exit code 0`).
+
+---
+
 ## [2026-11-14] — v2.4 Exact Alpaca Paper Order & Child-Bracket Parity Fix
 
 ### Summary

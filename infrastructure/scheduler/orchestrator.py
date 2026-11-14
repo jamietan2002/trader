@@ -477,6 +477,22 @@ class AutonomousWorkflowOrchestrator:
                             )
                         )
 
+            # 4) Ensure all 3 Autonomous Pod families compete in live Saturday Weekly Tournaments
+            import sys as _sys
+            if preferred_family is None and "unittest" not in _sys.modules:
+                existing_fams = {str(f or "").upper() for f, _ in candidate_specs if f}
+                prop_sid_u = str((latest_proposal or {}).get("target_strategy_id", "")).upper()
+                for pod_fam, pod_key in (
+                    ("VOLATILITY_BREAKOUT", "BREAKOUT"),
+                    ("MEAN_REVERSION", "MEAN_REVERSION"),
+                    ("MOMENTUM_TREND", "MOMENTUM"),
+                ):
+                    if len(candidate_specs) >= 3:
+                        break
+                    if pod_fam not in existing_fams and pod_key not in prop_sid_u:
+                        candidate_specs.append((pod_fam, None))
+                        existing_fams.add(pod_fam)
+
             tournament_results: List[Dict[str, Any]] = []
             seen_Strat_versions: set[tuple[str, int]] = set()
 

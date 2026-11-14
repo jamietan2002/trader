@@ -36,6 +36,8 @@ jobs:
       LLM_PROVIDER: ${{ secrets.LLM_PROVIDER }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      INPUT_MODE: ${{ github.event.inputs.mode }}
+      EVENT_SCHEDULE: ${{ github.event.schedule }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -66,7 +68,12 @@ jobs:
               print("[INIT] Bootstrapping baseline strategies and historical dataset...")
               app.orchestrator.bootstrap_baseline_system()
 
-          mode = os.environ.get("INPUT_MODE", "auto").strip().lower()
+          mode = (os.environ.get("INPUT_MODE") or "auto").strip().lower()
+          event_schedule = (os.environ.get("EVENT_SCHEDULE") or "").strip()
+          is_weekly_schedule = (
+              event_schedule == "0 2 * * 6"
+              or (not event_schedule and datetime.now(timezone.utc).weekday() == 5)
+          )
           today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
           # Refresh latest market data up to today
@@ -82,7 +89,7 @@ jobs:
           if mode == "demo":
               from main import cmd_demo
               cmd_demo(app)
-          elif mode == "weekly" or (mode == "auto" and datetime.now(timezone.utc).weekday() == 5):
+          elif mode == "weekly" or (mode == "auto" and is_weekly_schedule):
               print(f"[WEEKLY] Running Weekly AI Strategy Discovery & Walk-Forward Validation for {session_date}...")
               app.orchestrator.run_daily_workflow(trading_date=session_date, force=False)
               app.orchestrator.run_weekly_workflow(week_ending_date=session_date, force=True)
@@ -99,7 +106,7 @@ jobs:
           git add data/swing_trader.db
           if ! git diff --staged --quiet; then
             git commit -m "chore(state): autonomous paper trading & strategy registry update [skip ci]"
-            git pull --rebase origin main || git rebase --abort || true
+            git pull --rebase -X theirs origin main || git rebase --abort || true
             git push origin HEAD:main
             git push origin HEAD:feat/swing-trading-ai-platform || true
           else

@@ -60,6 +60,8 @@ All workflows are idempotent and US market holiday aware (`America/New_York` tra
 .venv/bin/python main.py weekly --date 2025-06-27
 ```
 
+GitHub Actions (`.github/workflows/autonomous_trading.yml`) runs both Daily (`Mon–Fri` Post-Close `21:30 UTC`, Pre-Open `13:00/14:00 UTC`, Market-Open `13:35/14:35 UTC`) and Weekly (`Sat 02:00 UTC` / `10:00 AM SGT` via `github.event.schedule == '0 2 * * 6'` or `workflow_dispatch` `mode=weekly`) schedules automatically and commits updated `data/swing_trader.db` state.
+
 ---
 
 ## 3. Docker Compose Deployment (PostgreSQL + App Container)
