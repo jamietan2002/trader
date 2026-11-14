@@ -1,10 +1,11 @@
 """Streamlit Community Cloud & Local Dashboard Entrypoint (`streamlit run dashboard/streamlit_app.py`).
 
-v2.2 Autonomous 3-Pod Paper Trading Hub (Numbers-First Entry & Exit Plans · Zero Clutter):
-1. Day-by-Day Pod Decision Journal — Intuitive chronological day-by-day diary across all 3 Alpaca Paper Pods with exact Entry & 4-Step Exit Strategy Numbers and concise plain-English explanations.
-2. Active Holdings & Exit Plans — Real-time Long & Short positions across all 3 Alpaca Paper accounts with scannable 4-Point Exit Numbers, GTC OCO verification, Broker Orders, and a 3-Pod Entry/Exit Strategy Rules Cheat-Sheet.
-3. Strategy Tournament & Mistake Analyzer — 9-Gate Out-of-Sample / Walk-Forward leaderboard (6 strategy families incl. Bearish Breakdown) + Post-Trade Attribution & Auto-Tuner Mistake Analyzer.
-4. Live News, Universe & System Health — 24/7 Alpaca News & AI Catalyst stream, 40+ Core & Dynamic Universe Explorer with on-demand ticker onboarding, and autonomous job logs.
+v3.0 Minimalist Dark Autonomous Portfolio Hub (Linear / Apple Stocks Aesthetic):
+- Clean full-width layout with no left sidebar, zero emojis, zero neon borders, and plain-English explanations.
+- 3 focused tabs:
+  1. Overview & Open Trades — Portfolio summary, 3 Paper Account cards, Working Entry Orders, and Open Positions with plain-English entry reasons and automatic Stop-Loss / Profit Target prices.
+  2. Daily Journal — Clean chronological day-by-day log of orders placed/filled, positions held, and skipped setups.
+  3. Performance & System — Strategy track record, closed-trade review, latest market news, and automated Daily/Weekly run log.
 """
 
 from __future__ import annotations
@@ -12,10 +13,11 @@ from __future__ import annotations
 import html
 import json
 import os
+import re
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from zoneinfo import ZoneInfo
 
 # Ensure repository root is on sys.path when Streamlit runs `dashboard/streamlit_app.py`
@@ -26,56 +28,161 @@ if str(REPO_ROOT) not in sys.path:
 ALPACA_PAPER_PORTAL_URL = "https://app.alpaca.markets/paper/dashboard/overview"
 
 POD_DISPLAY_NAMES = {
-    "pod_1_breakout": "Pod #1 · Breakout & Breakdown",
-    "pod_2_mean_reversion": "Pod #2 · Value Pullback & Fade",
-    "pod_3_momentum": "Pod #3 · Momentum & Drift",
+    "pod_1_breakout": "Account 1 · Breakout",
+    "pod_2_mean_reversion": "Account 2 · Pullback",
+    "pod_3_momentum": "Account 3 · Momentum",
 }
 
-CLASSY_MINIMAL_CSS = """
+POD_STRATEGY_DESCRIPTIONS = {
+    "pod_1_breakout": "Buys stocks breaking above 20-day highs on strong volume; shorts support breakdowns.",
+    "pod_2_mean_reversion": "Buys uptrending stocks during calm dips near their 20-day trend; shorts overextended bounces.",
+    "pod_3_momentum": "Follows market leaders with sustained upward momentum and positive earnings catalysts.",
+}
+
+MINIMAL_DARK_CSS = """
 <style>
+  /* Hide Streamlit left sidebar & collapse control for a clean full-width web app */
+  [data-testid="stSidebar"],
+  [data-testid="collapsedControl"],
+  [data-testid="stSidebarCollapsedControl"] {
+    display: none !important;
+  }
+
+  .stApp {
+    background-color: #0c0e12 !important;
+    color: #f1f5f9 !important;
+  }
+
   .block-container {
-    padding-top: 1.25rem !important;
-    padding-bottom: 2.5rem !important;
-    max-width: 1460px !important;
+    padding-top: 2.0rem !important;
+    padding-bottom: 3.5rem !important;
+    max-width: 1140px !important;
   }
-  [data-testid="stMetric"] {
-    background: rgba(15, 23, 42, 0.48);
-    border: 1px solid rgba(148, 163, 184, 0.15);
-    border-radius: 8px;
-    padding: 11px 14px !important;
+
+  /* Clean typography & tabular numerals */
+  html, body, [class*="css"] {
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
   }
-  [data-testid="stMetricLabel"] {
-    font-size: 0.72rem !important;
+
+  /* Minimalist tab bar (Linear style) */
+  [data-baseweb="tab-list"] {
+    gap: 24px !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+    padding-bottom: 0px !important;
+    background: transparent !important;
+  }
+  [data-baseweb="tab"] {
+    font-size: 0.88rem !important;
+    font-weight: 500 !important;
+    color: #8b95a5 !important;
+    padding: 10px 2px 12px 2px !important;
+    background: transparent !important;
+  }
+  [data-baseweb="tab"][aria-selected="true"] {
+    color: #f8fafc !important;
+    font-weight: 600 !important;
+  }
+  [data-baseweb="tab-highlight"] {
+    background-color: #f8fafc !important;
+    height: 2px !important;
+  }
+
+  /* Subtle expanders and dataframes */
+  [data-testid="stExpander"] {
+    background: #12151b !important;
+    border: 1px solid rgba(255, 255, 255, 0.07) !important;
+    border-radius: 8px !important;
+  }
+  hr {
+    margin: 1.5rem 0 !important;
+    border-color: rgba(255, 255, 255, 0.07) !important;
+  }
+
+  /* Reusable minimalist surface classes */
+  .md-surface {
+    background: #13161c;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 12px;
+  }
+  .md-kpi-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    background: #13161c;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 10px;
+    padding: 16px 20px;
+    gap: 20px;
+    margin-bottom: 12px;
+  }
+  .md-acct-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .md-acct-card {
+    background: #13161c;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .md-pos-metrics {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 14px;
+    padding: 12px 0;
+    margin: 10px 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  }
+  .md-ord-metrics {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+    padding: 10px 0 4px 0;
+    margin-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+  }
+  .md-label {
+    font-size: 0.70rem;
     text-transform: uppercase;
-    letter-spacing: 0.045em;
-    color: #94a3b8 !important;
-    font-weight: 600 !important;
+    letter-spacing: 0.05em;
+    color: #64748b;
+    font-weight: 500;
+    margin-bottom: 3px;
   }
-  [data-testid="stMetricValue"] {
-    font-size: 1.35rem !important;
-    font-weight: 600 !important;
+  .md-num {
+    font-size: 0.98rem;
+    font-weight: 600;
+    color: #f1f5f9;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+  .md-num-lg {
+    font-size: 1.38rem;
+    font-weight: 600;
+    color: #f8fafc;
     font-variant-numeric: tabular-nums;
     letter-spacing: -0.02em;
   }
-  [data-baseweb="tab-list"] {
-    gap: 8px !important;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.18) !important;
-    padding-bottom: 2px !important;
+  .md-sub {
+    font-size: 0.76rem;
+    color: #8b95a5;
+    font-variant-numeric: tabular-nums;
+    margin-top: 2px;
   }
-  [data-baseweb="tab"] {
-    font-size: 0.87rem !important;
-    font-weight: 600 !important;
-    padding: 9px 16px !important;
-  }
-  hr {
-    margin: 1.0rem 0 !important;
-    border-color: rgba(148, 163, 184, 0.14) !important;
-  }
-  body:has([data-testid="stStatusWidget"]) button,
-  body:has([data-testid="stStatusWidget"]) input {
-    pointer-events: none !important;
-    opacity: 0.55 !important;
-    cursor: wait !important;
+  .md-pos { color: #22c55e !important; }
+  .md-neg { color: #ef4444 !important; }
+  .md-muted { color: #8b95a5 !important; }
+
+  @media (max-width: 860px) {
+    .md-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .md-acct-grid { grid-template-columns: 1fr; }
+    .md-pos-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .md-ord-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
 </style>
 """
@@ -115,205 +222,146 @@ def _format_human_date(iso_dt: str) -> str:
         return str(iso_dt)
 
 
-def _compute_exit_ladder_numbers(
-    side: str,
-    entry_px: float,
-    init_stop_px: float,
-    cur_stop_px: float,
-    stage1_trigger_px: float = 0.0,
-    stage1_stop_px: float = 0.0,
-    stage2_trigger_px: float = 0.0,
-    stage2_stop_px: float = 0.0,
-    target_px: float = 0.0,
-) -> Dict[str, float]:
-    """Derive complete, consistent 4-step exit strategy numbers for both current and historical records."""
-    is_short = str(side or "LONG").upper() == "SHORT"
-    eff_init_stop = init_stop_px if init_stop_px > 0 else cur_stop_px
-    one_r = abs(entry_px - eff_init_stop) if (entry_px > 0 and eff_init_stop > 0) else max(entry_px * 0.03, 0.01)
-    one_r = max(one_r, 0.01)
-
-    if is_short:
-        s1_trig = stage1_trigger_px if stage1_trigger_px > 0 else round(entry_px - 1.0 * one_r, 2)
-        s1_lock = stage1_stop_px if stage1_stop_px > 0 else round(entry_px - 0.10 * one_r, 2)
-        s2_trig = stage2_trigger_px if stage2_trigger_px > 0 else round(entry_px - 1.65 * one_r, 2)
-        s2_lock = stage2_stop_px if stage2_stop_px > 0 else round(entry_px - 1.0 * one_r, 2)
-        tp = target_px if target_px > 0 else round(entry_px - 2.2 * one_r, 2)
-        rr = round(max(0.0, (entry_px - tp) / one_r), 2)
-    else:
-        s1_trig = stage1_trigger_px if stage1_trigger_px > 0 else round(entry_px + 1.0 * one_r, 2)
-        s1_lock = stage1_stop_px if stage1_stop_px > 0 else round(entry_px + 0.10 * one_r, 2)
-        s2_trig = stage2_trigger_px if stage2_trigger_px > 0 else round(entry_px + 1.65 * one_r, 2)
-        s2_lock = stage2_stop_px if stage2_stop_px > 0 else round(entry_px + 1.0 * one_r, 2)
-        tp = target_px if target_px > 0 else round(entry_px + 2.2 * one_r, 2)
-        rr = round(max(0.0, (tp - entry_px) / one_r), 2)
-
-    return {
-        "one_r": one_r,
-        "init_stop": eff_init_stop,
-        "cur_stop": cur_stop_px if cur_stop_px > 0 else eff_init_stop,
-        "s1_trig": s1_trig,
-        "s1_lock": s1_lock,
-        "s2_trig": s2_trig,
-        "s2_lock": s2_lock,
-        "tp": tp,
-        "rr": rr,
-    }
-
-
-def _render_four_step_exit_grid_html(
-    stop_px: float,
-    stop_sub: str,
-    s1_trig: float,
-    s1_lock: float,
-    s2_trig: float,
-    s2_lock: float,
-    tp_px: float,
-    tp_sub: str,
-) -> str:
-    """Render a crisp 4-column numerical Exit Strategy strip (no charts/diagrams)."""
-    return (
-        "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:8px;margin:7px 0;'>"
-        f"<div style='background:rgba(239,68,68,0.09);border:1px solid rgba(239,68,68,0.28);border-radius:6px;padding:7px 10px;'>"
-        f"<div style='font-size:0.69rem;color:#fca5a5;font-weight:700;text-transform:uppercase;'>1 · Hard Stop (-1.0R)</div>"
-        f"<div style='font-size:0.98rem;font-weight:700;color:#f8fafc;font-family:monospace;margin-top:2px;'>${stop_px:.2f}</div>"
-        f"<div style='font-size:0.72rem;color:#cbd5e1;'>{html.escape(stop_sub)}</div>"
-        "</div>"
-        f"<div style='background:rgba(234,179,8,0.09);border:1px solid rgba(234,179,8,0.28);border-radius:6px;padding:7px 10px;'>"
-        f"<div style='font-size:0.69rem;color:#fde047;font-weight:700;text-transform:uppercase;'>2 · +1.0R Breakeven Trigger</div>"
-        f"<div style='font-size:0.98rem;font-weight:700;color:#f8fafc;font-family:monospace;margin-top:2px;'>Hit ${s1_trig:.2f}</div>"
-        f"<div style='font-size:0.72rem;color:#cbd5e1;'>Moves stop → <code>${s1_lock:.2f}</code> (+0.1R)</div>"
-        "</div>"
-        f"<div style='background:rgba(168,85,247,0.10);border:1px solid rgba(168,85,247,0.28);border-radius:6px;padding:7px 10px;'>"
-        f"<div style='font-size:0.69rem;color:#d8b4fe;font-weight:700;text-transform:uppercase;'>3 · +1.65R Profit Lock</div>"
-        f"<div style='font-size:0.98rem;font-weight:700;color:#f8fafc;font-family:monospace;margin-top:2px;'>Hit ${s2_trig:.2f}</div>"
-        f"<div style='font-size:0.72rem;color:#cbd5e1;'>Locks stop → <code>${s2_lock:.2f}</code> (+1.0R)</div>"
-        "</div>"
-        f"<div style='background:rgba(16,185,129,0.10);border:1px solid rgba(16,185,129,0.28);border-radius:6px;padding:7px 10px;'>"
-        f"<div style='font-size:0.69rem;color:#6ee7b7;font-weight:700;text-transform:uppercase;'>4 · Take-Profit &amp; Time Cap</div>"
-        f"<div style='font-size:0.98rem;font-weight:700;color:#f8fafc;font-family:monospace;margin-top:2px;'>${tp_px:.2f}</div>"
-        f"<div style='font-size:0.72rem;color:#cbd5e1;'>{html.escape(tp_sub)}</div>"
-        "</div>"
-        "</div>"
-    )
-
-
-def _render_pod_rules_cheatsheet_html(pods_list: List[Dict[str, Any]]) -> str:
-    """Render concise numerical Entry & Exit Strategy Rules for each of the 3 Autonomous Pods."""
-    pod_specs = [
-        {
-            "pod_id": "pod_1_breakout",
-            "title": "Pod #1 · Breakout & Breakdown",
-            "edge": "Buys tight 10-day consolidations breaking 20-day highs on volume; shorts high-volume support breakdowns.",
-            "long_entry": "Close within 3% of 20d High · > SMA50 · Vol ≥ 1.15x · 10d Range ≤ 25% · 20d RS vs SPY ≥ +2.0%",
-            "short_entry": "Close breaks 20d Low · < SMA50 · Vol ≥ 1.25x · Bearish/Weak RS (vetoed if News ≥ +0.30)",
-            "exit_nums": "Stop 1.9x ATR (-1R) · +1.0R → BE+0.1R · +1.65R → Lock +1.0R · Target 4.0x–4.5x ATR · Time-Stop 15d",
-        },
-        {
-            "pod_id": "pod_2_mean_reversion",
-            "title": "Pod #2 · Value Pullback & Fade",
-            "edge": "Buys institutional uptrend leaders pulling back calmly toward rising 20-day support; fades overbought bear rallies.",
-            "long_entry": "Close > SMA200 · SMA20 > SMA50 · Within +8% of SMA20 · RSI(14) 50–74 · 20d RS vs SPY ≥ +1.5%",
-            "short_entry": "Downtrend (< SMA50 & < SMA200) · Overbought bounce RSI ≥ 62 into resistance",
-            "exit_nums": "Stop 1.8x ATR (-1R) · +1.0R → BE+0.1R · +1.65R → Lock +1.0R · Target 3.6x–4.0x ATR · Time-Stop 10d",
-        },
-        {
-            "pod_id": "pod_3_momentum",
-            "title": "Pod #3 · Momentum & Drift",
-            "edge": "Rides persistent relative-strength leaders and post-earnings catalyst winners; shorts post-miss downward drift.",
-            "long_entry": "Close > SMA20 > SMA50 · 20d Return ≥ +3.5% · 20d RS vs SPY ≥ +2.2% · Vol ≥ 0.95x",
-            "short_entry": "Close < SMA20 < SMA50 · Negative 20d RS & post-catalyst distribution",
-            "exit_nums": "Stop 2.0x ATR (-1R) · +1.0R → BE+0.1R · +1.65R → Lock +1.0R · Target 4.2x–4.5x ATR · Time-Stop 15d",
-        },
-    ]
-
-    acct_by_pod = {}
-    for p in pods_list:
-        pid = str(p.get("pod_id") or "")
-        bs = p.get("broker_state") or p.get("broker") or {}
-        acct_by_pod[pid] = str(bs.get("alpaca_account_number") or bs.get("account_number") or "Paper")
-
-    cards: List[str] = []
-    for sp in pod_specs:
-        acct = acct_by_pod.get(sp["pod_id"], "Paper")
-        cards.append(
-            f"<div style='background:rgba(15,23,42,0.56);border:1px solid rgba(148,163,184,0.18);"
-            f"border-left:3px solid #38bdf8;border-radius:7px;padding:10px 12px;margin-bottom:8px;font-size:0.79rem;'>"
-            f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;'>"
-            f"<strong style='color:#f8fafc;font-size:0.85rem;'>{html.escape(sp['title'])}</strong>"
-            f"<code style='color:#38bdf8;font-size:0.73rem;'>{html.escape(acct)}</code></div>"
-            f"<div style='color:#cbd5e1;margin-bottom:5px;'>{html.escape(sp['edge'])}</div>"
-            f"<div style='color:#94a3b8;'><strong>🟢 Long Trigger:</strong> <code>{html.escape(sp['long_entry'])}</code></div>"
-            f"<div style='color:#94a3b8;margin-top:2px;'><strong>🔴 Short Trigger:</strong> <code>{html.escape(sp['short_entry'])}</code></div>"
-            f"<div style='color:#e2e8f0;margin-top:4px;'><strong>🎯 Exit Numbers:</strong> <code>{html.escape(sp['exit_nums'])}</code></div>"
-            "</div>"
-        )
-    return "".join(cards)
-
-
-def _render_equity_curve_svg(curve: List[Dict[str, Any]], height: int = 195) -> str:
-    """Render a clean SVG equity curve vs $100k baseline for Tab 3 Strategy Inspector."""
-    if len(curve) < 2:
-        return ""
-    width = 680
-    pad_l, pad_r, pad_t, pad_b = 14, 72, 18, 22
-    plot_w = width - pad_l - pad_r
-    plot_h = height - pad_t - pad_b
-    vals = [float(pt.get("equity", 100000.0)) for pt in curve]
-    min_v = min(min(vals), 100000.0) * 0.99
-    max_v = max(max(vals), 100000.0) * 1.01
-    span = max(max_v - min_v, 1.0)
-
-    def _y(v: float) -> float:
-        return pad_t + plot_h - ((v - min_v) / span) * plot_h
-
-    pts = [
-        f"{pad_l + (i / (len(vals) - 1)) * plot_w:.1f},{_y(v):.1f}"
-        for i, v in enumerate(vals)
-    ]
-    base_y = _y(100000.0)
-    end_col = "#10b981" if vals[-1] >= 100000.0 else "#ef4444"
-    return (
-        f"<svg viewBox='0 0 {width} {height}' style='width:100%;height:auto;background:rgba(15,23,42,0.58);"
-        f"border:1px solid rgba(148,163,184,0.16);border-radius:8px;display:block;'>"
-        f"<line x1='{pad_l}' y1='{base_y:.1f}' x2='{width - pad_r}' y2='{base_y:.1f}' stroke='rgba(148,163,184,0.28)' stroke-dasharray='4,3'/>"
-        f"<polyline fill='none' stroke='{end_col}' stroke-width='2.0' points='{' '.join(pts)}'/>"
-        f"<text x='{width - pad_r + 5}' y='{_y(vals[-1]) + 3:.1f}' fill='{end_col}' font-size='9.5' font-weight='600' font-family='monospace'>${vals[-1]:,.0f}</text>"
-        f"<text x='{pad_l + 4}' y='{height - 6}' fill='#64748b' font-size='9' font-family='monospace'>{curve[0].get('date', '')}</text>"
-        f"<text x='{width - pad_r - 60}' y='{height - 6}' fill='#64748b' font-size='9' font-family='monospace'>{curve[-1].get('date', '')}</text>"
-        f"</svg>"
-    )
-
-
-def _sentiment_badge_html(score: float, label: str = "") -> str:
-    if score <= -0.35:
-        col, bg, txt = "#fca5a5", "rgba(239,68,68,0.18)", f"BEARISH VETO ({score:+.2f})"
-    elif score <= -0.15:
-        col, bg, txt = "#fdba74", "rgba(249,115,22,0.16)", f"Bearish ({score:+.2f})"
-    elif score >= 0.30:
-        col, bg, txt = "#6ee7b7", "rgba(16,185,129,0.18)", f"BULLISH CATALYST ({score:+.2f})"
-    elif score >= 0.15:
-        col, bg, txt = "#93c5fd", "rgba(59,130,246,0.16)", f"Positive ({score:+.2f})"
-    else:
-        col, bg, txt = "#cbd5e1", "rgba(148,163,184,0.14)", f"Neutral ({score:+.2f})"
-    extra = f" · {html.escape(label)}" if label else ""
-    return (
-        f"<span style='background:{bg};color:{col};padding:2px 8px;border-radius:999px;"
-        f"font-size:0.73rem;font-weight:600;'>{txt}{extra}</span>"
-    )
-
-
 def _format_sgt_timestamp(iso_str: str) -> str:
+    """Format an ISO timestamp into 'Nov 14, 11:48 SGT'."""
     raw = str(iso_str or "").strip()
     if not raw:
         return "—"
     try:
         dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         if dt.tzinfo is None:
-            from datetime import timezone as _tz
-            dt = dt.replace(tzinfo=_tz.utc)
-        return dt.astimezone(ZoneInfo("Asia/Singapore")).strftime("%Y-%m-%d %H:%M SGT")
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(ZoneInfo("Asia/Singapore")).strftime("%b %d, %H:%M SGT")
     except Exception:
-        return raw[:19].replace("T", " ")
+        return raw[:16].replace("T", " ")
+
+
+def _pnl_class(val: float) -> str:
+    if val > 0.004:
+        return "md-pos"
+    if val < -0.004:
+        return "md-neg"
+    return "md-muted"
+
+
+def _compute_exit_numbers(
+    side: str,
+    entry_px: float,
+    init_stop_px: float,
+    cur_stop_px: float,
+    stage1_trigger_px: float = 0.0,
+    target_px: float = 0.0,
+) -> Dict[str, float]:
+    """Return clean Stop-Loss, Breakeven Trigger, and Profit Target prices."""
+    is_short = str(side or "LONG").upper() == "SHORT"
+    eff_init_stop = init_stop_px if init_stop_px > 0 else cur_stop_px
+    one_r = abs(entry_px - eff_init_stop) if (entry_px > 0 and eff_init_stop > 0) else max(entry_px * 0.03, 0.01)
+    one_r = max(one_r, 0.01)
+    if is_short:
+        be_trig = stage1_trigger_px if stage1_trigger_px > 0 else round(entry_px - one_r, 2)
+        tp = target_px if target_px > 0 else round(entry_px - 2.2 * one_r, 2)
+    else:
+        be_trig = stage1_trigger_px if stage1_trigger_px > 0 else round(entry_px + one_r, 2)
+        tp = target_px if target_px > 0 else round(entry_px + 2.2 * one_r, 2)
+    return {
+        "stop": cur_stop_px if cur_stop_px > 0 else eff_init_stop,
+        "be_trigger": be_trig,
+        "target": tp,
+    }
+
+
+def _plain_english_reason(raw_text: str, side: str = "LONG", ai_sent: float = 0.0) -> str:
+    """Translate technical indicator triggers into clear, beginner-friendly English."""
+    raw = str(raw_text or "").strip()
+    low = raw.lower()
+    is_short = str(side or "LONG").upper() == "SHORT"
+
+    # Extract relative strength vs S&P 500 if present (e.g. RS20d=+6.9%)
+    rs_match = re.search(r"rs20d\s*=\s*([+-]?\d+(?:\.\d+)?%)", raw, flags=re.IGNORECASE)
+    rs_phrase = f" while outperforming the S&P 500 ({rs_match.group(1)} over 20 days)" if rs_match else ""
+
+    # Check catalyst sentiment from string if not passed explicitly
+    cat_match = re.search(r"catalyst\s*([+-]?\d+(?:\.\d+)?)", raw, flags=re.IGNORECASE)
+    if cat_match and abs(ai_sent) < 0.01:
+        try:
+            ai_sent = float(cat_match.group(1))
+        except Exception:
+            pass
+
+    if is_short:
+        if "mean reversion" in low or "fade" in low or "overbought" in low:
+            base = "Sold short after an overextended bounce inside a broader downtrend"
+        elif "breakdown" in low or "20-day low" in low or "20d low" in low:
+            base = "Sold short as price broke below recent support on elevated selling volume"
+        else:
+            base = "Sold short due to sustained downward trend and weak relative performance"
+    else:
+        if "mean reversion" in low or "pullback" in low or "lowerbb" in low or "oversold" in low:
+            base = f"Bought during a calm dip in an uptrending stock{rs_phrase}"
+        elif "breakout" in low or "20d high" in low or "20-day high" in low:
+            base = f"Bought as price broke out near a new 20-day high on strong volume{rs_phrase}"
+        elif "pead" in low or "earnings" in low:
+            base = f"Bought following a positive earnings surprise and upward trend{rs_phrase}"
+        elif "momentum" in low or "relative strength" in low:
+            base = f"Bought for steady upward trend momentum{rs_phrase}"
+        elif "working" in low and "limit" in low:
+            base = "Limit order queued on Alpaca waiting for price to trade at or better than your entry limit"
+        else:
+            base = f"Bought after meeting trend and relative-strength entry rules{rs_phrase}"
+
+    if not is_short and ai_sent >= 0.25:
+        base += ", supported by positive news sentiment"
+    elif is_short and ai_sent <= -0.25:
+        base += ", reinforced by negative news sentiment"
+
+    return base.rstrip(".") + "."
+
+
+def _plain_english_order_status(raw_status: str, limit_px: float = 0.0) -> str:
+    """Convert internal broker status codes into clean everyday text."""
+    s = str(raw_status or "").strip()
+    su = s.upper()
+    fill_match = re.search(r"\$\s*(\d+(?:\.\d+)?)", s)
+    if "FILLED_ON_ALPACA" in su or su == "FILLED":
+        if fill_match:
+            return f"Filled at ${float(fill_match.group(1)):,.2f}"
+        return "Filled"
+    if "QUEUED_ON_ALPACA" in su or "SUBMITTED_TO_ALPACA" in su or su in ("ACCEPTED", "NEW", "PENDING_NEW"):
+        return f"Working limit at ${limit_px:,.2f}" if limit_px > 0 else "Working on Alpaca"
+    if "SIMULATED" in su:
+        return "Simulated (pre-account link)"
+    return s.replace("_", " ").title()
+
+
+def _plain_english_skip_reason(raw_reason: str, badge: str = "") -> str:
+    """Simplify veto/skip messages for beginners."""
+    txt = str(raw_reason or badge or "").strip()
+    low = txt.lower()
+    if "already_held" in low or "already held" in low:
+        return "Skipped because this stock is already held in the account."
+    if "bearish" in low or "news" in low:
+        return "Blocked because recent news sentiment was negative."
+    if "squeeze" in low or "bullish" in low:
+        return "Short setup blocked because news sentiment turned positive."
+    if "max_sector" in low or "sector" in low:
+        return "Skipped to avoid concentrating too much money in one sector."
+    if "max_open" in low or "positions" in low:
+        return "Skipped because the account reached its maximum open positions limit."
+    if "earnings" in low:
+        return "Skipped because an earnings report is scheduled within 2 trading days."
+    if "cash" in low or "buying power" in low or "exposure" in low:
+        return "Skipped to keep portfolio cash and position size within safety limits."
+    if "pending scheduled" in low:
+        return "Qualified at close; queued for the next scheduled execution window."
+    return txt
+
+
+def _tone_label(score: float) -> str:
+    if score >= 0.20:
+        return "Positive"
+    if score <= -0.20:
+        return "Negative"
+    return "Neutral"
 
 
 def _summarize_job_row(j: Dict[str, Any]) -> Dict[str, str]:
@@ -322,11 +370,11 @@ def _summarize_job_row(j: Dict[str, Any]) -> Dict[str, str]:
     if not isinstance(s, dict):
         s = {}
     label_map = {
-        "weekly_research_and_validation": "🗓️ Weekly Strategy Tournament",
-        "daily_pre_market": "☀️ Daily Research Scan",
-        "daily_market_execution": "⚡ Daily Market Execution",
-        "daily_post_close": "🌙 Daily Post-Close Audit",
-        "ide_ai_cycle": "🧠 IDE AI Cycle (`run`)",
+        "weekly_research_and_validation": "Weekly Strategy Review",
+        "daily_pre_market": "Daily Market Scan",
+        "daily_market_execution": "Daily Order Execution",
+        "daily_post_close": "Daily Post-Close Review",
+        "ide_ai_cycle": "IDE AI Research Run",
     }
     session_str = str(
         s.get("week_ending_date")
@@ -338,25 +386,31 @@ def _summarize_job_row(j: Dict[str, Any]) -> Dict[str, str]:
     if j_name == "weekly_research_and_validation":
         cands = s.get("tournament_candidates") or ([] if not s.get("candidate_strategy_id") else [s])
         prom_cnt = sum(1 for c in cands if c.get("promoted"))
-        tested_str = ", ".join(f"{c.get('candidate_strategy_id')} v{c.get('candidate_version')}" for c in cands[:3])
-        outcome = f"{len(cands)} tested ({tested_str}) · {prom_cnt} promoted (v1 Champions protected)"
+        outcome = (
+            f"Tested {len(cands)} new strategy variations; {prom_cnt} promoted, active strategies retained"
+            if prom_cnt == 0
+            else f"Tested {len(cands)} variations; {prom_cnt} promoted"
+        )
     elif j_name == "ide_ai_cycle":
         tkrs = ", ".join((s.get("research_tickers_enriched") or [])[:5])
-        outcome = f"Enriched [{tkrs}] · {int(s.get('candidates_tested') or 0)} candidate(s) tested · {int(s.get('promoted_count') or 0)} promoted"
+        outcome = f"Reviewed live news for {tkrs or 'top stocks'} and tested {int(s.get('candidates_tested') or 0)} variations"
     elif j_name == "daily_post_close":
-        outcome = f"Regime: {s.get('market_regime', '—')} · Risk Audit & Post-Close Attribution complete"
+        outcome = "Reconciled positions, stops, and daily portfolio risk checks"
     elif j_name == "daily_pre_market":
-        outcome = f"Scanned {s.get('universe_scanned', '—')} equities & ranked top catalysts"
+        outcome = f"Scanned {s.get('universe_scanned', '—')} US stocks for entry setups"
     elif j_name == "daily_market_execution":
-        outcome = f"{len(s.get('entries_executed') or [])} entry fill(s) · {len(s.get('exits_executed') or [])} exit fill(s)"
+        outcome = f"{len(s.get('entries_executed') or [])} entries filled, {len(s.get('exits_executed') or [])} exits filled"
     else:
         outcome = str(j.get("error_message") or "Completed")
+
+    raw_status = str(j.get("status") or "").upper()
+    clean_status = "Completed" if raw_status == "COMPLETED" else raw_status.title()
     return {
-        "Job": label_map.get(j_name, j_name),
+        "Task": label_map.get(j_name, j_name),
         "Session": session_str,
-        "Status": str(j.get("status") or ""),
-        "Executed (SGT)": _format_sgt_timestamp(str(j.get("completed_at") or j.get("started_at") or "")),
-        "Outcome Summary": outcome,
+        "Time (SGT)": _format_sgt_timestamp(str(j.get("completed_at") or j.get("started_at") or "")),
+        "Status": clean_status,
+        "Summary": outcome,
     }
 
 
@@ -366,161 +420,107 @@ def main() -> None:
     except ImportError:
         print(
             "Streamlit is not installed in the current environment. "
-            "Run `python3 main.py serve` to launch the built-in web server on http://127.0.0.1:8080."
+            "Run `pip install streamlit` or launch the built-in zero-dependency web server via `python main.py serve`."
         )
         return
 
     st.set_page_config(
-        page_title="Swing Trading AI · 3-Pod Autonomous Paper Hub",
+        page_title="Swing Trader · Paper Portfolio",
         layout="wide",
-        initial_sidebar_state="expanded",
+        initial_sidebar_state="collapsed",
     )
-    st.markdown(CLASSY_MINIMAL_CSS, unsafe_allow_html=True)
     _sync_streamlit_secrets_to_env(st)
+    st.markdown(MINIMAL_DARK_CSS, unsafe_allow_html=True)
 
-    _code_version = "2026-11-14-v2.4"
-    import api.server as _srv_mod
-    import core.market_data.models as _md_mod
-    import core.execution.paper_broker as _pb_check_mod
+    from api.server import PlatformApplication
+    from core.market_data.models import USTradingCalendar
+
+    _code_version = "2026-11-14-v3.0"
     if (
-        getattr(_srv_mod, "_STREAMLIT_SYNC_VERSION", None) != _code_version
-        or not hasattr(_pb_check_mod, "AlpacaPaperPodManager")
+        "platform_app" not in st.session_state
+        or st.session_state.get("platform_app_version") != _code_version
     ):
-        import importlib
+        app_inst = PlatformApplication()
+        if not app_inst.orchestrator.registry.list_strategies():
+            with st.spinner("Initializing strategies and historical market data..."):
+                app_inst.orchestrator.bootstrap_baseline_system()
+        else:
+            app_inst.orchestrator.ensure_all_golden_strategies_registered()
+        st.session_state["platform_app"] = app_inst
+        st.session_state["platform_app_version"] = _code_version
 
-        _ordered_modules = [
-            "infrastructure.configuration.settings",
-            "infrastructure.database.db",
-            "core.market_data.models",
-            "core.market_data.providers",
-            "core.indicators.technical",
-            "evaluation.metrics.performance",
-            "core.strategies.registry",
-            "core.risk.manager",
-            "core.backtesting.engine",
-            "core.execution.paper_broker",
-            "agents.base",
-            "agents.market_researcher.agent",
-            "agents.strategy_architect.agent",
-            "agents.strategy_evaluator.agent",
-            "agents.performance_analyst.agent",
-            "agents.risk_manager.agent",
-            "infrastructure.scheduler.orchestrator",
-            "api.server",
-        ]
-        for _mod_name in _ordered_modules:
-            if _mod_name in sys.modules:
-                importlib.reload(sys.modules[_mod_name])
-        import api.server as _srv_mod
-        import core.market_data.models as _md_mod
-
-        setattr(_srv_mod, "_STREAMLIT_SYNC_VERSION", _code_version)
-
-    USTradingCalendar = _md_mod.USTradingCalendar
-    app = _srv_mod.PlatformApplication()
-    app.db.initialize_schema()
-
-    if not app.orchestrator.registry.list_strategies():
-        with st.spinner("Initializing baseline strategies & market data..."):
-            app.orchestrator.bootstrap_baseline_system()
-    app.orchestrator.ensure_all_golden_strategies_registered()
-
+    app: PlatformApplication = st.session_state["platform_app"]
     state = app.get_dashboard_state()
-    pods_payload = state.get("strategy_pods") or {"pods": []}
-    pods_list: List[Dict[str, Any]] = pods_payload.get("pods") or []
+
+    pods_state = state.get("strategy_pods") or {}
+    pods_list: List[Dict[str, Any]] = pods_state.get("pods") or []
+    decision_logs: List[Dict[str, Any]] = app.orchestrator.pod_manager.get_recent_decision_logs(limit=90)
     mistake_analyzer: Dict[str, Any] = state.get("mistake_analyzer") or {}
     live_catalysts: List[Dict[str, Any]] = state.get("live_catalysts") or []
     universe_meta: List[Dict[str, Any]] = state.get("universe_metadata") or []
     strategies: List[Dict[str, Any]] = state.get("strategies") or []
-    experiments: List[Dict[str, Any]] = state.get("experiments") or []
     jobs: List[Dict[str, Any]] = state.get("jobs") or []
-    risk_alerts: List[Dict[str, Any]] = state.get("risk_alerts") or []
 
-    today_dt = date.today()
-    today_iso = today_dt.isoformat()
-    today_weekday = today_dt.strftime("%A")
+    # Market session timing
+    et_now = USTradingCalendar.current_et_datetime()
+    today_dt = et_now.date()
     is_trading_day = USTradingCalendar.is_trading_day(today_dt)
     is_mkt_open = USTradingCalendar.is_market_open()
-    non_trading_reason = USTradingCalendar.non_trading_reason(today_dt)
     next_trading_day = USTradingCalendar.next_trading_day(today_dt, include_same_day=is_trading_day)
     open_sgt = USTradingCalendar.market_open_sgt() if hasattr(USTradingCalendar, "market_open_sgt") else "10:30 PM SGT"
     close_sgt = USTradingCalendar.market_close_sgt() if hasattr(USTradingCalendar, "market_close_sgt") else "5:00 AM SGT"
-    now_sgt = datetime.now(ZoneInfo("Asia/Singapore")).strftime("%H:%M:%S SGT")
-    now_et = datetime.now(ZoneInfo("America/New_York")).strftime("%H:%M:%S ET")
 
-    # ---------------- CLEAN SIDEBAR (100% PAPER POD FOCUSED) ----------------
-    with st.sidebar:
-        st.markdown("### ⚡ Autonomous Paper Hub")
-        if is_mkt_open:
-            st.success(f"**MARKET OPEN** · `{now_et}`\n\n`{now_sgt}` · NYSE / NASDAQ")
-        elif is_trading_day:
-            st.info(
-                f"**{today_iso}** ({today_weekday})\n\n"
-                f"Session Hours: **{open_sgt} – {close_sgt}**\n\nNow: `{now_sgt}` (`{now_et}`)"
-            )
-        else:
-            st.warning(
-                f"**{today_iso}** ({today_weekday})\n\n"
-                f"{non_trading_reason}\n\nNext Session: **{next_trading_day}**"
-            )
+    if is_mkt_open:
+        market_status_str = f"US Market Open · Closes {close_sgt}"
+        status_dot_col = "#22c55e"
+    elif is_trading_day:
+        market_status_str = f"US Market Closed · Opens Today {open_sgt}"
+        status_dot_col = "#94a3b8"
+    else:
+        next_human = _format_human_date(str(next_trading_day))
+        market_status_str = f"US Market Closed · Next Session {next_human} ({open_sgt})"
+        status_dot_col = "#64748b"
 
-        latest_weekly_job = next(
-            (j for j in jobs if j.get("job_name") == "weekly_research_and_validation"),
-            None,
-        )
-        last_weekly_sgt = (
-            _format_sgt_timestamp(str(latest_weekly_job.get("completed_at") or latest_weekly_job.get("started_at") or ""))
-            if latest_weekly_job
-            else "Pending Sat 10:00 AM SGT"
-        )
-
-        st.markdown("---")
-        st.markdown(
-            "#### 🤖 Autonomous Schedule\n"
-            "• **Daily Runs (`Mon–Fri`)**:\n"
-            "  - `5:30 AM SGT` · Post-Close Scan\n"
-            "  - `9:00/10:00 PM SGT` · Pre-Open News & Gap Gate\n"
-            "  - `9:35/10:35 PM SGT` · Market-Open Execution\n"
-            "• **Weekly Run (`Sat 10:00 AM SGT`)**:\n"
-            "  - Mistake Analyzer + 9-Gate Tournament\n"
-            f"  - Last Executed: `{last_weekly_sgt}`\n"
-            "• **IDE AI (`type run`)**:\n"
-            "  - Live Web Catalyst Search + AI Strategy Tuning"
-        )
-
-        st.markdown("---")
-        st.markdown(
-            f"🔗 **[Open Alpaca Paper Portal ↗]({ALPACA_PAPER_PORTAL_URL})**\n\n"
-            f"• Mode: `100% Autonomous Paper`\n"
-            f"• Active Universe: **{len(universe_meta)} liquid US equities**\n"
-            f"• Strategies Tracked: **{len(strategies)} versions**"
-        )
-
-    # ---------------- AGGREGATE LIVE POD STATE ----------------
+    # Aggregate portfolio & order state across all 3 accounts
     all_open_holdings: List[Dict[str, Any]] = []
     all_working_entry_orders: List[Dict[str, Any]] = []
     all_broker_orders: List[Dict[str, Any]] = []
     seen_order_keys: set[str] = set()
-    today_entries_count = 0
+
+    total_equity = 0.0
+    total_start_cap = 0.0
+    total_cash = 0.0
+    active_pod_accounts = 0
 
     for pod in pods_list:
-        pod_name = str(pod.get("label") or pod.get("short_label") or pod.get("pod_name") or pod.get("pod_id") or "")
         pod_id = str(pod.get("pod_id") or "")
+        pod_name = POD_DISPLAY_NAMES.get(pod_id, str(pod.get("short_label") or pod_id))
         b_st = pod.get("broker_state") or pod.get("broker") or {}
-        acct_num = str(b_st.get("alpaca_account_number") or b_st.get("account_number") or "N/A")
-        today_entries_count += len(pod.get("executed_or_queued") or [])
+        acct_num = str(b_st.get("alpaca_account_number") or b_st.get("account_number") or "Paper")
+        eq = float(b_st.get("total_equity") or b_st.get("equity") or 100_000.0)
+        sc = float(b_st.get("starting_capital") or 100_000.0)
+        csh = float(b_st.get("cash_balance") or b_st.get("cash") or eq)
+
+        total_equity += eq
+        total_start_cap += sc
+        total_cash += csh
+
         holdings_src = pod.get("active_holdings_plan") or b_st.get("positions") or []
+        if holdings_src:
+            active_pod_accounts += 1
         for pos in holdings_src:
             p_item = dict(pos)
             p_item["_pod_name"] = pod_name
             p_item["_pod_id"] = pod_id
             p_item["_account_number"] = acct_num
             all_open_holdings.append(p_item)
+
         for bo in b_st.get("open_orders") or []:
             o_item = dict(bo)
             o_item["_pod_name"] = pod_name
+            o_item["_pod_id"] = pod_id
             o_item["_account_number"] = acct_num
-            o_item["_bucket"] = "OPEN"
+            o_item["_bucket"] = "Open"
             oid_k = f"{acct_num}:{o_item.get('order_id') or o_item.get('client_order_id')}"
             seen_order_keys.add(oid_k)
             all_broker_orders.append(o_item)
@@ -528,6 +528,7 @@ def main() -> None:
             o_cid = str(o_item.get("client_order_id") or "")
             if o_cls not in ("OCO", "OTO", "BRACKET_EXIT") and ":oco:" not in o_cid and ":exit:" not in o_cid:
                 all_working_entry_orders.append(o_item)
+
         for bo in (b_st.get("recent_orders") or [])[:12]:
             o_item = dict(bo)
             oid_k = f"{acct_num}:{o_item.get('order_id') or o_item.get('client_order_id')}"
@@ -535,136 +536,329 @@ def main() -> None:
                 continue
             seen_order_keys.add(oid_k)
             o_item["_pod_name"] = pod_name
+            o_item["_pod_id"] = pod_id
             o_item["_account_number"] = acct_num
-            o_item["_bucket"] = "RECENT"
+            o_item["_bucket"] = "Recent"
             all_broker_orders.append(o_item)
 
-    # ---------------- TOP BRIEFING BANNER + 3 POD ACCOUNT CARDS ----------------
-    market_regime = str(pods_payload.get("market_regime") or "SIDEWAYS_CHOPPY")
-    session_dt = str(pods_payload.get("session_date") or today_iso)
-    long_hold_cnt = sum(1 for p in all_open_holdings if str(p.get("side", "LONG")).upper() == "LONG")
-    short_hold_cnt = sum(1 for p in all_open_holdings if str(p.get("side", "LONG")).upper() == "SHORT")
-    latest_news_headline = (
-        f"{live_catalysts[0]['ticker']}: {live_catalysts[0]['headline']}"
-        if live_catalysts
-        else "24/7 Alpaca News & Screener active — updates automatically on scheduled Daily & Weekly runs."
-    )
+    if total_start_cap <= 0:
+        total_start_cap = 300_000.0
+        total_equity = 300_000.0
+        total_cash = 300_000.0
 
+    total_pnl = total_equity - total_start_cap
+    total_ret_pct = (total_pnl / total_start_cap) * 100.0
+    cash_pct = (total_cash / max(total_equity, 1.0)) * 100.0
+    tot_pnl_cls = _pnl_class(total_pnl)
+
+    # ---------------- CLEAN FULL-WIDTH HEADER ----------------
     st.markdown(
-        f"<div style='background:linear-gradient(90deg,rgba(15,23,42,0.88),rgba(30,41,59,0.78));"
-        f"border:1px solid rgba(56,189,248,0.28);border-radius:10px;padding:13px 18px;margin-bottom:14px;'>"
-        f"<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;'>"
-        f"<div><span style='font-size:1.08rem;font-weight:700;color:#f8fafc;'>3-Pod Autonomous Paper Trading Hub</span> "
-        f"<span style='background:rgba(56,189,248,0.16);color:#38bdf8;padding:2px 9px;border-radius:999px;font-size:0.74rem;font-weight:600;margin-left:6px;'>"
-        f"Regime: {html.escape(market_regime)}</span> "
-        f"<span style='color:#94a3b8;font-size:0.79rem;margin-left:8px;'>Latest Session: <code>{html.escape(session_dt)}</code></span></div>"
-        f"<div style='font-size:0.81rem;color:#cbd5e1;'>"
-        f"Open Holdings: <strong>{long_hold_cnt} Long / {short_hold_cnt} Short</strong> &nbsp;|&nbsp; "
-        f"Working Entry Orders: <strong style='color:#38bdf8;'>{len(all_working_entry_orders)}</strong> &nbsp;|&nbsp; "
-        f"<a href='{ALPACA_PAPER_PORTAL_URL}' target='_blank' style='color:#38bdf8;text-decoration:none;font-weight:600;'>Alpaca Paper Portal ↗</a>"
-        f"</div></div>"
-        f"<div style='margin-top:6px;font-size:0.78rem;color:#94a3b8;'>"
-        f"📰 <strong>Latest Catalyst Wire:</strong> {html.escape(latest_news_headline[:155])}</div>"
+        f"<div style='display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:12px;margin-bottom:18px;'>"
+        f"<div>"
+        f"<span style='font-size:1.35rem;font-weight:600;color:#f8fafc;letter-spacing:-0.02em;'>Swing Trader</span>"
+        f"<span style='font-size:0.86rem;color:#64748b;margin-left:10px;'>Autonomous Paper Portfolio</span>"
+        f"</div>"
+        f"<div style='font-size:0.80rem;color:#94a3b8;display:flex;align-items:center;gap:14px;'>"
+        f"<span><span style='display:inline-block;width:7px;height:7px;border-radius:50%;background:{status_dot_col};margin-right:6px;vertical-align:middle;'></span>"
+        f"{html.escape(market_status_str)}</span>"
+        f"<a href='{ALPACA_PAPER_PORTAL_URL}' target='_blank' style='color:#cbd5e1;text-decoration:none;border-bottom:1px solid rgba(203,213,225,0.3);'>Alpaca Portal ↗</a>"
+        f"</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
 
+    # ---------------- PORTFOLIO KPI STRIP ----------------
+    st.markdown(
+        f"<div class='md-kpi-strip'>"
+        f"<div>"
+        f"<div class='md-label'>Total Portfolio Value</div>"
+        f"<div class='md-num-lg'>${total_equity:,.2f}</div>"
+        f"<div class='md-sub {tot_pnl_cls}'>{total_pnl:+,.2f} USD ({total_ret_pct:+.2f}%)</div>"
+        f"</div>"
+        f"<div>"
+        f"<div class='md-label'>Available Cash</div>"
+        f"<div class='md-num-lg'>${total_cash:,.0f}</div>"
+        f"<div class='md-sub'>{cash_pct:.0f}% of portfolio uninvested</div>"
+        f"</div>"
+        f"<div>"
+        f"<div class='md-label'>Open Positions</div>"
+        f"<div class='md-num-lg'>{len(all_open_holdings)}</div>"
+        f"<div class='md-sub'>Active across {active_pod_accounts} of 3 accounts</div>"
+        f"</div>"
+        f"<div>"
+        f"<div class='md-label'>Working Entry Orders</div>"
+        f"<div class='md-num-lg'>{len(all_working_entry_orders)}</div>"
+        f"<div class='md-sub'>{'Waiting for limit price on Alpaca' if all_working_entry_orders else 'No pending entry orders'}</div>"
+        f"</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    # ---------------- 3 PAPER ACCOUNT CARDS ----------------
     if pods_list:
-        pod_cols = st.columns(len(pods_list))
-        for idx, pod in enumerate(pods_list):
-            b_state = pod.get("broker_state") or pod.get("broker") or {}
-            eq = float(b_state.get("total_equity") or b_state.get("equity") or 100_000.0)
-            cash = float(b_state.get("unencumbered_cash") or b_state.get("cash_balance") or b_state.get("cash") or 100_000.0)
-            pnl_d = eq - 100_000.0
-            pnl_pct = (pnl_d / 100_000.0) * 100.0
-            acct_no = str(b_state.get("alpaca_account_number") or b_state.get("account_number") or "Disconnected")
-            connected = bool(b_state.get("broker_connected") or b_state.get("connected"))
-            p_positions = pod.get("active_holdings_plan") or b_state.get("positions") or []
-            n_long = sum(1 for p in p_positions if str(p.get("side", "LONG")).upper() == "LONG")
-            n_short = sum(1 for p in p_positions if str(p.get("side", "LONG")).upper() == "SHORT")
-            n_working_ent = sum(
+        acct_cards_html: List[str] = []
+        for pod in pods_list:
+            pid = str(pod.get("pod_id") or "")
+            p_title = POD_DISPLAY_NAMES.get(pid, str(pod.get("short_label") or pid))
+            p_desc = POD_STRATEGY_DESCRIPTIONS.get(pid, "")
+            b_st = pod.get("broker_state") or pod.get("broker") or {}
+            eq = float(b_st.get("total_equity") or b_st.get("equity") or 100_000.0)
+            sc = float(b_st.get("starting_capital") or 100_000.0)
+            csh = float(b_st.get("cash_balance") or b_st.get("cash") or eq)
+            pnl = eq - sc
+            ret_p = (pnl / max(sc, 1.0)) * 100.0
+            acct_id = str(b_st.get("alpaca_account_number") or b_st.get("account_number") or "Paper")
+            open_cnt = len(pod.get("active_holdings_plan") or b_st.get("positions") or [])
+            work_cnt = sum(
                 1
-                for o in (b_state.get("open_orders") or [])
+                for o in (b_st.get("open_orders") or [])
                 if str(o.get("order_class") or "").upper() not in ("OCO", "OTO", "BRACKET_EXIT")
                 and ":oco:" not in str(o.get("client_order_id") or "")
                 and ":exit:" not in str(o.get("client_order_id") or "")
             )
-            pnl_col = "#10b981" if pnl_d >= 0 else "#f87171"
-            conn_col = "#10b981" if connected else "#f59e0b"
-            pod_title = str(pod.get("label") or pod.get("short_label") or pod.get("pod_name") or "")
-            pod_mandate = str(pod.get("archetype_summary") or pod.get("why_nominated") or pod.get("mandate") or "")
-            with pod_cols[idx]:
-                st.markdown(
-                    f"<div style='background:rgba(15,23,42,0.58);border:1px solid rgba(148,163,184,0.18);"
-                    f"border-top:3px solid {conn_col};border-radius:9px;padding:12px 14px;margin-bottom:8px;'>"
-                    f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
-                    f"<strong style='font-size:0.86rem;color:#f1f5f9;'>{html.escape(pod_title)}</strong>"
-                    f"<a href='{ALPACA_PAPER_PORTAL_URL}' target='_blank' style='font-size:0.73rem;color:#38bdf8;text-decoration:none;'>"
-                    f"<code>{html.escape(acct_no)}</code> ↗</a></div>"
-                    f"<div style='font-size:0.73rem;color:#94a3b8;margin-top:2px;'>{html.escape(pod_mandate[:84])}</div>"
-                    f"<div style='display:flex;justify-content:space-between;align-items:baseline;margin-top:8px;'>"
-                    f"<span style='font-size:1.22rem;font-weight:700;color:#f8fafc;'>${eq:,.2f}</span>"
-                    f"<span style='font-size:0.82rem;font-weight:600;color:{pnl_col};'>{pnl_d:+,.2f} ({pnl_pct:+.2f}%)</span>"
-                    f"</div>"
-                    f"<div style='font-size:0.74rem;color:#94a3b8;margin-top:4px;'>"
-                    f"Cash: <code>${cash:,.0f}</code> · Held: <strong>{n_long}L / {n_short}S</strong> · "
-                    f"Working Entries: <strong style='color:#38bdf8;'>{n_working_ent}</strong></div>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
+            p_cls = _pnl_class(pnl)
+            acct_cards_html.append(
+                f"<div class='md-acct-card'>"
+                f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
+                f"<span style='font-size:0.86rem;font-weight:600;color:#f1f5f9;'>{html.escape(p_title)}</span>"
+                f"<span style='font-size:0.74rem;color:#64748b;font-family:monospace;'>{html.escape(acct_id)}</span>"
+                f"</div>"
+                f"<div style='display:flex;justify-content:space-between;align-items:baseline;margin-top:8px;'>"
+                f"<span class='md-num' style='font-size:1.12rem;'>${eq:,.2f}</span>"
+                f"<span class='md-sub {p_cls}' style='font-weight:500;'>{pnl:+,.2f} ({ret_p:+.2f}%)</span>"
+                f"</div>"
+                f"<div style='font-size:0.75rem;color:#8b95a5;margin-top:6px;'>"
+                f"Cash ${csh:,.0f} &nbsp;·&nbsp; {open_cnt} open &nbsp;·&nbsp; {work_cnt} working"
+                f"</div>"
+                f"<div style='font-size:0.73rem;color:#64748b;margin-top:5px;line-height:1.35;'>{html.escape(p_desc)}</div>"
+                f"</div>"
+            )
+        st.markdown(f"<div class='md-acct-grid'>{''.join(acct_cards_html)}</div>", unsafe_allow_html=True)
 
-    # ---------------- 4 AUTONOMOUS PAPER-POD TABS ----------------
-    decision_logs = app.orchestrator.pod_manager.get_recent_decision_logs(limit=90)
-    unique_journal_dates = sorted({str(d.get("session_date", "")) for d in decision_logs if d.get("session_date")}, reverse=True)
-
-    tab2_badge = (
-        f"{len(all_open_holdings)} Held · {len(all_working_entry_orders)} Working"
-        if all_working_entry_orders
-        else f"{len(all_open_holdings)}"
-    )
-    tab1, tab2, tab3, tab4 = st.tabs(
+    # ---------------- 3 MINIMALIST TABS ----------------
+    tab1, tab2, tab3 = st.tabs(
         [
-            f"📓 Day-by-Day Pod Decision Journal ({len(unique_journal_dates)} Days)",
-            f"🛡️ Active Holdings & Orders ({tab2_badge})",
-            "🏆 Strategy Tournament & Mistake Analyzer",
-            f"📰 Live News & Universe ({len(universe_meta)})",
+            "Overview & Open Trades",
+            "Daily Journal",
+            "Performance & System",
         ]
     )
 
     # =========================================================================
-    # TAB 1: DAY-BY-DAY POD DECISION JOURNAL (NUMBERS-FIRST CHRONOLOGICAL DIARY)
+    # TAB 1: OVERVIEW & OPEN TRADES
     # =========================================================================
     with tab1:
-        jc_filter1, jc_filter2, jc_filter3 = st.columns([1.8, 1.5, 1.7])
-        with jc_filter1:
+        acct_filter_opts = ["All Accounts"] + list(POD_DISPLAY_NAMES.keys())
+        sel_acct = st.selectbox(
+            "Account View",
+            options=acct_filter_opts,
+            format_func=lambda x: x if x == "All Accounts" else POD_DISPLAY_NAMES.get(x, x),
+            key="overview_acct_filter",
+            label_visibility="collapsed",
+        )
+
+        shown_working = [
+            w for w in all_working_entry_orders if sel_acct == "All Accounts" or w.get("_pod_id") == sel_acct
+        ]
+        shown_holdings = [
+            h for h in all_open_holdings if sel_acct == "All Accounts" or h.get("_pod_id") == sel_acct
+        ]
+
+        # 1. Working Entry Orders
+        if shown_working:
+            st.markdown(
+                f"<div style='font-size:0.88rem;font-weight:600;color:#e2e8f0;margin:8px 0 10px 0;'>"
+                f"Working Orders Waiting to Fill ({len(shown_working)})</div>",
+                unsafe_allow_html=True,
+            )
+            for wo in shown_working:
+                w_tkr = str(wo.get("ticker") or "")
+                is_short_w = str(wo.get("side") or "BUY").upper() == "SELL"
+                w_action = "Sell Short" if is_short_w else "Buy"
+                w_qty = int(wo.get("qty") or 0)
+                w_lim = float(wo.get("limit_price") or 0.0)
+                w_stop = float(wo.get("stop_price") or 0.0)
+                w_tp = float(wo.get("take_profit_price") or 0.0)
+                w_val = round(w_qty * w_lim, 2)
+                w_max_loss = round(abs(w_lim - w_stop) * w_qty, 2) if w_stop > 0 else 0.0
+                w_est_gain = round(abs(w_tp - w_lim) * w_qty, 2) if w_tp > 0 else 0.0
+                w_pod = str(wo.get("_pod_name") or "")
+                w_acct = str(wo.get("_account_number") or "")
+
+                st.markdown(
+                    f"<div class='md-surface'>"
+                    f"<div style='display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;'>"
+                    f"<div>"
+                    f"<span style='font-size:1.0rem;font-weight:600;color:#f8fafc;'>{html.escape(w_tkr)}</span>"
+                    f"<span style='font-size:0.82rem;color:#94a3b8;margin-left:8px;'>{w_action} {w_qty} shares</span>"
+                    f"<span style='font-size:0.78rem;color:#64748b;margin-left:8px;'>· {html.escape(w_pod)} ({html.escape(w_acct)})</span>"
+                    f"</div>"
+                    f"<div style='font-size:0.80rem;color:#94a3b8;'>Working on Alpaca</div>"
+                    f"</div>"
+                    f"<div class='md-ord-metrics'>"
+                    f"<div><div class='md-label'>Entry Limit</div><div class='md-num'>${w_lim:,.2f}</div><div class='md-sub'>Max price to pay</div></div>"
+                    f"<div><div class='md-label'>Order Value</div><div class='md-num'>${w_val:,.0f}</div><div class='md-sub'>{w_qty} shares</div></div>"
+                    f"<div><div class='md-label'>Auto Stop-Loss</div><div class='md-num'>${w_stop:,.2f}</div><div class='md-sub'>Max loss -${w_max_loss:,.0f}</div></div>"
+                    f"<div><div class='md-label'>Profit Target</div><div class='md-num'>${w_tp:,.2f}</div><div class='md-sub'>Target gain +${w_est_gain:,.0f}</div></div>"
+                    f"</div>"
+                    f"<div style='font-size:0.80rem;color:#8b95a5;margin-top:6px;line-height:1.45;'>"
+                    f"Waiting to fill at ${w_lim:,.2f} or better during regular US market hours; Stop-Loss (${w_stop:,.2f}) and Profit Target (${w_tp:,.2f}) activate automatically on fill."
+                    f"</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+        # 2. Open Positions
+        st.markdown(
+            f"<div style='font-size:0.88rem;font-weight:600;color:#e2e8f0;margin:16px 0 10px 0;'>"
+            f"Open Positions ({len(shown_holdings)})</div>",
+            unsafe_allow_html=True,
+        )
+        if shown_holdings:
+            for pos in shown_holdings:
+                tkr = str(pos.get("ticker") or "")
+                side = str(pos.get("side") or "LONG").upper()
+                is_short = side == "SHORT"
+                dir_lbl = "Short" if is_short else "Long"
+                sec = str(pos.get("sector") or "")
+                qty = abs(int(pos.get("quantity") or pos.get("qty") or 0))
+                avg_px = float(pos.get("avg_entry_price") or pos.get("entry_price") or 0.0)
+                cur_px = float(pos.get("current_price") or pos.get("live_price") or avg_px)
+                mkt_val = abs(qty * cur_px)
+                hold_d = int(pos.get("holding_days") or 0)
+                max_d = int(pos.get("max_hold_days") or 15)
+                u_pnl = float(
+                    pos.get("unrealised_pnl")
+                    if pos.get("unrealised_pnl") is not None
+                    else (pos.get("unrealised_pnl_usd") if pos.get("unrealised_pnl_usd") is not None else 0.0)
+                )
+                u_pct = float(
+                    pos.get("unrealised_return_pct")
+                    if pos.get("unrealised_return_pct") is not None
+                    else (pos.get("unrealised_pnl_pct") if pos.get("unrealised_pnl_pct") is not None else 0.0)
+                )
+
+                ex = _compute_exit_numbers(
+                    side=side,
+                    entry_px=avg_px,
+                    init_stop_px=float(pos.get("initial_stop_price") or pos.get("current_stop_price") or 0.0),
+                    cur_stop_px=float(pos.get("current_stop_price") or pos.get("stop_loss_price") or 0.0),
+                    stage1_trigger_px=float(pos.get("stage1_ratchet_price") or 0.0),
+                    target_px=float(pos.get("take_profit_price") or 0.0),
+                )
+                stop_px = ex["stop"]
+                tp_px = ex["target"]
+                be_px = ex["be_trigger"]
+
+                stop_pnl = ((avg_px - stop_px) if is_short else (stop_px - avg_px)) * qty
+                tp_pnl = ((avg_px - tp_px) if is_short else (tp_px - avg_px)) * qty
+
+                why_plain = _plain_english_reason(
+                    str(pos.get("entry_thesis") or ""),
+                    side=side,
+                    ai_sent=float(pos.get("ai_catalyst_score") or 0.0),
+                )
+                close_verb = "buys back" if is_short else "sells"
+                pnl_cls = _pnl_class(u_pnl)
+                sec_html = (
+                    f"<span style='font-size:0.78rem;color:#64748b;margin-left:8px;'>· {html.escape(sec)}</span>"
+                    if sec
+                    else ""
+                )
+
+                st.markdown(
+                    f"<div class='md-surface'>"
+                    f"<div style='display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;'>"
+                    f"<div>"
+                    f"<span style='font-size:1.04rem;font-weight:600;color:#f8fafc;'>{html.escape(tkr)}</span>"
+                    f"<span style='font-size:0.82rem;color:#94a3b8;margin-left:8px;'>{dir_lbl} · {qty} shares</span>"
+                    f"{sec_html}"
+                    f"<span style='font-size:0.78rem;color:#64748b;margin-left:8px;'>· {html.escape(str(pos.get('_pod_name', '')))} ({html.escape(str(pos.get('_account_number', '')))})</span>"
+                    f"</div>"
+                    f"<div style='font-variant-numeric:tabular-nums;font-size:0.95rem;font-weight:600;' class='{pnl_cls}'>"
+                    f"{u_pnl:+,.2f} USD ({u_pct:+.2f}%)"
+                    f"</div>"
+                    f"</div>"
+                    f"<div class='md-pos-metrics'>"
+                    f"<div><div class='md-label'>Entry Price</div><div class='md-num'>${avg_px:,.2f}</div><div class='md-sub'>Day {hold_d} of {max_d} max</div></div>"
+                    f"<div><div class='md-label'>Current Price</div><div class='md-num'>${cur_px:,.2f}</div><div class='md-sub'>Value ${mkt_val:,.0f}</div></div>"
+                    f"<div><div class='md-label'>Stop-Loss</div><div class='md-num'>${stop_px:,.2f}</div><div class='md-sub'>{stop_pnl:+,.0f} USD vs entry</div></div>"
+                    f"<div><div class='md-label'>Profit Target</div><div class='md-num'>${tp_px:,.2f}</div><div class='md-sub'>{tp_pnl:+,.0f} USD vs entry</div></div>"
+                    f"<div><div class='md-label'>Breakeven Step</div><div class='md-num'>${be_px:,.2f}</div><div class='md-sub'>Raises stop to entry</div></div>"
+                    f"</div>"
+                    f"<div style='font-size:0.81rem;color:#cbd5e1;line-height:1.48;'>"
+                    f"{html.escape(why_plain)} "
+                    f"<span style='color:#8b95a5;'>Alpaca automatically {close_verb} at ${tp_px:,.2f} for profit or ${stop_px:,.2f} to cap loss.</span>"
+                    f"</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.caption("No open positions for the selected account view.")
+
+        # 3. Clean Collapsible Broker Order Ledger
+        shown_orders = [
+            o for o in all_broker_orders if sel_acct == "All Accounts" or o.get("_pod_id") == sel_acct
+        ]
+        if shown_orders:
+            with st.expander(f"View Alpaca Broker Order Log ({len(shown_orders)})", expanded=False):
+                st.dataframe(
+                    [
+                        {
+                            "Type": o.get("_bucket", ""),
+                            "Account": o.get("_account_number", ""),
+                            "Ticker": o.get("ticker") or o.get("symbol", ""),
+                            "Action": str(o.get("side", "")).title(),
+                            "Shares": o.get("qty", ""),
+                            "Entry / Fill": (
+                                f"${float(o['filled_avg_price']):,.2f}"
+                                if o.get("filled_avg_price")
+                                else (
+                                    f"${float(o['limit_price']):,.2f}"
+                                    if (o.get("limit_price") and str(o.get("order_class", "")).upper() not in ("OCO", "BRACKET_EXIT"))
+                                    else "—"
+                                )
+                            ),
+                            "Stop-Loss": f"${float(o['stop_price']):,.2f}" if o.get("stop_price") else "—",
+                            "Profit Target": f"${float(o['take_profit_price']):,.2f}" if o.get("take_profit_price") else "—",
+                            "Status": str(o.get("status", "")).replace("_", " ").title(),
+                        }
+                        for o in shown_orders[:40]
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+    # =========================================================================
+    # TAB 2: DAILY JOURNAL
+    # =========================================================================
+    with tab2:
+        jf1, jf2, jf3 = st.columns([1.2, 1.2, 1.2])
+        with jf1:
+            pod_filter_opts = ["All 3 Strategy Pods"] + list(POD_DISPLAY_NAMES.keys())
             pod_filter = st.selectbox(
-                "Filter by Strategy Pod",
-                options=[
-                    "All 3 Strategy Pods",
-                    "pod_1_breakout",
-                    "pod_2_mean_reversion",
-                    "pod_3_momentum",
-                ],
-                format_func=lambda x: POD_DISPLAY_NAMES.get(x, x),
+                "Account",
+                options=pod_filter_opts,
+                format_func=lambda x: "All Accounts" if x == "All 3 Strategy Pods" else POD_DISPLAY_NAMES.get(x, x),
                 key="journal_pod_filter",
             )
-        with jc_filter2:
-            activity_filter = st.radio(
-                "Journal View",
+        with jf2:
+            activity_filter = st.selectbox(
+                "Show",
                 options=["All Trading Days", "Days With New Orders Only"],
-                horizontal=True,
+                format_func=lambda x: "Days with new orders" if x == "Days With New Orders Only" else "All trading days",
                 key="journal_activity_filter",
             )
-        with jc_filter3:
+        with jf3:
             ticker_search = st.text_input(
-                "Search Ticker in Journal (e.g. AAPL, HD, LLY)",
-                placeholder="Filter by ticker...",
+                "Search Ticker",
+                placeholder="e.g. AAPL, LLY, SLB",
                 key="journal_ticker_search",
             ).strip().upper()
 
         logs_by_date: Dict[str, List[Dict[str, Any]]] = {}
         for dlog in decision_logs:
-            dt_k = str(dlog.get("session_date") or "")
+            dt_k = str(dlog.get("session_date") or "")[:10]
             if not dt_k:
                 continue
             if pod_filter != "All 3 Strategy Pods" and dlog.get("pod_id") != pod_filter:
@@ -674,7 +868,7 @@ def main() -> None:
         ordered_dates = sorted(logs_by_date.keys(), reverse=True)
 
         if not ordered_dates:
-            st.info("No Pod decision journal entries recorded yet — entries populate automatically on each scheduled Daily run.")
+            st.caption("No daily journal entries recorded yet.")
         else:
             rendered_days = 0
             for day_idx, dt_key in enumerate(ordered_dates):
@@ -682,43 +876,24 @@ def main() -> None:
                 day_entries_total = sum(len(p.get("executed_or_queued") or []) for p in day_pods)
                 day_holds_total = sum(len(p.get("active_holdings_plan") or []) for p in day_pods)
                 day_ratchets_total = sum(len(p.get("ratchets_and_exits") or []) for p in day_pods)
-                day_vetoes_total = sum(
-                    1
-                    for p in day_pods
-                    for s in (p.get("skipped_reasons") or [])
-                    if str(s.get("category", "")) != "NO_TECHNICAL_SIGNAL"
-                )
 
                 if activity_filter == "Days With New Orders Only" and day_entries_total == 0 and day_ratchets_total == 0:
                     continue
 
-                if ticker_search:
-                    day_blob = json.dumps(day_pods).upper()
-                    if ticker_search not in day_blob:
-                        continue
+                if ticker_search and ticker_search not in json.dumps(day_pods).upper():
+                    continue
 
                 rendered_days += 1
                 human_dt = _format_human_date(dt_key)
-                latest_tag = (
-                    "<span style='background:rgba(16,185,129,0.20);color:#34d399;padding:2px 8px;border-radius:999px;"
-                    "font-size:0.72rem;font-weight:700;margin-left:8px;'>LATEST SESSION</span>"
-                    if day_idx == 0
-                    else ""
-                )
+                latest_lbl = " · Latest Session" if day_idx == 0 else ""
 
                 st.markdown(
-                    f"<div style='background:linear-gradient(90deg,rgba(30,41,59,0.92),rgba(15,23,42,0.82));"
-                    f"border-left:4px solid #38bdf8;border-top:1px solid rgba(148,163,184,0.18);"
-                    f"border-right:1px solid rgba(148,163,184,0.18);border-bottom:1px solid rgba(148,163,184,0.18);"
-                    f"border-radius:8px;padding:10px 16px;margin-top:14px;margin-bottom:10px;"
-                    f"display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;'>"
-                    f"<div><span style='font-size:1.02rem;font-weight:700;color:#f8fafc;'>📅 {html.escape(human_dt)}</span> "
-                    f"<code style='font-size:0.78rem;color:#94a3b8;margin-left:6px;'>{html.escape(dt_key)}</code>{latest_tag}</div>"
-                    f"<div style='font-size:0.79rem;color:#cbd5e1;'>"
-                    f"<span style='color:#34d399;font-weight:600;'>{day_entries_total} Orders Placed/Filled</span> &nbsp;·&nbsp; "
-                    f"<span style='color:#38bdf8;font-weight:600;'>{day_holds_total} Positions Held</span> &nbsp;·&nbsp; "
-                    f"<span style='color:#fbbf24;font-weight:600;'>{day_ratchets_total} Ratchets/Exits</span> &nbsp;·&nbsp; "
-                    f"<span style='color:#f87171;font-weight:600;'>{day_vetoes_total} News/Risk Vetoes</span>"
+                    f"<div style='display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;"
+                    f"padding:18px 0 8px 0;border-bottom:1px solid rgba(255,255,255,0.08);margin-bottom:12px;'>"
+                    f"<div style='font-size:0.98rem;font-weight:600;color:#f8fafc;'>{html.escape(human_dt)}"
+                    f"<span style='font-size:0.78rem;color:#64748b;font-weight:400;margin-left:8px;'>{html.escape(dt_key)}{latest_lbl}</span></div>"
+                    f"<div style='font-size:0.79rem;color:#8b95a5;'>"
+                    f"{day_entries_total} orders &nbsp;·&nbsp; {day_holds_total} positions held"
                     f"</div></div>",
                     unsafe_allow_html=True,
                 )
@@ -727,607 +902,264 @@ def main() -> None:
                     pid = str(p_log.get("pod_id") or "")
                     p_disp = POD_DISPLAY_NAMES.get(pid, pid)
                     acct_str = str(p_log.get("alpaca_account_number") or "Paper")
-                    strat_nm = str(p_log.get("strategy_name") or p_log.get("strategy_id") or "")
                     entries_list = p_log.get("executed_or_queued") or []
                     ratchets_list = p_log.get("ratchets_and_exits") or []
                     holds_list = p_log.get("active_holdings_plan") or []
                     skips_list = p_log.get("skipped_reasons") or []
 
-                    notable_vetoes = [
-                        s for s in skips_list if str(s.get("category", "")) != "NO_TECHNICAL_SIGNAL"
-                    ]
-                    quiet_skips = [
-                        s for s in skips_list if str(s.get("category", "")) == "NO_TECHNICAL_SIGNAL"
-                    ]
+                    notable_vetoes = [s for s in skips_list if str(s.get("category", "")) != "NO_TECHNICAL_SIGNAL"]
+                    quiet_skips = [s for s in skips_list if str(s.get("category", "")) == "NO_TECHNICAL_SIGNAL"]
 
                     is_shadow_log = str(p_log.get("broker_mode") or "").startswith("SHADOW_POD")
                     if is_shadow_log:
-                        status_pill = (
-                            "<span style='background:rgba(245,158,11,0.16);color:#fbbf24;padding:3px 10px;"
-                            "border-radius:999px;font-size:0.74rem;font-weight:700;'>"
-                            "🧪 SHADOW SIMULATION (Pre-Account Link)</span>"
-                        )
+                        status_txt = "Simulated (before Alpaca account link)"
                     elif entries_list:
-                        status_pill = (
-                            f"<span style='background:rgba(16,185,129,0.20);color:#34d399;padding:3px 10px;"
-                            f"border-radius:999px;font-size:0.75rem;font-weight:700;'>"
-                            f"🟢 {len(entries_list)} ALPACA ORDER(S) PLACED / FILLED</span>"
-                        )
+                        status_txt = f"{len(entries_list)} order(s) placed or filled"
                     elif holds_list:
-                        status_pill = (
-                            f"<span style='background:rgba(56,189,248,0.18);color:#38bdf8;padding:3px 10px;"
-                            f"border-radius:999px;font-size:0.75rem;font-weight:700;'>"
-                            f"🛡️ HOLDING {len(holds_list)} POSITION(S) · 0 NEW ENTRIES</span>"
-                        )
+                        status_txt = f"Holding {len(holds_list)} position(s) · No new trades"
                     else:
-                        status_pill = (
-                            "<span style='background:rgba(148,163,184,0.16);color:#cbd5e1;padding:3px 10px;"
-                            "border-radius:999px;font-size:0.75rem;font-weight:600;'>"
-                            "⏸️ STOOD ASIDE (100% CASH)</span>"
+                        status_txt = "No trades (100% cash)"
+
+                    rows_html: List[str] = []
+                    for e in entries_list:
+                        e_side = str(e.get("side") or "LONG").upper()
+                        e_act = "Sell Short" if e_side == "SHORT" else "Buy"
+                        e_tkr = str(e.get("ticker") or "")
+                        e_shs = int(e.get("shares") or 0)
+                        e_lim = float(e.get("max_chase_price") or e.get("live_price") or e.get("reference_close_price") or 0.0)
+                        e_stop = float(e.get("stop_loss_price") or 0.0)
+                        e_tp = float(e.get("take_profit_price") or 0.0)
+                        e_cost = float(e.get("estimated_cost_usd") or (e_shs * e_lim))
+                        e_stat = _plain_english_order_status(str(e.get("order_status") or ""), e_lim)
+                        e_why = _plain_english_reason(
+                            str(e.get("technical_trigger") or ""),
+                            side=e_side,
+                            ai_sent=float(e.get("ai_catalyst_sentiment") or 0.0),
+                        )
+                        rows_html.append(
+                            f"<div style='padding:10px 0;border-top:1px solid rgba(255,255,255,0.06);'>"
+                            f"<div style='display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px;'>"
+                            f"<div><strong style='color:#f8fafc;font-size:0.90rem;'>{html.escape(e_tkr)}</strong> "
+                            f"<span style='color:#94a3b8;font-size:0.82rem;'>{e_act} {e_shs} shares · ${e_cost:,.0f}</span></div>"
+                            f"<div style='font-size:0.80rem;color:#e2e8f0;font-variant-numeric:tabular-nums;'>{html.escape(e_stat)}</div>"
+                            f"</div>"
+                            f"<div style='font-size:0.79rem;color:#94a3b8;margin-top:4px;font-variant-numeric:tabular-nums;'>"
+                            f"Entry limit ${e_lim:,.2f} &nbsp;·&nbsp; Stop-Loss ${e_stop:,.2f} &nbsp;·&nbsp; Profit Target ${e_tp:,.2f}"
+                            f"</div>"
+                            f"<div style='font-size:0.79rem;color:#8b95a5;margin-top:3px;'>{html.escape(e_why)}</div>"
+                            f"</div>"
                         )
 
-                    with st.container(border=True):
-                        st.markdown(
-                            f"<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:6px;'>"
-                            f"<div><strong style='font-size:0.95rem;color:#f8fafc;'>{html.escape(p_disp)}</strong> "
-                            f"<span style='color:#94a3b8;font-size:0.8rem;'>(<code>{html.escape(acct_str)}</code> · {html.escape(strat_nm)})</span></div>"
-                            f"<div>{status_pill}</div></div>",
-                            unsafe_allow_html=True,
+                    for r_act in ratchets_list:
+                        rows_html.append(
+                            f"<div style='padding:8px 0;border-top:1px solid rgba(255,255,255,0.06);font-size:0.80rem;color:#cbd5e1;'>"
+                            f"<strong>{html.escape(str(r_act.get('ticker', '')))}</strong> — Stop-Loss raised from "
+                            f"${float(r_act.get('old_stop_price') or 0):,.2f} to ${float(r_act.get('new_stop_price') or 0):,.2f} to lock in gains."
+                            f"</div>"
                         )
 
-                        # 1. New Orders Executed / Queued on this day — Clear Entry & 4-Step Exit Numbers + Concise Explanation
-                        if entries_list:
-                            st.markdown("**1 · New Orders Placed / Filled — Entry & Exit Strategy Numbers:**")
-                            for e in entries_list:
-                                e_side = str(e.get("side") or "LONG").upper()
-                                e_tkr = str(e.get("ticker") or "")
-                                e_sec = str(e.get("sector") or "")
-                                e_shs = int(e.get("shares") or 0)
-                                e_ref = float(e.get("reference_close_price") or e.get("live_price") or 0.0)
-                                e_live = float(e.get("live_price") or e_ref)
-                                e_lim = float(e.get("max_chase_price") or e_live or e_ref)
-                                e_zone = str(e.get("buy_zone_str") or f"<= ${e_lim:.2f}")
-                                e_stat = str(e.get("order_status") or "QUEUED")
-                                e_cost = float(e.get("estimated_cost_usd") or (e_shs * e_lim))
-                                e_wt = float(e.get("portfolio_weight_pct") or (e_cost / 1000.0))
-                                e_risk = float(e.get("risk_usd") or 0.0)
-                                e_risk_pct = float(e.get("risk_pct") or 1.0)
-                                e_max_d = int(e.get("max_hold_days") or 15)
-                                e_trig = str(e.get("technical_trigger") or e.get("signal_reason") or "")
-                                e_cat_sent = float(e.get("ai_catalyst_sentiment") or 0.0)
-                                e_cat_note = str(e.get("ai_catalyst_note") or "")
-                                e_guide = str(e.get("pre_open_guidance") or "")
-
-                                ladder = _compute_exit_ladder_numbers(
-                                    side=e_side,
-                                    entry_px=e_ref if e_ref > 0 else e_lim,
-                                    init_stop_px=float(e.get("stop_loss_price") or 0.0),
-                                    cur_stop_px=float(e.get("stop_loss_price") or 0.0),
-                                    stage1_trigger_px=float(e.get("stage1_ratchet_price") or 0.0),
-                                    stage1_stop_px=float(e.get("stage1_stop_price") or 0.0),
-                                    stage2_trigger_px=float(e.get("stage2_ratchet_price") or 0.0),
-                                    stage2_stop_px=float(e.get("stage2_stop_price") or 0.0),
-                                    target_px=float(e.get("take_profit_price") or 0.0),
-                                )
-                                rr_val = float(e.get("reward_risk_ratio") or ladder["rr"])
-                                dir_tag = "🟢 LONG" if e_side == "LONG" else "🔴 SHORT"
-                                stat_col = "#34d399" if "FILLED" in e_stat.upper() else "#38bdf8"
-                                cap_lbl = "Short Limit Floor" if e_side == "SHORT" else "Buy Limit Cap"
-
-                                exit_grid_html = _render_four_step_exit_grid_html(
-                                    stop_px=ladder["cur_stop"],
-                                    stop_sub=f"1R Risk = ${e_risk:,.0f} ({e_risk_pct:.2f}% pod)",
-                                    s1_trig=ladder["s1_trig"],
-                                    s1_lock=ladder["s1_lock"],
-                                    s2_trig=ladder["s2_trig"],
-                                    s2_lock=ladder["s2_lock"],
-                                    tp_px=ladder["tp"],
-                                    tp_sub=f"{rr_val:.1f}R Target · Max {e_max_d}d Hold",
-                                )
-
-                                news_clause = (
-                                    f" · <strong>News ({e_cat_sent:+.2f}):</strong> {html.escape(e_cat_note[:125])}"
-                                    if e_cat_note
-                                    else f" · <strong>News ({e_cat_sent:+.2f}):</strong> Clear (no adverse catalyst)"
-                                )
-                                exec_clause = (
-                                    f"<div style='color:#94a3b8;font-size:0.77rem;margin-top:2px;'>"
-                                    f"<strong>Execution Plan:</strong> {html.escape(e_guide)}</div>"
-                                    if e_guide
-                                    else ""
-                                )
-
-                                st.markdown(
-                                    f"<div style='padding:10px 13px;margin:7px 0;background:rgba(15,23,42,0.58);"
-                                    f"border:1px solid rgba(148,163,184,0.16);border-left:3px solid {stat_col};"
-                                    f"border-radius:7px;font-size:0.82rem;'>"
-                                    f"<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;'>"
-                                    f"<div><strong style='font-size:0.9rem;color:#f8fafc;'>{dir_tag} {html.escape(e_tkr)}</strong> "
-                                    f"<span style='color:#94a3b8;'>({html.escape(e_sec)})</span> · "
-                                    f"<code>{e_shs} shs</code> · Value <code>${e_cost:,.0f}</code> (<code>{e_wt:.1f}%</code> pod)</div>"
-                                    f"<span style='color:{stat_col};font-weight:700;'>{html.escape(e_stat)}</span></div>"
-                                    f"<div style='margin-top:5px;color:#e2e8f0;'>"
-                                    f"<strong>Entry Numbers:</strong> Signal Close <code>${e_ref:.2f}</code> · "
-                                    f"Entry Zone <code>{html.escape(e_zone)}</code> · "
-                                    f"{cap_lbl} <code>${e_lim:.2f}</code> · Quote <code>${e_live:.2f}</code></div>"
-                                    f"{exit_grid_html}"
-                                    f"<div style='color:#cbd5e1;font-size:0.79rem;margin-top:3px;'>"
-                                    f"<strong>Why Entered:</strong> {html.escape(e_trig)}{news_clause}</div>"
-                                    f"{exec_clause}"
-                                    f"</div>",
-                                    unsafe_allow_html=True,
-                                )
-                        else:
-                            st.caption(f"**Why 0 New Entries:** {p_log.get('summary_headline', 'No new setups passed all entry & risk gates.')}")
-
-                        # 2. Stop Ratchets & Exits on this day
-                        if ratchets_list:
-                            st.markdown("**2 · Stop-Loss Ratchets & Exits Triggered:**")
-                            for r_act in ratchets_list:
-                                st.markdown(
-                                    f"- **{r_act.get('action', 'RATCHET')} · `{r_act.get('ticker', '')}`**: "
-                                    f"Stop `${float(r_act.get('old_stop_price') or 0):.2f}` → **`${float(r_act.get('new_stop_price') or 0):.2f}`** "
-                                    f"({r_act.get('reason', '')})"
-                                )
-
-                        # 3. Open Positions Held on this day — Scannable Entry/Current/Stop/Target/Day Numbers
-                        if holds_list:
-                            hold_rows_html: List[str] = []
-                            for h in holds_list:
-                                h_tkr = str(h.get("ticker", ""))
-                                h_side = str(h.get("side", "LONG")).upper()
-                                h_qty = int(h.get("quantity") or h.get("qty") or 0)
-                                h_avg = float(h.get("avg_entry_price") or 0.0)
-                                h_cur = float(h.get("current_price") or h_avg)
-                                h_ret = float(h.get("unrealised_return_pct") or 0.0)
-                                h_r = float(h.get("r_multiple") or 0.0)
-                                h_stop = float(h.get("current_stop_price") or 0.0)
-                                h_tp = float(h.get("take_profit_price") or 0.0)
-                                h_s1 = float(h.get("stage1_ratchet_price") or 0.0)
-                                h_day = int(h.get("holding_days") or 0)
-                                h_max_d = int(h.get("max_hold_days") or 15)
-                                h_stage = str(h.get("stop_stage_label") or "Initial -1R Stop")
-                                h_col = "#34d399" if h_ret >= 0 else "#f87171"
-                                hold_rows_html.append(
-                                    f"<div style='background:rgba(30,41,59,0.72);border:1px solid rgba(148,163,184,0.18);"
-                                    f"border-radius:6px;padding:6px 10px;margin:4px 0;font-size:0.79rem;"
-                                    f"display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;'>"
-                                    f"<div><strong>{html.escape(h_tkr)}</strong> ({h_side} <code>{h_qty} shs</code>) · "
-                                    f"Entry <code>${h_avg:.2f}</code> → Now <code>${h_cur:.2f}</code> "
-                                    f"(<span style='color:{h_col};font-weight:700;'>{h_ret:+.2f}% / {h_r:+.2f}R</span>)</div>"
-                                    f"<div style='color:#cbd5e1;'>"
-                                    f"Active Stop <code>${h_stop:.2f}</code> <span style='color:#94a3b8;'>[{html.escape(h_stage)}]</span> · "
-                                    f"1.0R BE <code>${h_s1:.2f}</code> · Target <code>${h_tp:.2f}</code> · "
-                                    f"<code>Day {h_day}/{h_max_d}</code></div>"
-                                    f"</div>"
-                                )
-                            st.markdown(
-                                f"<div style='margin-top:8px;'><div style='font-size:0.8rem;color:#94a3b8;font-weight:600;margin-bottom:3px;'>"
-                                f"Active Holdings Guarded ({len(holds_list)}):</div>{''.join(hold_rows_html)}</div>",
-                                unsafe_allow_html=True,
+                    if holds_list:
+                        hold_lines: List[str] = []
+                        for h in holds_list:
+                            h_tkr = str(h.get("ticker") or "")
+                            h_qty = abs(int(h.get("quantity") or h.get("qty") or 0))
+                            h_avg = float(h.get("avg_entry_price") or 0.0)
+                            h_cur = float(h.get("current_price") or h_avg)
+                            h_ret = float(h.get("unrealised_return_pct") or 0.0)
+                            h_stop = float(h.get("current_stop_price") or 0.0)
+                            h_tp = float(h.get("take_profit_price") or 0.0)
+                            h_cls = _pnl_class(h_ret)
+                            hold_lines.append(
+                                f"<div style='display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;padding:5px 0;font-size:0.79rem;font-variant-numeric:tabular-nums;'>"
+                                f"<span style='color:#cbd5e1;'><strong style='color:#f1f5f9;'>{html.escape(h_tkr)}</strong> · {h_qty} shs · Entry ${h_avg:,.2f} → ${h_cur:,.2f} "
+                                f"(<span class='{h_cls}'>{h_ret:+.2f}%</span>)</span>"
+                                f"<span style='color:#8b95a5;'>Stop ${h_stop:,.2f} · Target ${h_tp:,.2f}</span>"
+                                f"</div>"
                             )
+                        rows_html.append(
+                            f"<div style='padding-top:8px;margin-top:4px;border-top:1px solid rgba(255,255,255,0.06);'>"
+                            f"<div class='md-label' style='margin-bottom:4px;'>Positions Held ({len(holds_list)})</div>"
+                            f"{''.join(hold_lines)}</div>"
+                        )
 
-                        if notable_vetoes:
-                            with st.expander(
-                                f"🚫 {len(notable_vetoes)} Triggered Signal(s) Blocked by News / Risk Guardrails on {dt_key}",
-                                expanded=(day_idx == 0 and len(notable_vetoes) <= 6),
-                            ):
-                                for nv in notable_vetoes:
-                                    nv_badge = str(nv.get("status_badge") or nv.get("category") or "Vetoed")
-                                    is_news = "NEWS" in nv_badge.upper() or "AI" in str(nv.get("category", "")).upper()
-                                    b_col = "#f87171" if is_news else "#fbbf24"
-                                    st.markdown(
-                                        f"<div style='padding:5px 10px;margin-bottom:4px;background:rgba(15,23,42,0.45);"
-                                        f"border-left:3px solid {b_col};border-radius:4px;font-size:0.8rem;'>"
-                                        f"<strong>{html.escape(str(nv.get('ticker', '')))}</strong> "
-                                        f"(<span style='color:{b_col};font-weight:600;'>{html.escape(nv_badge)}</span>) — "
-                                        f"{html.escape(str(nv.get('reason', '')))}</div>",
-                                        unsafe_allow_html=True,
-                                    )
-
-                        if quiet_skips:
-                            with st.expander(f"🔎 View {len(quiet_skips)} Stocks That Did Not Trigger Technical Entry Rules ({dt_key})"):
-                                st.dataframe(
-                                    [
-                                        {
-                                            "Ticker": qs.get("ticker", ""),
-                                            "Sector": qs.get("sector", ""),
-                                            "Price": f"${float(qs.get('live_price') or 0):.2f}",
-                                            "Why Entry Rules Did Not Fire": qs.get("technical_summary") or qs.get("reason", ""),
-                                        }
-                                        for qs in quiet_skips
-                                    ],
-                                    use_container_width=True,
-                                    hide_index=True,
-                                )
-
-            if rendered_days == 0:
-                st.info("No journal days matched your current Pod / Ticker filter.")
-
-    # =========================================================================
-    # TAB 2: ACTIVE HOLDINGS & EXIT PLANS (NUMBERS + CONCISE EXPLANATIONS)
-    # =========================================================================
-    with tab2:
-        if all_working_entry_orders:
-            st.markdown(f"#### ⏳ Working / Queued Entry Bracket Orders on Alpaca ({len(all_working_entry_orders)})")
-            for wo in all_working_entry_orders:
-                w_tkr = str(wo.get("ticker") or "")
-                w_side = "SHORT" if str(wo.get("side") or "BUY").upper() == "SELL" else "LONG"
-                w_qty = int(wo.get("qty") or 0)
-                w_lim = float(wo.get("limit_price") or 0.0)
-                w_stop = float(wo.get("stop_price") or 0.0)
-                w_tp = float(wo.get("take_profit_price") or 0.0)
-                w_val = round(w_qty * w_lim, 2)
-                w_risk = round(abs(w_lim - w_stop) * w_qty, 2) if w_stop > 0 else 0.0
-                w_st = str(wo.get("status") or "ACCEPTED")
-                w_pod = str(wo.get("_pod_name") or "")
-                w_acct = str(wo.get("_account_number") or "")
-                w_dir = "🟢 BUY LONG" if w_side == "LONG" else "🔴 SELL SHORT"
-                st.markdown(
-                    f"<div style='background:rgba(15,23,42,0.58);border:1px solid rgba(56,189,248,0.28);"
-                    f"border-left:4px solid #38bdf8;border-radius:8px;padding:10px 14px;margin-bottom:8px;font-size:0.83rem;'>"
-                    f"<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;'>"
-                    f"<div><strong style='font-size:0.92rem;color:#f8fafc;'>{w_dir} · {html.escape(w_tkr)}</strong> "
-                    f"(<code>{w_qty} shs</code> · Est. Notional <code>${w_val:,.0f}</code> · 1R Risk <code>${w_risk:,.0f}</code>) — "
-                    f"<span style='color:#94a3b8;'>{html.escape(w_pod)} (<code>{html.escape(w_acct)}</code>)</span></div>"
-                    f"<span style='background:rgba(56,189,248,0.16);color:#38bdf8;padding:2px 9px;border-radius:999px;font-size:0.74rem;font-weight:700;'>"
-                    f"WORKING ON ALPACA ({html.escape(w_st)})</span></div>"
-                    f"<div style='margin-top:5px;color:#cbd5e1;'>"
-                    f"<strong>Exact Alpaca Bracket Numbers:</strong> Entry Limit <code>${w_lim:.2f}</code> &nbsp;·&nbsp; "
-                    f"Attached Stop-Loss <code>${w_stop:.2f}</code> &nbsp;·&nbsp; "
-                    f"Attached Take-Profit <code>${w_tp:.2f}</code></div>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-            st.markdown("---")
-
-        if all_open_holdings:
-            st.markdown(f"#### 🛡️ Live Alpaca Paper Positions — Entry & 4-Step Exit Strategy Numbers ({len(all_open_holdings)})")
-            for pos in all_open_holdings:
-                tkr = str(pos.get("ticker", ""))
-                side = str(pos.get("side", "LONG")).upper()
-                sec = str(pos.get("sector") or "")
-                qty = int(pos.get("quantity") or pos.get("qty") or 0)
-                avg_px = float(pos.get("avg_entry_price") or pos.get("entry_price") or 0.0)
-                cur_px = float(pos.get("current_price") or pos.get("live_price") or avg_px)
-                mkt_val = abs(qty * cur_px)
-                entry_dt = str(pos.get("entry_date") or session_dt)
-                hold_d = int(pos.get("holding_days") or 0)
-                max_d = int(pos.get("max_hold_days") or 15)
-                u_pnl = float(
-                    pos.get("unrealised_pnl")
-                    if pos.get("unrealised_pnl") is not None
-                    else (pos.get("unrealised_pnl_usd") if pos.get("unrealised_pnl_usd") is not None else (pos.get("unrealized_pl") or 0.0))
-                )
-                u_pct = float(
-                    pos.get("unrealised_return_pct")
-                    if pos.get("unrealised_return_pct") is not None
-                    else (pos.get("unrealised_pnl_pct") if pos.get("unrealised_pnl_pct") is not None else (pos.get("unrealized_plpc") or 0.0))
-                )
-
-                ladder = _compute_exit_ladder_numbers(
-                    side=side,
-                    entry_px=avg_px,
-                    init_stop_px=float(pos.get("initial_stop_price") or pos.get("current_stop_price") or 0.0),
-                    cur_stop_px=float(pos.get("current_stop_price") or pos.get("stop_loss_price") or 0.0),
-                    stage1_trigger_px=float(pos.get("stage1_ratchet_price") or 0.0),
-                    stage1_stop_px=float(pos.get("stage1_stop_price") or 0.0),
-                    stage2_trigger_px=float(pos.get("stage2_ratchet_price") or 0.0),
-                    stage2_stop_px=float(pos.get("stage2_stop_price") or 0.0),
-                    target_px=float(pos.get("take_profit_price") or 0.0),
-                )
-                stop_px = ladder["cur_stop"]
-                tp_px = ladder["tp"]
-                one_r = ladder["one_r"]
-
-                r_mult = float(
-                    pos.get("r_multiple")
-                    if pos.get("r_multiple") is not None
-                    else (((cur_px - avg_px) / one_r) if side == "LONG" else ((avg_px - cur_px) / one_r))
-                )
-                prog_val = max(0.0, min(1.0, (r_mult + 1.0) / 3.5))
-
-                has_oco = bool(pos.get("oco_bracket_active") or pos.get("has_live_oco_bracket"))
-                stop_stage_lbl = str(pos.get("stop_stage_label") or "Initial -1.0R Hard Stop")
-                entry_thesis = str(pos.get("entry_thesis") or f"{pos.get('strategy_name', 'Pod Strategy')} technical & relative-strength entry.")
-
-                if cur_px > 0:
-                    dist_stop_pct = ((stop_px - cur_px) / cur_px) * 100.0
-                    dist_tp_pct = ((tp_px - cur_px) / cur_px) * 100.0
-                else:
-                    dist_stop_pct, dist_tp_pct = 0.0, 0.0
-
-                dir_pill = "🟢 LONG" if side == "LONG" else "🔴 SHORT"
-                oco_pill = "✅ Live GTC OCO Active" if has_oco else "⚠️ Self-Healing OCO On Next Sync"
-                pnl_txt = f"${u_pnl:+,.2f} ({u_pct:+.2f}%)"
-
-                with st.container(border=True):
-                    hc1, hc2, hc3, hc4 = st.columns([1.55, 1.05, 1.15, 1.25])
-                    hc1.markdown(
-                        f"**{dir_pill} · {tkr}** (`{qty} shs` · `${mkt_val:,.0f}`)\n\n"
-                        f"{pos.get('_pod_name', '')} (`{pos.get('_account_number', '')}`) · Entered `{entry_dt}`"
-                    )
-                    hc2.metric("Entry → Current", f"${cur_px:.2f}", f"Avg Entry ${avg_px:.2f}")
-                    hc3.metric("Unrealized P&L", pnl_txt, f"{r_mult:+.2f}R")
-                    hc4.markdown(
-                        f"**Protection:** {oco_pill}\n\n"
-                        f"**Stage:** `{stop_stage_lbl}` · **Hold:** `Day {hold_d}/{max_d}`"
-                    )
+                    if not entries_list and not holds_list:
+                        rows_html.append(
+                            "<div style='font-size:0.79rem;color:#64748b;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05);'>"
+                            "No stocks in the 40-stock universe met all entry and risk criteria today."
+                            "</div>"
+                        )
 
                     st.markdown(
-                        _render_four_step_exit_grid_html(
-                            stop_px=stop_px,
-                            stop_sub=f"{dist_stop_pct:+.2f}% from current (Init ${ladder['init_stop']:.2f})",
-                            s1_trig=ladder["s1_trig"],
-                            s1_lock=ladder["s1_lock"],
-                            s2_trig=ladder["s2_trig"],
-                            s2_lock=ladder["s2_lock"],
-                            tp_px=tp_px,
-                            tp_sub=f"{dist_tp_pct:+.2f}% to target · Exit Day {max_d}",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-
-                    st.progress(
-                        prog_val,
-                        text=(
-                            f"R-Multiple Progress: {r_mult:+.2f}R  |  "
-                            f"Stop ${stop_px:.2f}  →  +1.0R BE ${ladder['s1_trig']:.2f}  →  "
-                            f"+1.65R Lock ${ladder['s2_trig']:.2f}  →  Target ${tp_px:.2f}"
-                        ),
-                    )
-
-                    exit_action_word = "Buy-to-Cover" if side == "SHORT" else "Sell"
-                    news_exit_thresh = ">= +0.50 bullish squeeze" if side == "SHORT" else "<= -0.50 bearish shock"
-                    st.markdown(
-                        f"<div style='background:rgba(15,23,42,0.45);border-radius:6px;padding:7px 11px;font-size:0.8rem;color:#cbd5e1;'>"
-                        f"<div><strong>Why Entered:</strong> {html.escape(entry_thesis)}"
-                        f"{(' (' + html.escape(sec) + ')') if sec else ''}</div>"
-                        f"<div style='margin-top:3px;color:#94a3b8;'><strong>Plain-English Exit Plan:</strong> "
-                        f"Alpaca holds a live GTC OCO bracket to {exit_action_word} automatically at <code>${tp_px:.2f}</code> (profit target) "
-                        f"or <code>${stop_px:.2f}</code> (active stop). Stop ratchets automatically to <code>${ladder['s1_lock']:.2f}</code> "
-                        f"at <code>${ladder['s1_trig']:.2f}</code> (+1.0R) and locks +1.0R profit (<code>${ladder['s2_lock']:.2f}</code>) at "
-                        f"<code>${ladder['s2_trig']:.2f}</code> (+1.65R). Exits early on adverse news ({news_exit_thresh}) or Day <code>{max_d}</code> time-stop.</div>"
+                        f"<div class='md-surface'>"
+                        f"<div style='display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px;margin-bottom:6px;'>"
+                        f"<div><span style='font-size:0.90rem;font-weight:600;color:#f8fafc;'>{html.escape(p_disp)}</span>"
+                        f"<span style='font-size:0.76rem;color:#64748b;margin-left:8px;font-family:monospace;'>{html.escape(acct_str)}</span></div>"
+                        f"<div style='font-size:0.78rem;color:#94a3b8;'>{html.escape(status_txt)}</div>"
+                        f"</div>"
+                        f"{''.join(rows_html)}"
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-        else:
-            st.info("No open positions across the 3 Alpaca Paper accounts right now (`100% Cash`).")
 
-        st.markdown("---")
-        oc1, oc2 = st.columns([1.15, 1.25])
-        with oc1:
-            st.markdown("##### 📋 Live & Recent Alpaca Broker Orders")
-            if all_broker_orders:
-                st.dataframe(
-                    [
-                        {
-                            "Bucket": o.get("_bucket", ""),
-                            "Account": o.get("_account_number", ""),
-                            "Ticker": o.get("ticker") or o.get("symbol", ""),
-                            "Side": str(o.get("side", "")).upper(),
-                            "Class": o.get("order_class", ""),
-                            "Qty": o.get("qty", ""),
-                            "Entry / Fill $": (
-                                f"${float(o['filled_avg_price']):.2f}"
-                                if o.get("filled_avg_price")
-                                else (
-                                    f"${float(o['limit_price']):.2f}"
-                                    if (o.get("limit_price") and str(o.get("order_class", "")).upper() not in ("OCO", "BRACKET_EXIT"))
-                                    else "—"
+                    if notable_vetoes:
+                        with st.expander(f"{p_disp} — {len(notable_vetoes)} setup(s) skipped by safety rules ({dt_key})", expanded=False):
+                            for nv in notable_vetoes:
+                                st.markdown(
+                                    f"- **{nv.get('ticker', '')}**: {_plain_english_skip_reason(str(nv.get('reason', '')), str(nv.get('status_badge', '')))}"
                                 )
-                            ),
-                            "Stop $": f"${float(o['stop_price']):.2f}" if o.get("stop_price") else "—",
-                            "Target $": f"${float(o['take_profit_price']):.2f}" if o.get("take_profit_price") else "—",
-                            "Status": o.get("status", ""),
-                        }
-                        for o in all_broker_orders[:40]
-                    ],
-                    use_container_width=True,
-                    hide_index=True,
-                )
-            else:
-                st.caption("No open or recent broker orders recorded yet.")
 
-        with oc2:
-            st.markdown("##### 📐 3-Pod Entry & Exit Strategy Rules Cheat-Sheet")
-            st.markdown(_render_pod_rules_cheatsheet_html(pods_list), unsafe_allow_html=True)
+                    if quiet_skips:
+                        with st.expander(f"{p_disp} — {len(quiet_skips)} stocks did not meet entry criteria ({dt_key})", expanded=False):
+                            st.dataframe(
+                                [
+                                    {
+                                        "Ticker": qs.get("ticker", ""),
+                                        "Sector": qs.get("sector", ""),
+                                        "Close": f"${float(qs.get('live_price') or 0):,.2f}",
+                                        "Detail": qs.get("technical_summary") or qs.get("reason", ""),
+                                    }
+                                    for qs in quiet_skips
+                                ],
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+
+            if rendered_days == 0:
+                st.caption("No journal days matched your filter.")
 
     # =========================================================================
-    # TAB 3: STRATEGY TOURNAMENT & MISTAKE ANALYZER
+    # TAB 3: PERFORMANCE & SYSTEM
     # =========================================================================
     with tab3:
-        if latest_weekly_job:
-            ws = latest_weekly_job.get("summary") or {}
-            w_cands = ws.get("tournament_candidates") or ([] if not ws.get("candidate_strategy_id") else [ws])
-            w_prom = sum(1 for c in w_cands if c.get("promoted"))
-            w_time = _format_sgt_timestamp(str(latest_weekly_job.get("completed_at") or latest_weekly_job.get("started_at") or ""))
-            w_end = str(ws.get("week_ending_date") or session_dt)
-            cand_badges = " &nbsp;·&nbsp; ".join(
-                f"<code>{html.escape(str(c.get('candidate_strategy_id', '')))} v{c.get('candidate_version', '')}</code> "
-                f"({'🟢 PROMOTED' if c.get('promoted') else '🛡️ REJECTED vs v1 Champion'})"
-                for c in w_cands
-            )
-            st.markdown(
-                f"<div style='background:rgba(15,23,42,0.62);border:1px solid rgba(56,189,248,0.28);"
-                f"border-left:4px solid #10b981;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:0.82rem;'>"
-                f"<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;'>"
-                f"<div><strong style='color:#f8fafc;font-size:0.9rem;'>🗓️ Latest Weekly Self-Improvement Tournament</strong> "
-                f"<span style='color:#94a3b8;'>(Week Ending <code>{html.escape(w_end)}</code> · Executed <code>{html.escape(w_time)}</code>)</span></div>"
-                f"<span style='background:rgba(16,185,129,0.18);color:#34d399;padding:2px 9px;border-radius:999px;font-size:0.74rem;font-weight:700;'>"
-                f"✅ COMPLETED · {len(w_cands)} TESTED · {w_prom} PROMOTED</span></div>"
-                f"<div style='margin-top:5px;color:#cbd5e1;'>{cand_badges or 'All active v1 Golden Champions retained.'}</div>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
+        latest_weekly_job = next(
+            (j for j in jobs if j.get("job_name") == "weekly_research_and_validation"),
+            None,
+        )
+        last_weekly_sgt = (
+            _format_sgt_timestamp(str(latest_weekly_job.get("completed_at") or latest_weekly_job.get("started_at") or ""))
+            if latest_weekly_job
+            else "Scheduled Sat 10:00 AM SGT"
+        )
 
-        st.markdown("#### 🏆 9-Gate Strategy Leaderboard (6 Long & Short Strategy Families)")
+        # 1. Clean 3-Column Autonomous Schedule Strip
+        st.markdown(
+            f"<div class='md-acct-grid' style='margin-top:8px;'>"
+            f"<div class='md-acct-card'>"
+            f"<div class='md-label'>Daily Automated Runs (Mon–Fri)</div>"
+            f"<div style='font-size:0.84rem;color:#e2e8f0;margin-top:4px;font-weight:500;'>5:30 AM · 9:00/10:00 PM · 9:35/10:35 PM SGT</div>"
+            f"<div style='font-size:0.76rem;color:#8b95a5;margin-top:4px;line-height:1.4;'>Scans closing prices, checks pre-market news &amp; gaps, and manages Alpaca orders automatically.</div>"
+            f"</div>"
+            f"<div class='md-acct-card'>"
+            f"<div class='md-label'>Weekly Strategy Review (Sat 10:00 AM SGT)</div>"
+            f"<div style='font-size:0.84rem;color:#e2e8f0;margin-top:4px;font-weight:500;'>Last Run: {html.escape(last_weekly_sgt)}</div>"
+            f"<div style='font-size:0.76rem;color:#8b95a5;margin-top:4px;line-height:1.4;'>Tests new strategy variations against 2.3 years of data; replaces an active strategy only if it outperforms.</div>"
+            f"</div>"
+            f"<div class='md-acct-card'>"
+            f"<div class='md-label'>Universe &amp; Risk Guardrails</div>"
+            f"<div style='font-size:0.84rem;color:#e2e8f0;margin-top:4px;font-weight:500;'>{len(universe_meta)} Liquid US Stocks · Paper Mode</div>"
+            f"<div style='font-size:0.76rem;color:#8b95a5;margin-top:4px;line-height:1.4;'>Every position has an automatic Stop-Loss and Profit Target on Alpaca with ~1% risk per trade.</div>"
+            f"</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        # 2. Active Strategy Track Record (Active PAPER_TRADING strategies first, clean labels)
+        st.markdown(
+            "<div style='font-size:0.88rem;font-weight:600;color:#e2e8f0;margin:8px 0 10px 0;'>"
+            "Active Strategy Historical Track Record (2.3-Year Backtest)</div>",
+            unsafe_allow_html=True,
+        )
+        active_strats = [s for s in strategies if str(s.get("status", "")).upper() == "PAPER_TRADING"]
+        display_strats = active_strats if active_strats else strategies
         strat_rows = []
-        for s in strategies:
+        for s in display_strats:
             m = s.get("backtest_summary") or {}
             val = s.get("validation_summary") or {}
             oos = val.get("oos_metrics") or {}
-            checks = val.get("criteria_checks") or {}
-            passed = sum(1 for v in checks.values() if v)
-            total_g = len(checks) if checks else 9
             strat_rows.append(
                 {
-                    "Strategy": f"{s['strategy_id']} v{s['version']}",
-                    "Name": s.get("name", ""),
-                    "Family": s.get("strategy_family", ""),
-                    "Status": s.get("status", ""),
-                    "Gates": f"{passed}/{total_g}" if m else "Ready to Test",
-                    "Full Return": f"{float(m.get('total_return_pct', 0.0)):+.1f}%" if m else "—",
-                    "OOS Return": f"{float(oos.get('total_return_pct', 0.0)):+.1f}%" if oos else "—",
-                    "Sharpe": f"{float(m.get('sharpe_ratio', 0.0)):.2f}" if m else "—",
-                    "Profit Factor": f"{float(m.get('profit_factor', 0.0)):.2f}" if m else "—",
-                    "Max DD": f"-{float(m.get('max_drawdown_pct', 0.0)):.2f}%" if m else "—",
-                    "Trades": int(m.get("trade_count", 0)) if m else 0,
+                    "Strategy": s.get("name", s.get("strategy_id", "")),
+                    "Direction": "Short" if "BEARISH" in str(s.get("strategy_family", "")).upper() else "Long",
+                    "2.3-Yr Return": f"{float(m.get('total_return_pct', 0.0)):+.1f}%" if m else "—",
+                    "Recent Test Return": f"{float(oos.get('total_return_pct', 0.0)):+.1f}%" if oos else "—",
+                    "Win Rate": f"{float(m.get('win_rate_pct', 0.0)):.1f}%" if m and m.get("win_rate_pct") is not None else "—",
+                    "Worst Historical Drop": f"-{float(m.get('max_drawdown_pct', 0.0)):.1f}%" if m else "—",
+                    "Sample Trades": int(m.get("trade_count", 0)) if m else 0,
                 }
             )
         if strat_rows:
             st.dataframe(strat_rows, use_container_width=True, hide_index=True)
 
-        if experiments:
-            with st.expander("📈 Inspect Strategy Backtest Equity Curve & Machine-Readable Rules", expanded=False):
-                exp_opts = {
-                    f"{e['strategy_id']} v{e['version']} ({e['experiment_type']} · {e['created_at'][:10]})": e
-                    for e in experiments[:20]
-                }
-                sel_exp_lbl = st.selectbox("Select Backtest Experiment", options=list(exp_opts.keys()))
-                sel_exp = exp_opts[sel_exp_lbl]
-                eq_svg = _render_equity_curve_svg(sel_exp.get("equity_curve") or [])
-                if eq_svg:
-                    st.markdown(eq_svg, unsafe_allow_html=True)
-                st.json(sel_exp.get("parameters") or {})
-
-        st.markdown("---")
-        st.markdown("#### 🧠 Post-Trade Attribution & Autonomous Mistake Analyzer")
+        # 3. Closed Trade Review
+        st.markdown(
+            "<div style='font-size:0.88rem;font-weight:600;color:#e2e8f0;margin:20px 0 10px 0;'>"
+            "Closed Trade Review</div>",
+            unsafe_allow_html=True,
+        )
         tot_closed = int(mistake_analyzer.get("total_closed_trades") or 0)
-        ma1, ma2, ma3, ma4 = st.columns(4)
-        ma1.metric("Closed Round-Trips Analyzed", f"{tot_closed}", mistake_analyzer.get("data_source", "OOS_AUDIT"))
-        ma2.metric("Overall Win Rate", f"{float(mistake_analyzer.get('overall_win_rate_pct') or 0.0):.1f}%")
-        ma3.metric("Realized Profit Factor", f"{float(mistake_analyzer.get('overall_profit_factor') or 0.0):.2f}x")
-        ma4.metric("Total Realized Net P&L", f"${float(mistake_analyzer.get('total_net_pnl') or 0.0):+,.2f}")
+        win_r = float(mistake_analyzer.get("overall_win_rate_pct") or 0.0)
+        pf_val = float(mistake_analyzer.get("overall_profit_factor") or 0.0)
+        net_real = float(mistake_analyzer.get("total_net_pnl") or 0.0)
+        real_cls = _pnl_class(net_real)
 
-        weaknesses = mistake_analyzer.get("detected_weaknesses") or []
-        if weaknesses:
-            st.markdown("##### 🔧 Mistake Analyzer Findings & Auto-Tuner Remedies")
-            for w in weaknesses:
-                st.info(
-                    f"**[{w.get('dimension') or w.get('category', 'DIAGNOSIS')}]** {w.get('finding', '')}\n\n"
-                    f"👉 **Auto-Tuner Remedy:** {w.get('remedy', '')}"
-                )
+        st.markdown(
+            f"<div class='md-kpi-strip'>"
+            f"<div><div class='md-label'>Closed Trades Analyzed</div><div class='md-num'>{tot_closed}</div></div>"
+            f"<div><div class='md-label'>Win Rate</div><div class='md-num'>{win_r:.1f}%</div></div>"
+            f"<div><div class='md-label'>Gain-to-Loss Ratio</div><div class='md-num'>{pf_val:.2f}x</div></div>"
+            f"<div><div class='md-label'>Net Realized P&amp;L</div><div class='md-num {real_cls}'>{net_real:+,.2f} USD</div></div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
-        b_col1, b_col2 = st.columns(2)
-        with b_col1:
-            st.markdown("###### Breakdown: Long vs. Short & Market Regime")
-            side_bd = mistake_analyzer.get("by_side") or []
-            reg_bd = mistake_analyzer.get("by_regime") or []
-            if side_bd or reg_bd:
-                st.dataframe(side_bd + reg_bd, use_container_width=True, hide_index=True)
-            else:
-                st.caption("Awaiting closed round-trip trades.")
-        with b_col2:
-            st.markdown("###### Breakdown: Exit Reason & Sector")
-            exit_bd = mistake_analyzer.get("by_exit_reason") or []
-            sec_bd = mistake_analyzer.get("by_sector") or []
-            if exit_bd or sec_bd:
-                st.dataframe(exit_bd + sec_bd, use_container_width=True, hide_index=True)
-            else:
-                st.caption("Awaiting closed round-trip trades.")
-
-    # =========================================================================
-    # TAB 4: LIVE NEWS, UNIVERSE & SYSTEM HEALTH
-    # =========================================================================
-    with tab4:
-        nc1, nc2 = st.columns([1.35, 1.15])
+        # 4. Market News & Automated Run Log
+        st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+        nc1, nc2 = st.columns([1.05, 1.15])
         with nc1:
-            st.markdown("#### 📰 24/7 Live Alpaca News & AI Catalyst Stream")
+            st.markdown(
+                "<div style='font-size:0.88rem;font-weight:600;color:#e2e8f0;margin-bottom:10px;'>"
+                "Recent Stock News</div>",
+                unsafe_allow_html=True,
+            )
             if live_catalysts:
-                for cat in live_catalysts[:20]:
+                news_items_html: List[str] = []
+                for cat in live_catalysts[:10]:
                     c_score = float(cat.get("sentiment_score") or 0.0)
-                    c_badge = _sentiment_badge_html(c_score, str(cat.get("catalyst_type", "")))
+                    tone = _tone_label(c_score)
+                    tone_col = "#22c55e" if tone == "Positive" else ("#ef4444" if tone == "Negative" else "#8b95a5")
                     url_str = str(cat.get("url") or "").strip()
                     link_html = (
-                        f" · <a href='{html.escape(url_str)}' target='_blank' style='color:#38bdf8;'>Source ↗</a>"
+                        f" · <a href='{html.escape(url_str)}' target='_blank' style='color:#94a3b8;text-decoration:none;'>Read ↗</a>"
                         if url_str.startswith("http")
                         else ""
                     )
-                    st.markdown(
-                        f"<div style='padding:8px 12px;margin-bottom:7px;background:rgba(15,23,42,0.52);"
-                        f"border:1px solid rgba(148,163,184,0.14);border-radius:7px;font-size:0.82rem;'>"
-                        f"<strong>{html.escape(str(cat.get('ticker', '')))}</strong> &nbsp; {c_badge} "
-                        f"<span style='color:#64748b;font-size:0.74rem;margin-left:6px;'>{html.escape(str(cat.get('published_date', '')))}</span>"
-                        f"{link_html}<br/>"
-                        f"<span style='color:#e2e8f0;'>{html.escape(str(cat.get('headline', '')))}</span>"
-                        f"</div>",
-                        unsafe_allow_html=True,
+                    news_items_html.append(
+                        f"<div style='padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06);font-size:0.81rem;'>"
+                        f"<div style='display:flex;justify-content:space-between;margin-bottom:3px;'>"
+                        f"<strong style='color:#f8fafc;'>{html.escape(str(cat.get('ticker', '')))}</strong>"
+                        f"<span style='font-size:0.74rem;color:{tone_col};'>{tone} · {html.escape(str(cat.get('published_date', ''))[:10])}{link_html}</span>"
+                        f"</div>"
+                        f"<div style='color:#cbd5e1;line-height:1.4;'>{html.escape(str(cat.get('headline', '')))}</div>"
+                        f"</div>"
                     )
+                st.markdown(f"<div class='md-surface' style='padding:6px 18px;'>{''.join(news_items_html)}</div>", unsafe_allow_html=True)
             else:
-                st.caption("No catalysts stored yet — headlines populate automatically on scheduled Daily runs.")
+                st.caption("No recent news headlines stored yet.")
 
         with nc2:
-            st.markdown(f"#### 🌐 Liquid Equity Universe ({len(universe_meta)} Active)")
-            with st.form("dynamic_ticker_onboard_form", clear_on_submit=True):
-                new_tkrs_raw = st.text_input(
-                    "Onboard New Catalyst Ticker(s) (Gates: Price ≥ $15, 20d ADV ≥ $50M/day, NYSE/NASDAQ)",
-                    placeholder="e.g. CRWD, NOW, ANET",
-                )
-                sub_onboard = st.form_submit_button("Validate & Onboard to Universe")
-                if sub_onboard and new_tkrs_raw.strip():
-                    req_list = [t.strip().upper() for t in new_tkrs_raw.replace(";", ",").split(",") if t.strip()]
-                    onb_res = app.orchestrator.market_data.onboard_dynamic_tickers(req_list, source="UI_OPERATOR")
-                    if onb_res.get("onboarded"):
-                        st.success(f"Onboarded: {', '.join(onb_res['onboarded'])}")
-                        st.rerun()
-                    else:
-                        st.warning(f"No tickers passed liquidity/exchange gates: {onb_res.get('rejected')}")
-
-            if universe_meta:
-                st.dataframe(
-                    [
-                        {
-                            "Ticker": m.get("ticker", ""),
-                            "Sector": m.get("sector", ""),
-                            "Source": m.get("discovery_source", "CORE"),
-                            "Shortable": "✅" if m.get("is_shortable", True) else "🚫",
-                            "ETB": "✅" if m.get("easy_to_borrow", True) else "—",
-                        }
-                        for m in sorted(universe_meta, key=lambda x: (str(x.get("discovery_source", "CORE")) != "CORE", str(x.get("ticker", ""))))
-                    ],
-                    use_container_width=True,
-                    hide_index=True,
-                    height=380,
-                )
-
-        st.markdown("---")
-        jc1, jc2 = st.columns(2)
-        with jc1:
-            st.markdown("##### ⚙️ Autonomous Job Execution History (Daily, Weekly & IDE AI)")
+            st.markdown(
+                "<div style='font-size:0.88rem;font-weight:600;color:#e2e8f0;margin-bottom:10px;'>"
+                "Automated Run Log</div>",
+                unsafe_allow_html=True,
+            )
             if jobs:
                 st.dataframe(
-                    [_summarize_job_row(j) for j in jobs[:20]],
+                    [_summarize_job_row(j) for j in jobs[:15]],
                     use_container_width=True,
                     hide_index=True,
                 )
-        with jc2:
-            st.markdown("##### 🚨 Portfolio Risk Alerts & Pod Account Reset")
-            if risk_alerts:
-                for al in risk_alerts[:6]:
-                    st.caption(f"• **[{al.get('severity', 'INFO')}]** `{al.get('category', '')}`: {al.get('message', '')}")
             else:
-                st.caption("Zero active risk alerts — kill switch disarmed.")
-
-            with st.expander("🧹 Emergency Pod Orders / Positions Liquidation"):
-                rst_pod = st.selectbox(
-                    "Select Alpaca Paper Pod to Cancel Open Orders & Close Positions",
-                    options=[p.get("pod_id") for p in pods_list] if pods_list else ["pod_1_breakout"],
-                )
-                if st.button("Cancel Orders & Flatten Selected Pod"):
-                    res_rst = app.orchestrator.pod_manager.reset_alpaca_paper_account(pod_id=str(rst_pod))
-                    st.info(f"Reset result: {res_rst}")
-                    st.rerun()
+                st.caption("No automated runs logged yet.")
 
 
 if __name__ == "__main__":

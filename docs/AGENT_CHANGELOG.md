@@ -4,6 +4,25 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-14] — v3.0 Minimalist Dark UI Redesign (Linear / Apple Stocks Aesthetic & Plain-English Beginner Clarity)
+
+### Summary
+- **Minimalist Matte-Dark Aesthetic & Full-Width Header (`dashboard/streamlit_app.py`, `.streamlit/config.toml`)**:
+  - Replaced neon borders, colored pill badges, gradients, emojis, and the left sidebar with a restrained Linear / Apple Stocks matte-dark palette (`#0c0e12` canvas, `#13161c` surface cards, `1px` subtle borders, tabular numerals, and green/red accents reserved strictly for P&L).
+- **Streamlined 3-Tab Navigation & Plain-English Explanations (`dashboard/streamlit_app.py`)**:
+  - Reorganized into 3 focused tabs: **1) `Overview & Open Trades`** (Portfolio KPI strip, 3 Paper Account cards, Working Entry Orders, Open Positions, and collapsible Broker Order Log), **2) `Daily Journal`** (clean chronological day-by-day orders & holdings log), and **3) `Performance & System`** (automated schedule summary, active strategy track record, closed-trade review, stock news, and automated run log).
+  - Added `_plain_english_reason()`, `_plain_english_order_status()`, and `_plain_english_skip_reason()` to translate raw technical strings (`RSI`, `SMA`, `RS20d`, `OCO`, `1.65R`) into clear 1-sentence everyday English while showing Entry Price, Current Price, Unrealized P&L (`$` & `%`), Stop-Loss (`$`), and Profit Target (`$`).
+  - Removed manual admin clutter (ticker onboarding form, emergency pod reset button, raw JSON/equity-curve inspectors, and dense cheat-sheet blocks).
+
+### Modules Added / Modified
+- `dashboard/streamlit_app.py`, `.streamlit/config.toml`
+- `AGENTS.md`, `GEMINI.md`, `USER_GUIDE.md`, `DEPLOYMENT.md`, `docs/AGENT_CHANGELOG.md`
+
+### Verification
+- Executed `.venv/bin/python .agents/skills/maintain-project-context/scripts/verify_context.py`: headless multi-branch Streamlit check + all 11 unit & integration test suites passed (`exit code 0`).
+
+---
+
 ## [2026-11-14] — v2.5 Weekly Tournament Cron Discrimination, 3-Pod Multi-Candidate Coverage & UI Audit Visibility
 
 ### Summary

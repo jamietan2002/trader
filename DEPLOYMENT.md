@@ -74,9 +74,11 @@ docker compose up --build -d
 
 ---
 
-## 4. Streamlit Dashboard (When `streamlit` is installed)
+## 4. Streamlit Dashboard (Minimalist Dark 3-Tab Portfolio Hub)
 
 ```bash
 streamlit run dashboard/streamlit_app.py
 ```
+
+Configured via `.streamlit/config.toml` (`#0c0e12` matte dark canvas, full-width no-sidebar header, and 3 beginner-friendly tabs: `Overview & Open Trades`, `Daily Journal`, and `Performance & System`).
 
