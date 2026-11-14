@@ -222,6 +222,62 @@ def _format_human_date(iso_dt: str) -> str:
         return str(iso_dt)
 
 
+def _format_short_date(iso_dt: str) -> str:
+    """Format '2026-11-13' into 'Fri, Nov 13'."""
+    try:
+        d_obj = date.fromisoformat(str(iso_dt)[:10])
+        return d_obj.strftime("%a, %b %d")
+    except Exception:
+        return str(iso_dt)
+
+
+def _build_daily_takeaway(day_pods: List[Dict[str, Any]], pod_filter: str) -> str:
+    """Generate a concise 1-sentence plain-English takeaway summarizing what the system did on a given day."""
+    filled_tkrs: List[str] = []
+    working_tkrs: List[str] = []
+    ratchet_tkrs: List[str] = []
+    total_holds = 0
+    notable_skip_cnt = 0
+
+    for p in day_pods:
+        for e in p.get("executed_or_queued") or []:
+            t = str(e.get("ticker") or "")
+            st_u = str(e.get("order_status") or "").upper()
+            if "FILLED" in st_u:
+                filled_tkrs.append(t)
+            else:
+                working_tkrs.append(t)
+        for r in p.get("ratchets_and_exits") or []:
+            ratchet_tkrs.append(str(r.get("ticker") or ""))
+        total_holds += len(p.get("active_holdings_plan") or [])
+        notable_skip_cnt += sum(
+            1 for s in (p.get("skipped_reasons") or []) if str(s.get("category", "")) != "NO_TECHNICAL_SIGNAL"
+        )
+
+    scope_lbl = "Across your accounts" if pod_filter == "All 3 Strategy Pods" else f"In {POD_DISPLAY_NAMES.get(pod_filter, pod_filter)}"
+    clauses: List[str] = []
+    if filled_tkrs:
+        clauses.append(f"filled {len(filled_tkrs)} order{'s' if len(filled_tkrs) != 1 else ''} ({', '.join(filled_tkrs[:5])})")
+    if working_tkrs:
+        clauses.append(f"queued {len(working_tkrs)} working limit order{'s' if len(working_tkrs) != 1 else ''} ({', '.join(working_tkrs[:5])})")
+    if ratchet_tkrs:
+        clauses.append(f"raised stop-losses on {len(ratchet_tkrs)} position{'s' if len(ratchet_tkrs) != 1 else ''}")
+
+    if clauses:
+        action_part = ", ".join(clauses)
+        hold_part = f", while managing {total_holds} open position{'s' if total_holds != 1 else ''} with automatic stop and target protection" if total_holds else ""
+        return f"{scope_lbl}, the system {action_part}{hold_part}."
+
+    if total_holds > 0:
+        skip_note = f" ({notable_skip_cnt} candidate setup{'s' if notable_skip_cnt != 1 else ''} skipped by safety rules)" if notable_skip_cnt else ""
+        return (
+            f"{scope_lbl}, no new orders were placed after scanning the universe{skip_note}; "
+            f"continued holding {total_holds} open position{'s' if total_holds != 1 else ''} with automatic stop-loss and target orders."
+        )
+
+    return f"{scope_lbl}, no stocks met all entry and safety criteria today, so capital remained 100% in cash."
+
+
 def _format_sgt_timestamp(iso_str: str) -> str:
     """Format an ISO timestamp into 'Nov 14, 11:48 SGT'."""
     raw = str(iso_str or "").strip()
@@ -435,7 +491,7 @@ def main() -> None:
     from api.server import PlatformApplication
     from core.market_data.models import USTradingCalendar
 
-    _code_version = "2026-11-14-v3.0"
+    _code_version = "2026-11-14-v3.1"
     if (
         "platform_app" not in st.session_state
         or st.session_state.get("platform_app_version") != _code_version
@@ -830,34 +886,37 @@ def main() -> None:
                 )
 
     # =========================================================================
-    # TAB 2: DAILY JOURNAL
+    # TAB 2: DAILY JOURNAL (SINGLE-DAY UNIFIED ACTIVITY FLOW)
     # =========================================================================
     with tab2:
-        jf1, jf2, jf3 = st.columns([1.2, 1.2, 1.2])
-        with jf1:
+        # Hide pre-link 'Simulated' (SHADOW_POD) records by default so only real Alpaca Paper history shows
+        live_only_logs = [
+            d for d in decision_logs if not str(d.get("broker_mode") or "").startswith("SHADOW_POD")
+        ]
+        effective_logs = live_only_logs if live_only_logs else decision_logs
+
+        # Top Control Bar: Account & Activity Filters
+        fc1, fc2 = st.columns([1.0, 1.0])
+        with fc1:
             pod_filter_opts = ["All 3 Strategy Pods"] + list(POD_DISPLAY_NAMES.keys())
             pod_filter = st.selectbox(
                 "Account",
                 options=pod_filter_opts,
                 format_func=lambda x: "All Accounts" if x == "All 3 Strategy Pods" else POD_DISPLAY_NAMES.get(x, x),
                 key="journal_pod_filter",
+                label_visibility="collapsed",
             )
-        with jf2:
+        with fc2:
             activity_filter = st.selectbox(
                 "Show",
                 options=["All Trading Days", "Days With New Orders Only"],
-                format_func=lambda x: "Days with new orders" if x == "Days With New Orders Only" else "All trading days",
+                format_func=lambda x: "Days with new orders only" if x == "Days With New Orders Only" else "All trading days",
                 key="journal_activity_filter",
+                label_visibility="collapsed",
             )
-        with jf3:
-            ticker_search = st.text_input(
-                "Search Ticker",
-                placeholder="e.g. AAPL, LLY, SLB",
-                key="journal_ticker_search",
-            ).strip().upper()
 
         logs_by_date: Dict[str, List[Dict[str, Any]]] = {}
-        for dlog in decision_logs:
+        for dlog in effective_logs:
             dt_k = str(dlog.get("session_date") or "")[:10]
             if not dt_k:
                 continue
@@ -865,167 +924,261 @@ def main() -> None:
                 continue
             logs_by_date.setdefault(dt_k, []).append(dlog)
 
-        ordered_dates = sorted(logs_by_date.keys(), reverse=True)
-
-        if not ordered_dates:
-            st.caption("No daily journal entries recorded yet.")
+        all_dates_desc = sorted(logs_by_date.keys(), reverse=True)
+        if activity_filter == "Days With New Orders Only":
+            filtered_dates = [
+                d
+                for d in all_dates_desc
+                if sum(len(p.get("executed_or_queued") or []) + len(p.get("ratchets_and_exits") or []) for p in logs_by_date[d]) > 0
+            ]
         else:
-            rendered_days = 0
-            for day_idx, dt_key in enumerate(ordered_dates):
-                day_pods = sorted(logs_by_date[dt_key], key=lambda x: str(x.get("pod_id", "")))
-                day_entries_total = sum(len(p.get("executed_or_queued") or []) for p in day_pods)
-                day_holds_total = sum(len(p.get("active_holdings_plan") or []) for p in day_pods)
-                day_ratchets_total = sum(len(p.get("ratchets_and_exits") or []) for p in day_pods)
+            filtered_dates = all_dates_desc
 
-                if activity_filter == "Days With New Orders Only" and day_entries_total == 0 and day_ratchets_total == 0:
-                    continue
+        if not filtered_dates:
+            st.caption("No journal sessions matched your current filter.")
+        else:
+            # Build concise date labels with order preview (e.g. 'Fri, Nov 13 · 7 orders (Latest)')
+            date_labels: Dict[str, str] = {}
+            for idx_d, d_key in enumerate(filtered_dates):
+                d_pods = logs_by_date[d_key]
+                ord_cnt = sum(len(p.get("executed_or_queued") or []) for p in d_pods)
+                hold_cnt = sum(len(p.get("active_holdings_plan") or []) for p in d_pods)
+                act_txt = f"{ord_cnt} order{'s' if ord_cnt != 1 else ''}" if ord_cnt > 0 else f"0 orders, {hold_cnt} held"
+                latest_suffix = " · Latest" if idx_d == 0 else ""
+                date_labels[d_key] = f"{_format_short_date(d_key)}  ·  {act_txt}{latest_suffix}"
 
-                if ticker_search and ticker_search not in json.dumps(day_pods).upper():
-                    continue
+            # Keep selected date synchronized across <- Previous / Next -> buttons and dropdown
+            cur_sel_date = str(st.session_state.get("journal_selected_date") or "")
+            if cur_sel_date not in filtered_dates:
+                cur_sel_date = filtered_dates[0]
+                st.session_state["journal_selected_date"] = cur_sel_date
 
-                rendered_days += 1
-                human_dt = _format_human_date(dt_key)
-                latest_lbl = " · Latest Session" if day_idx == 0 else ""
+            cur_idx = filtered_dates.index(cur_sel_date)
 
+            nav1, nav2, nav3 = st.columns([0.42, 1.56, 0.42])
+            with nav1:
+                if st.button(
+                    "← Previous",
+                    use_container_width=True,
+                    disabled=(cur_idx >= len(filtered_dates) - 1),
+                    key="journal_prev_day_btn",
+                ):
+                    st.session_state["journal_selected_date"] = filtered_dates[cur_idx + 1]
+                    st.rerun()
+            with nav3:
+                if st.button(
+                    "Next →",
+                    use_container_width=True,
+                    disabled=(cur_idx <= 0),
+                    key="journal_next_day_btn",
+                ):
+                    st.session_state["journal_selected_date"] = filtered_dates[cur_idx - 1]
+                    st.rerun()
+            with nav2:
+                picked_date = st.selectbox(
+                    "Trading Session",
+                    options=filtered_dates,
+                    index=cur_idx,
+                    format_func=lambda d: date_labels.get(d, d),
+                    key="journal_date_picker",
+                    label_visibility="collapsed",
+                )
+                if picked_date != cur_sel_date:
+                    st.session_state["journal_selected_date"] = picked_date
+                    st.rerun()
+
+            dt_key = str(st.session_state.get("journal_selected_date") or filtered_dates[0])
+            if dt_key not in logs_by_date:
+                dt_key = filtered_dates[0]
+            day_pods = sorted(logs_by_date[dt_key], key=lambda x: str(x.get("pod_id", "")))
+
+            # Aggregate unified activity across accounts for the selected day
+            day_entries: List[Dict[str, Any]] = []
+            day_ratchets: List[Dict[str, Any]] = []
+            day_holds: List[Dict[str, Any]] = []
+            day_notable_skips: List[Dict[str, Any]] = []
+            day_quiet_skips_by_tkr: Dict[str, Dict[str, Any]] = {}
+
+            for p_log in day_pods:
+                pid = str(p_log.get("pod_id") or "")
+                p_disp = POD_DISPLAY_NAMES.get(pid, pid)
+                acct_str = str(p_log.get("alpaca_account_number") or "Paper")
+                acct_tag = f"{p_disp} ({acct_str})"
+
+                for e in p_log.get("executed_or_queued") or []:
+                    item_e = dict(e)
+                    item_e["_acct_tag"] = acct_tag
+                    day_entries.append(item_e)
+
+                for r_act in p_log.get("ratchets_and_exits") or []:
+                    item_r = dict(r_act)
+                    item_r["_acct_tag"] = acct_tag
+                    day_ratchets.append(item_r)
+
+                for h in p_log.get("active_holdings_plan") or []:
+                    item_h = dict(h)
+                    item_h["_acct_tag"] = acct_tag
+                    day_holds.append(item_h)
+
+                for s in p_log.get("skipped_reasons") or []:
+                    if str(s.get("category", "")) != "NO_TECHNICAL_SIGNAL":
+                        item_s = dict(s)
+                        item_s["_acct_tag"] = p_disp
+                        day_notable_skips.append(item_s)
+                    else:
+                        tkr_q = str(s.get("ticker") or "")
+                        if tkr_q and tkr_q not in day_quiet_skips_by_tkr:
+                            day_quiet_skips_by_tkr[tkr_q] = s
+
+            # Sort filled orders ahead of working orders
+            day_entries.sort(key=lambda x: (0 if "FILLED" in str(x.get("order_status") or "").upper() else 1, str(x.get("ticker") or "")))
+
+            # 0. Concise 1-Sentence Daily Takeaway Header
+            human_dt = _format_human_date(dt_key)
+            takeaway_txt = _build_daily_takeaway(day_pods, pod_filter)
+            st.markdown(
+                f"<div class='md-surface' style='margin-top:8px;'>"
+                f"<div style='display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px;'>"
+                f"<span style='font-size:0.98rem;font-weight:600;color:#f8fafc;'>{html.escape(human_dt)}</span>"
+                f"<span style='font-size:0.76rem;color:#64748b;font-family:monospace;'>{html.escape(dt_key)}</span>"
+                f"</div>"
+                f"<div style='font-size:0.83rem;color:#cbd5e1;margin-top:6px;line-height:1.48;'>"
+                f"{html.escape(takeaway_txt)}"
+                f"</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+            # 1. Unified New Orders & Fills
+            st.markdown(
+                f"<div style='font-size:0.86rem;font-weight:600;color:#e2e8f0;margin:14px 0 8px 0;'>"
+                f"New Orders &amp; Fills ({len(day_entries)})</div>",
+                unsafe_allow_html=True,
+            )
+            if day_entries:
+                entry_rows_html: List[str] = []
+                for idx_e, e in enumerate(day_entries):
+                    e_side = str(e.get("side") or "LONG").upper()
+                    e_act = "Sell Short" if e_side == "SHORT" else "Buy"
+                    e_tkr = str(e.get("ticker") or "")
+                    e_shs = int(e.get("shares") or 0)
+                    e_lim = float(e.get("max_chase_price") or e.get("live_price") or e.get("reference_close_price") or 0.0)
+                    e_stop = float(e.get("stop_loss_price") or 0.0)
+                    e_tp = float(e.get("take_profit_price") or 0.0)
+                    e_cost = float(e.get("estimated_cost_usd") or (e_shs * e_lim))
+                    raw_st = str(e.get("order_status") or "")
+                    e_stat = _plain_english_order_status(raw_st, e_lim)
+                    st_color = "#22c55e" if "FILLED" in raw_st.upper() else "#cbd5e1"
+                    e_why = _plain_english_reason(
+                        str(e.get("technical_trigger") or ""),
+                        side=e_side,
+                        ai_sent=float(e.get("ai_catalyst_sentiment") or 0.0),
+                    )
+                    border_style = "border-top:1px solid rgba(255,255,255,0.06);padding-top:12px;margin-top:12px;" if idx_e > 0 else ""
+                    entry_rows_html.append(
+                        f"<div style='{border_style}'>"
+                        f"<div style='display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px;'>"
+                        f"<div>"
+                        f"<strong style='color:#f8fafc;font-size:0.93rem;'>{html.escape(e_tkr)}</strong>"
+                        f"<span style='color:#94a3b8;font-size:0.82rem;margin-left:8px;'>{e_act} {e_shs} shares · ${e_cost:,.0f}</span>"
+                        f"<span style='color:#64748b;font-size:0.77rem;margin-left:8px;'>· {html.escape(str(e.get('_acct_tag', '')))}</span>"
+                        f"</div>"
+                        f"<div style='font-size:0.81rem;font-weight:500;color:{st_color};font-variant-numeric:tabular-nums;'>{html.escape(e_stat)}</div>"
+                        f"</div>"
+                        f"<div style='font-size:0.79rem;color:#94a3b8;margin-top:4px;font-variant-numeric:tabular-nums;'>"
+                        f"Entry limit ${e_lim:,.2f} &nbsp;·&nbsp; Stop-Loss ${e_stop:,.2f} &nbsp;·&nbsp; Profit Target ${e_tp:,.2f}"
+                        f"</div>"
+                        f"<div style='font-size:0.79rem;color:#8b95a5;margin-top:3px;line-height:1.42;'>{html.escape(e_why)}</div>"
+                        f"</div>"
+                    )
+                st.markdown(f"<div class='md-surface'>{''.join(entry_rows_html)}</div>", unsafe_allow_html=True)
+            else:
                 st.markdown(
-                    f"<div style='display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;"
-                    f"padding:18px 0 8px 0;border-bottom:1px solid rgba(255,255,255,0.08);margin-bottom:12px;'>"
-                    f"<div style='font-size:0.98rem;font-weight:600;color:#f8fafc;'>{html.escape(human_dt)}"
-                    f"<span style='font-size:0.78rem;color:#64748b;font-weight:400;margin-left:8px;'>{html.escape(dt_key)}{latest_lbl}</span></div>"
-                    f"<div style='font-size:0.79rem;color:#8b95a5;'>"
-                    f"{day_entries_total} orders &nbsp;·&nbsp; {day_holds_total} positions held"
-                    f"</div></div>",
+                    "<div class='md-surface' style='padding:12px 18px;font-size:0.81rem;color:#8b95a5;'>"
+                    "No new entry orders were placed on this trading day."
+                    "</div>",
                     unsafe_allow_html=True,
                 )
 
-                for p_log in day_pods:
-                    pid = str(p_log.get("pod_id") or "")
-                    p_disp = POD_DISPLAY_NAMES.get(pid, pid)
-                    acct_str = str(p_log.get("alpaca_account_number") or "Paper")
-                    entries_list = p_log.get("executed_or_queued") or []
-                    ratchets_list = p_log.get("ratchets_and_exits") or []
-                    holds_list = p_log.get("active_holdings_plan") or []
-                    skips_list = p_log.get("skipped_reasons") or []
+            # 2. Stop-Loss Adjustments (shown only when non-empty)
+            if day_ratchets:
+                st.markdown(
+                    f"<div style='font-size:0.86rem;font-weight:600;color:#e2e8f0;margin:14px 0 8px 0;'>"
+                    f"Stop-Loss Adjustments ({len(day_ratchets)})</div>",
+                    unsafe_allow_html=True,
+                )
+                r_lines = [
+                    f"<div style='padding:6px 0;font-size:0.81rem;color:#cbd5e1;'>"
+                    f"<strong style='color:#f8fafc;'>{html.escape(str(r.get('ticker', '')))}</strong> "
+                    f"<span style='color:#64748b;'>({html.escape(str(r.get('_acct_tag', '')))})</span> — "
+                    f"Stop-Loss moved from ${float(r.get('old_stop_price') or 0):,.2f} to "
+                    f"${float(r.get('new_stop_price') or 0):,.2f} to protect gains."
+                    f"</div>"
+                    for r in day_ratchets
+                ]
+                st.markdown(f"<div class='md-surface' style='padding:10px 18px;'>{''.join(r_lines)}</div>", unsafe_allow_html=True)
 
-                    notable_vetoes = [s for s in skips_list if str(s.get("category", "")) != "NO_TECHNICAL_SIGNAL"]
-                    quiet_skips = [s for s in skips_list if str(s.get("category", "")) == "NO_TECHNICAL_SIGNAL"]
+            # 3. Compact Clean Positions Held Table
+            st.markdown(
+                f"<div style='font-size:0.86rem;font-weight:600;color:#e2e8f0;margin:14px 0 8px 0;'>"
+                f"Positions Held ({len(day_holds)})</div>",
+                unsafe_allow_html=True,
+            )
+            if day_holds:
+                st.dataframe(
+                    [
+                        {
+                            "Ticker": h.get("ticker", ""),
+                            "Account": h.get("_acct_tag", ""),
+                            "Shares": (
+                                f"Short {abs(int(h.get('quantity') or h.get('qty') or 0))}"
+                                if str(h.get("side") or "LONG").upper() == "SHORT"
+                                else int(h.get("quantity") or h.get("qty") or 0)
+                            ),
+                            "Entry": f"${float(h.get('avg_entry_price') or 0):,.2f}",
+                            "Day's Close": f"${float(h.get('current_price') or h.get('avg_entry_price') or 0):,.2f}",
+                            "P&L %": f"{float(h.get('unrealised_return_pct') or 0.0):+.2f}%",
+                            "Stop-Loss": f"${float(h.get('current_stop_price') or 0):,.2f}",
+                            "Target": f"${float(h.get('take_profit_price') or 0):,.2f}",
+                        }
+                        for h in day_holds
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.caption("No open positions held at the end of this session.")
 
-                    is_shadow_log = str(p_log.get("broker_mode") or "").startswith("SHADOW_POD")
-                    if is_shadow_log:
-                        status_txt = "Simulated (before Alpaca account link)"
-                    elif entries_list:
-                        status_txt = f"{len(entries_list)} order(s) placed or filled"
-                    elif holds_list:
-                        status_txt = f"Holding {len(holds_list)} position(s) · No new trades"
-                    else:
-                        status_txt = "No trades (100% cash)"
-
-                    rows_html: List[str] = []
-                    for e in entries_list:
-                        e_side = str(e.get("side") or "LONG").upper()
-                        e_act = "Sell Short" if e_side == "SHORT" else "Buy"
-                        e_tkr = str(e.get("ticker") or "")
-                        e_shs = int(e.get("shares") or 0)
-                        e_lim = float(e.get("max_chase_price") or e.get("live_price") or e.get("reference_close_price") or 0.0)
-                        e_stop = float(e.get("stop_loss_price") or 0.0)
-                        e_tp = float(e.get("take_profit_price") or 0.0)
-                        e_cost = float(e.get("estimated_cost_usd") or (e_shs * e_lim))
-                        e_stat = _plain_english_order_status(str(e.get("order_status") or ""), e_lim)
-                        e_why = _plain_english_reason(
-                            str(e.get("technical_trigger") or ""),
-                            side=e_side,
-                            ai_sent=float(e.get("ai_catalyst_sentiment") or 0.0),
-                        )
-                        rows_html.append(
-                            f"<div style='padding:10px 0;border-top:1px solid rgba(255,255,255,0.06);'>"
-                            f"<div style='display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px;'>"
-                            f"<div><strong style='color:#f8fafc;font-size:0.90rem;'>{html.escape(e_tkr)}</strong> "
-                            f"<span style='color:#94a3b8;font-size:0.82rem;'>{e_act} {e_shs} shares · ${e_cost:,.0f}</span></div>"
-                            f"<div style='font-size:0.80rem;color:#e2e8f0;font-variant-numeric:tabular-nums;'>{html.escape(e_stat)}</div>"
-                            f"</div>"
-                            f"<div style='font-size:0.79rem;color:#94a3b8;margin-top:4px;font-variant-numeric:tabular-nums;'>"
-                            f"Entry limit ${e_lim:,.2f} &nbsp;·&nbsp; Stop-Loss ${e_stop:,.2f} &nbsp;·&nbsp; Profit Target ${e_tp:,.2f}"
-                            f"</div>"
-                            f"<div style='font-size:0.79rem;color:#8b95a5;margin-top:3px;'>{html.escape(e_why)}</div>"
-                            f"</div>"
-                        )
-
-                    for r_act in ratchets_list:
-                        rows_html.append(
-                            f"<div style='padding:8px 0;border-top:1px solid rgba(255,255,255,0.06);font-size:0.80rem;color:#cbd5e1;'>"
-                            f"<strong>{html.escape(str(r_act.get('ticker', '')))}</strong> — Stop-Loss raised from "
-                            f"${float(r_act.get('old_stop_price') or 0):,.2f} to ${float(r_act.get('new_stop_price') or 0):,.2f} to lock in gains."
-                            f"</div>"
-                        )
-
-                    if holds_list:
-                        hold_lines: List[str] = []
-                        for h in holds_list:
-                            h_tkr = str(h.get("ticker") or "")
-                            h_qty = abs(int(h.get("quantity") or h.get("qty") or 0))
-                            h_avg = float(h.get("avg_entry_price") or 0.0)
-                            h_cur = float(h.get("current_price") or h_avg)
-                            h_ret = float(h.get("unrealised_return_pct") or 0.0)
-                            h_stop = float(h.get("current_stop_price") or 0.0)
-                            h_tp = float(h.get("take_profit_price") or 0.0)
-                            h_cls = _pnl_class(h_ret)
-                            hold_lines.append(
-                                f"<div style='display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;padding:5px 0;font-size:0.79rem;font-variant-numeric:tabular-nums;'>"
-                                f"<span style='color:#cbd5e1;'><strong style='color:#f1f5f9;'>{html.escape(h_tkr)}</strong> · {h_qty} shs · Entry ${h_avg:,.2f} → ${h_cur:,.2f} "
-                                f"(<span class='{h_cls}'>{h_ret:+.2f}%</span>)</span>"
-                                f"<span style='color:#8b95a5;'>Stop ${h_stop:,.2f} · Target ${h_tp:,.2f}</span>"
-                                f"</div>"
+            # 4. Single Combined Quiet Expandable Footer for Skipped & Untriggered Stocks
+            total_footer_items = len(day_notable_skips) + len(day_quiet_skips_by_tkr)
+            if total_footer_items > 0:
+                footer_lbl = (
+                    f"Skipped setups ({len(day_notable_skips)}) & stocks not meeting entry criteria ({len(day_quiet_skips_by_tkr)})"
+                    if day_notable_skips
+                    else f"Stocks scanned that did not meet entry criteria ({len(day_quiet_skips_by_tkr)})"
+                )
+                with st.expander(footer_lbl, expanded=False):
+                    if day_notable_skips:
+                        st.markdown("**Skipped by Safety or Portfolio Rules**")
+                        for nv in day_notable_skips:
+                            st.markdown(
+                                f"- **{nv.get('ticker', '')}** ({nv.get('_acct_tag', '')}): "
+                                f"{_plain_english_skip_reason(str(nv.get('reason', '')), str(nv.get('status_badge', '')))}"
                             )
-                        rows_html.append(
-                            f"<div style='padding-top:8px;margin-top:4px;border-top:1px solid rgba(255,255,255,0.06);'>"
-                            f"<div class='md-label' style='margin-bottom:4px;'>Positions Held ({len(holds_list)})</div>"
-                            f"{''.join(hold_lines)}</div>"
+                    if day_quiet_skips_by_tkr:
+                        st.dataframe(
+                            [
+                                {
+                                    "Ticker": qs.get("ticker", ""),
+                                    "Sector": qs.get("sector", ""),
+                                    "Close": f"${float(qs.get('live_price') or 0):,.2f}",
+                                    "Reason Not Triggered": qs.get("technical_summary") or qs.get("reason", ""),
+                                }
+                                for qs in sorted(day_quiet_skips_by_tkr.values(), key=lambda x: str(x.get("ticker") or ""))
+                            ],
+                            use_container_width=True,
+                            hide_index=True,
                         )
-
-                    if not entries_list and not holds_list:
-                        rows_html.append(
-                            "<div style='font-size:0.79rem;color:#64748b;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05);'>"
-                            "No stocks in the 40-stock universe met all entry and risk criteria today."
-                            "</div>"
-                        )
-
-                    st.markdown(
-                        f"<div class='md-surface'>"
-                        f"<div style='display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px;margin-bottom:6px;'>"
-                        f"<div><span style='font-size:0.90rem;font-weight:600;color:#f8fafc;'>{html.escape(p_disp)}</span>"
-                        f"<span style='font-size:0.76rem;color:#64748b;margin-left:8px;font-family:monospace;'>{html.escape(acct_str)}</span></div>"
-                        f"<div style='font-size:0.78rem;color:#94a3b8;'>{html.escape(status_txt)}</div>"
-                        f"</div>"
-                        f"{''.join(rows_html)}"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-
-                    if notable_vetoes:
-                        with st.expander(f"{p_disp} — {len(notable_vetoes)} setup(s) skipped by safety rules ({dt_key})", expanded=False):
-                            for nv in notable_vetoes:
-                                st.markdown(
-                                    f"- **{nv.get('ticker', '')}**: {_plain_english_skip_reason(str(nv.get('reason', '')), str(nv.get('status_badge', '')))}"
-                                )
-
-                    if quiet_skips:
-                        with st.expander(f"{p_disp} — {len(quiet_skips)} stocks did not meet entry criteria ({dt_key})", expanded=False):
-                            st.dataframe(
-                                [
-                                    {
-                                        "Ticker": qs.get("ticker", ""),
-                                        "Sector": qs.get("sector", ""),
-                                        "Close": f"${float(qs.get('live_price') or 0):,.2f}",
-                                        "Detail": qs.get("technical_summary") or qs.get("reason", ""),
-                                    }
-                                    for qs in quiet_skips
-                                ],
-                                use_container_width=True,
-                                hide_index=True,
-                            )
-
-            if rendered_days == 0:
-                st.caption("No journal days matched your filter.")
 
     # =========================================================================
     # TAB 3: PERFORMANCE & SYSTEM

@@ -4,6 +4,24 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-14] — v3.1 Single-Day Unified Daily Journal Redesign
+
+### Summary
+- **Single-Day Focused View & Navigation (`dashboard/streamlit_app.py`)**:
+  - Upgraded Tab 2 (`Daily Journal`) to render **one trading day at a time** with `← Previous` / `Next →` session buttons and an activity-previewing date selector (`Fri, Nov 13 · 7 orders · Latest`).
+  - Suppressed pre-link `SHADOW_POD` records by default so the journal strictly reflects connected Alpaca Paper account history.
+- **Unified Activity-First Organization & 1-Sentence Daily Takeaway (`dashboard/streamlit_app.py`)**:
+  - Added `_build_daily_takeaway()` at the top of each selected day summarizing what the system did and why in one plain-English sentence.
+  - Replaced repeated per-account boxes with a unified flow across accounts: **1) `New Orders & Fills`** (tagged with each account), **2) `Stop-Loss Adjustments`** (shown only when non-empty), **3) `Positions Held`** (compact clean table), and **4) one single deduplicated expandable footer** for skipped/untriggered stocks.
+
+### Modules Added / Modified
+- `dashboard/streamlit_app.py`, `USER_GUIDE.md`, `docs/AGENT_CHANGELOG.md`
+
+### Verification
+- Executed `.venv/bin/python .agents/skills/maintain-project-context/scripts/verify_context.py`: headless multi-branch Streamlit check + all 11 unit & integration test suites passed (`exit code 0`).
+
+---
+
 ## [2026-11-14] — v3.0 Minimalist Dark UI Redesign (Linear / Apple Stocks Aesthetic & Plain-English Beginner Clarity)
 
 ### Summary
