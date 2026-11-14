@@ -7,7 +7,8 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 ## [2026-11-14] — v3.1 Single-Day Unified Daily Journal Redesign
 
 ### Summary
-- **Single-Day Focused View & Navigation (`dashboard/streamlit_app.py`)**:
+- **Single-Day Focused View, Navigation & Broker Order Log Timestamps (`dashboard/streamlit_app.py`)**:
+  - Added `Date / Time (SGT)` column (`filled_at` for filled orders, `submitted_at` for working/open orders, sorted newest-first) and clearer `Auto Exit (Sell/Buy)` labels to the Tab 1 `View Alpaca Broker Order Log` table.
   - Upgraded Tab 2 (`Daily Journal`) to render **one trading day at a time** with `← Previous` / `Next →` session buttons and an activity-previewing date selector (`Fri, Nov 13 · 7 orders · Latest`).
   - Suppressed pre-link `SHADOW_POD` records by default so the journal strictly reflects connected Alpaca Paper account history.
 - **Unified Activity-First Organization & 1-Sentence Daily Takeaway (`dashboard/streamlit_app.py`)**:

@@ -852,26 +852,61 @@ def main() -> None:
         else:
             st.caption("No open positions for the selected account view.")
 
-        # 3. Clean Collapsible Broker Order Ledger
+        # 3. Clean Collapsible Broker Order Ledger (with Date/Time in SGT, sorted newest-first)
         shown_orders = [
             o for o in all_broker_orders if sel_acct == "All Accounts" or o.get("_pod_id") == sel_acct
         ]
+        shown_orders.sort(
+            key=lambda x: (
+                0 if x.get("_bucket") == "Open" else 1,
+                str(x.get("filled_at") or x.get("submitted_at") or ""),
+            ),
+            reverse=False,
+        )
+        # Within Open and Recent buckets, sort newest timestamp first
+        open_bucket = sorted(
+            [o for o in shown_orders if o.get("_bucket") == "Open"],
+            key=lambda x: str(x.get("submitted_at") or x.get("filled_at") or ""),
+            reverse=True,
+        )
+        recent_bucket = sorted(
+            [o for o in shown_orders if o.get("_bucket") != "Open"],
+            key=lambda x: str(x.get("filled_at") or x.get("submitted_at") or ""),
+            reverse=True,
+        )
+        shown_orders = open_bucket + recent_bucket
+
         if shown_orders:
             with st.expander(f"View Alpaca Broker Order Log ({len(shown_orders)})", expanded=False):
-                st.dataframe(
-                    [
+                order_table_rows = []
+                for o in shown_orders[:40]:
+                    o_st_u = str(o.get("status") or "").upper()
+                    o_cls_u = str(o.get("order_class") or "").upper()
+                    raw_ts = (
+                        o.get("filled_at")
+                        if (o_st_u == "FILLED" and o.get("filled_at"))
+                        else (o.get("submitted_at") or o.get("filled_at") or "")
+                    )
+                    side_title = str(o.get("side") or "").title()
+                    action_lbl = (
+                        f"Auto Exit ({side_title})"
+                        if o_cls_u in ("OCO", "OTO", "BRACKET_EXIT")
+                        else side_title
+                    )
+                    order_table_rows.append(
                         {
+                            "Date / Time (SGT)": _format_sgt_timestamp(str(raw_ts)),
                             "Type": o.get("_bucket", ""),
                             "Account": o.get("_account_number", ""),
                             "Ticker": o.get("ticker") or o.get("symbol", ""),
-                            "Action": str(o.get("side", "")).title(),
+                            "Action": action_lbl,
                             "Shares": o.get("qty", ""),
                             "Entry / Fill": (
                                 f"${float(o['filled_avg_price']):,.2f}"
                                 if o.get("filled_avg_price")
                                 else (
                                     f"${float(o['limit_price']):,.2f}"
-                                    if (o.get("limit_price") and str(o.get("order_class", "")).upper() not in ("OCO", "BRACKET_EXIT"))
+                                    if (o.get("limit_price") and o_cls_u not in ("OCO", "BRACKET_EXIT"))
                                     else "—"
                                 )
                             ),
@@ -879,8 +914,9 @@ def main() -> None:
                             "Profit Target": f"${float(o['take_profit_price']):,.2f}" if o.get("take_profit_price") else "—",
                             "Status": str(o.get("status", "")).replace("_", " ").title(),
                         }
-                        for o in shown_orders[:40]
-                    ],
+                    )
+                st.dataframe(
+                    order_table_rows,
                     use_container_width=True,
                     hide_index=True,
                 )
