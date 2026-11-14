@@ -204,11 +204,11 @@ def main() -> int:
         sys.modules["streamlit"] = mock_st
         import dashboard.streamlit_app as st_app
 
-        # Branch 1: Default state (Master Combined Paper Book)
+        # Branch 1: Default state (All 3 Pods Day-by-Day Journal)
         st_app.main()
-        # Branch 2: Strategy Pod selected in Tab 2 + Weekend Preview enabled in Tab 1
-        mock_st.session_state["paper_book_selector"] = "paper_strat_volatility_breakout"
-        mock_st.session_state["chk_weekend_preview"] = True
+        # Branch 2: Single Pod filtered + Days With New Orders Only in Day-by-Day Journal
+        mock_st.session_state["journal_pod_filter"] = "pod_2_mean_reversion"
+        mock_st.session_state["journal_activity_filter"] = "Days With New Orders Only"
         st_app.main()
         print("[PASS] Headless multi-branch runtime execution of dashboard/streamlit_app.py succeeded.")
     except Exception as exc:

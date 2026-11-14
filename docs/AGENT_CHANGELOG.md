@@ -4,6 +4,22 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-14] — v2.1 UI Streamlining: Pure Autonomous 3-Pod Paper Hub & Full-Width Day-by-Day Pod Decision Journal
+
+### Summary
+- **Removed Manual Real-Account Setup & Sizing Sliders (`dashboard/streamlit_app.py`)**:
+  - Removed the Custom Real-Account Capital Sizing slider, Long Risk / Trade slider, and manual copy-sizing text so the UI focuses 100% on the **3 Autonomous `$100k` Alpaca Paper Pods** (`PA3GP0WMH`, `PA3IAK6TV`, `PA3OSGSIE`).
+  - Added an inline `? What does Sync do?` helper in the Sidebar explaining the 5 steps triggered by `Sync All 3 Alpaca Pods & News Now`.
+- **Upgraded Tab 1 to an Intuitive Chronological `Day-by-Day Pod Decision Journal` (`dashboard/streamlit_app.py`, `core/execution/paper_broker.py`)**:
+  - Expanded `get_recent_decision_logs()` default retention window from `18` to `90` entries (30 full trading days across all 3 Pods).
+  - Organized Tab 1 day-by-day with human-readable date headers (`📅 Friday, Nov 13, 2026`), Pod & ticker filters, clear Pod status pills (`🟢 Trade(s) Placed / Filled`, `🛡️ Holding Position(s)`, `⏸️ Stood Aside`), detailed order cards with 60-day Candlestick + Bracket SVG charts, active holding pills, and separated News/Risk Veto callouts vs. non-triggered technical scans.
+
+### Modules Added / Modified
+- `dashboard/streamlit_app.py`, `core/execution/paper_broker.py`
+- `AGENTS.md`, `USER_GUIDE.md`, `ARCHITECTURE.md`, `DEPLOYMENT.md`, `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-14] — v2.0 All-Weather Platform Upgrade: Long + Short Swing Engine, 40-Stock + Dynamic Universe, 24/7 Alpaca News Scanner, 4-Tab Decision Hub & Mistake Analyzer
 
 ### Summary

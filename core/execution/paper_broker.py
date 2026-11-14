@@ -5221,11 +5221,12 @@ class AlpacaPaperPodManager:
 
         return {
             "session_date": session_date,
+            "market_regime": self._classify_market_regime(spy_latest_ind),
             "pods": pods_output,
-            "decision_history": self.get_recent_decision_logs(limit=18),
+            "decision_history": self.get_recent_decision_logs(limit=90),
         }
 
-    def get_recent_decision_logs(self, limit: int = 18) -> List[Dict[str, Any]]:
+    def get_recent_decision_logs(self, limit: int = 90) -> List[Dict[str, Any]]:
         rows = self.db.fetch_all(
             """
             SELECT * FROM daily_decision_logs
