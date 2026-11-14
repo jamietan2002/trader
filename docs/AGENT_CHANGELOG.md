@@ -4,6 +4,23 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-14] — Added `minimalist-ui-design` Workspace Skill for Persistent UI/UX Standards
+
+### Summary
+- **Created `.agents/skills/minimalist-ui-design/SKILL.md`**:
+  - Codified the user's UI/UX design preferences into an automatically discovered Antigravity workspace skill covering: (1) Interview-first workflow (`ask_question` on layout trade-offs), (2) Minimalist Matte-Dark Linear / Apple Stocks visual tokens (`#0c0e12` canvas, `#13161c` cards, `tabular-nums`, zero emojis, zero neon/badges/chart clutter, green/red strictly for P&L), (3) No left sidebar, shallow 2–3 tab hierarchy, and zero redundant manual sync/admin controls, (4) Beginner-first plain-English translations with exact dollar/price figures and `SGT` timestamps, and (5) Single-day focused journals (`← Previous` / `Next →` + activity preview dropdown, 1-sentence `Daily Takeaway`, unified activity-first flow, compact tables, and 1 deduplicated expandable footer).
+- **Registered Mandatory UI Skill Pointer in `AGENTS.md`**:
+  - Linked `.agents/skills/minimalist-ui-design/SKILL.md` in Section 4 of `AGENTS.md` (and `GEMINI.md` via inclusion) so future agents automatically enforce these standards on any `dashboard/` or UI task.
+
+### Modules Added / Modified
+- `.agents/skills/minimalist-ui-design/SKILL.md`
+- `AGENTS.md`, `GEMINI.md`, `docs/AGENT_CHANGELOG.md`
+
+### Verification
+- Executed `.venv/bin/python .agents/skills/maintain-project-context/scripts/verify_context.py`: all context sync checks and 11 unit & integration test suites passed (`exit code 0`).
+
+---
+
 ## [2026-11-14] — v3.1 Single-Day Unified Daily Journal Redesign
 
 ### Summary

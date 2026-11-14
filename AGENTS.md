@@ -76,10 +76,13 @@ This repository implements an autonomous **AI-Powered Swing Trading Research, Ba
 
 ---
 
-## 4. Mandatory Agent Maintenance Protocol (For Every Implementation)
+## 4. Mandatory Agent Maintenance & UI Design Protocols
 
 Whenever you implement a feature, fix a bug, add an indicator/strategy/agent/provider, or modify schemas in this repository, you **MUST** activate and follow the workspace skill:
 - **`maintain-project-context`** (`.agents/skills/maintain-project-context/SKILL.md`)
+
+Whenever you design, build, refactor, or modify any UI, dashboard (`dashboard/streamlit_app.py`, `dashboard/ui_template.py`), table, or journal view, you **MUST** also activate and follow the workspace skill:
+- **`minimalist-ui-design`** (`.agents/skills/minimalist-ui-design/SKILL.md`)
 
 Before completing any task, you must:
 1. Run `.venv/bin/python .agents/skills/maintain-project-context/scripts/verify_context.py` to verify all unit/integration tests and documentation sync checks pass.
