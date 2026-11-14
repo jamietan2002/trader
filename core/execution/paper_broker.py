@@ -3507,6 +3507,7 @@ class AlpacaPaperPodManager:
                 else:
                     effective_cash = round(max(0.0, min(equity, raw_cash)), 2)
 
+                open_pos_syms = {lp["ticker"] for lp in pod_positions}
                 open_orders: List[Dict[str, Any]] = []
                 recent_orders: List[Dict[str, Any]] = []
                 for o in ord_raw:
@@ -3514,7 +3515,10 @@ class AlpacaPaperPodManager:
                     o_sym = str(o.get("symbol") or "").upper()
                     c_id = str(o.get("client_order_id") or "")
                     o_class = str(o.get("order_class") or "simple").lower()
-                    # Ignore automatic position-liquidation orders from the legacy demo cleanup
+                    o_type = str(o.get("type") or "").lower()
+                    # Ignore automatic position-liquidation or pre-Pod demo market orders
+                    if not c_id.startswith("pod_") and o_type == "market" and o_sym not in open_pos_syms:
+                        continue
                     if o_sym in pending_liquidation_symbols and not c_id.startswith("pod_"):
                         continue
                     legs = o.get("legs") or []
@@ -3526,12 +3530,16 @@ class AlpacaPaperPodManager:
                         else None
                     )
                     stop_leg_id = None
+                    active_child_legs: List[Dict[str, Any]] = []
                     for leg in legs:
+                        leg_st = str(leg.get("status") or "").lower()
                         if leg.get("stop_price"):
                             stop_leg_px = float(leg["stop_price"])
                             stop_leg_id = str(leg.get("id") or "")
                         if leg.get("limit_price"):
                             tp_leg_px = float(leg["limit_price"])
+                        if leg_st in ("new", "accepted", "pending_new", "partially_filled", "held"):
+                            active_child_legs.append(leg)
                     if o.get("stop_price") and not stop_leg_id:
                         stop_leg_id = str(o.get("id") or "")
                     o_item = {
@@ -3554,10 +3562,35 @@ class AlpacaPaperPodManager:
                     }
                     if o_status in ("new", "accepted", "pending_new", "partially_filled", "held"):
                         open_orders.append(o_item)
+                    elif o_status == "filled" and active_child_legs:
+                        # Filled parent BRACKET order whose child Take-Profit / Stop-Loss OCO legs are actively working on Alpaca
+                        primary_leg = next(
+                            (lg for lg in active_child_legs if str(lg.get("status") or "").lower() in ("new", "accepted", "partially_filled")),
+                            active_child_legs[0],
+                        )
+                        open_orders.append(
+                            {
+                                "order_id": str(primary_leg.get("id") or o.get("id") or ""),
+                                "client_order_id": str(primary_leg.get("client_order_id") or c_id),
+                                "ticker": o_sym,
+                                "side": str(primary_leg.get("side") or ("BUY" if str(o.get("side") or "").upper() == "SELL" else "SELL")).upper(),
+                                "type": "OCO_EXIT",
+                                "order_class": "BRACKET_EXIT",
+                                "qty": int(float(primary_leg.get("qty") or o.get("filled_qty") or o.get("qty") or 0)),
+                                "filled_qty": int(float(primary_leg.get("filled_qty") or 0)),
+                                "limit_price": tp_leg_px,
+                                "stop_price": stop_leg_px,
+                                "take_profit_price": tp_leg_px,
+                                "stop_leg_order_id": stop_leg_id,
+                                "filled_avg_price": None,
+                                "status": str(primary_leg.get("status") or "NEW").upper(),
+                                "submitted_at": str(o.get("filled_at") or o.get("submitted_at") or "")[:19].replace("T", " "),
+                                "filled_at": "",
+                            }
+                        )
                     recent_orders.append(o_item)
 
                 # Sync any newly closed round-trip trades into alpaca_closed_trades for Mistake Analyzer
-                open_pos_syms = {lp["ticker"] for lp in pod_positions}
                 self._sync_closed_alpaca_orders_to_ledger(pod_id, attr_map_broker, open_pos_syms, recent_orders)
 
                 state_pkt = {
@@ -4075,17 +4108,20 @@ class AlpacaPaperPodManager:
                         )
 
             broker_state = self.fetch_alpaca_pod_broker_state(pod_cfg, force_refresh=execute_live_orders)
+            is_broker_linked = bool((has_creds and "unittest" not in _sys.modules) or broker_state.get("broker_connected"))
             pod_equity = max(10_000.0, float(broker_state.get("total_equity") or 100_000.0))
             pod_peak_equity = max(float(broker_state.get("starting_capital") or 100_000.0), pod_equity)
             sim_cash = max(0.0, float(broker_state.get("cash_balance") or pod_equity))
             open_orders_list = broker_state.get("open_orders") or []
-            open_orders_by_tkr = {o["ticker"]: o for o in open_orders_list}
-            open_buy_orders_by_tkr = {
-                o["ticker"]: o for o in open_orders_list if str(o.get("side") or "").upper() == "BUY"
-            }
-            open_sell_orders_by_tkr = {
-                o["ticker"]: o for o in open_orders_list if str(o.get("side") or "").upper() == "SELL"
-            }
+            open_exit_orders_by_tkr: Dict[str, Dict[str, Any]] = {}
+            open_entry_orders_by_tkr: Dict[str, Dict[str, Any]] = {}
+            for o in open_orders_list:
+                o_cls_u = str(o.get("order_class") or "").upper()
+                o_cid_u = str(o.get("client_order_id") or "")
+                if o_cls_u in ("OCO", "OTO", "BRACKET_EXIT") or ":oco:" in o_cid_u or ":exit:" in o_cid_u:
+                    open_exit_orders_by_tkr[o["ticker"]] = o
+                else:
+                    open_entry_orders_by_tkr[o["ticker"]] = o
             pending_cleanup_syms = set(broker_state.get("pending_legacy_cleanup_symbols") or [])
 
             # Load saved position attribution for this pod
@@ -4101,15 +4137,24 @@ class AlpacaPaperPodManager:
             sim_open_map: Dict[str, Dict[str, Any]] = {}
             same_day_filled_tickers: set[str] = set()
             latest_entry_fill_date_by_tkr: Dict[str, str] = {}
+            latest_entry_order_by_tkr: Dict[str, Dict[str, Any]] = {}
             for rf in broker_state.get("recent_orders") or []:
                 if str(rf.get("status") or "").upper() == "FILLED":
                     rf_tkr = str(rf.get("ticker") or "").upper()
                     rf_dt = str(rf.get("filled_at") or rf.get("submitted_at") or "")[:10]
                     rf_cid = str(rf.get("client_order_id") or "")
-                    if rf_tkr and len(rf_dt) == 10 and (rf_cid.startswith(f"{pod_id}:") or str(rf.get("side") or "").upper() == "BUY"):
-                        if ":exit:" not in rf_cid and ":oco:" not in rf_cid:
-                            if rf_tkr not in latest_entry_fill_date_by_tkr or rf_dt > latest_entry_fill_date_by_tkr[rf_tkr]:
-                                latest_entry_fill_date_by_tkr[rf_tkr] = rf_dt
+                    rf_cls = str(rf.get("order_class") or "").upper()
+                    if (
+                        rf_tkr
+                        and len(rf_dt) == 10
+                        and rf_cls not in ("OCO", "OTO", "BRACKET_EXIT")
+                        and ":exit:" not in rf_cid
+                        and ":oco:" not in rf_cid
+                        and (rf_cid.startswith(f"{pod_id}:") or str(rf.get("side") or "").upper() == "BUY")
+                    ):
+                        if rf_tkr not in latest_entry_fill_date_by_tkr or rf_dt > latest_entry_fill_date_by_tkr[rf_tkr]:
+                            latest_entry_fill_date_by_tkr[rf_tkr] = rf_dt
+                            latest_entry_order_by_tkr[rf_tkr] = rf
 
             for pos in broker_state.get("positions") or []:
                 tkr = str(pos["ticker"]).upper()
@@ -4163,6 +4208,51 @@ class AlpacaPaperPodManager:
                     else f"Entered {pos_side} via {strat.name} ({strat.strategy_id} v{strat.version}) in {sector_by_tkr.get(tkr, 'US Equity')}."
                 )
 
+                exit_order_side = "buy" if is_short_pos else "sell"
+                cand_exit_ord = open_exit_orders_by_tkr.get(tkr)
+                open_exit_ord = (
+                    cand_exit_ord
+                    if (cand_exit_ord and str(cand_exit_ord.get("side") or "").lower() == exit_order_side)
+                    else None
+                )
+                entry_ord_rec = latest_entry_order_by_tkr.get(tkr)
+                broker_init_stop = (
+                    float(entry_ord_rec["stop_price"])
+                    if (entry_ord_rec and entry_ord_rec.get("stop_price"))
+                    else (float(open_exit_ord["stop_price"]) if (open_exit_ord and open_exit_ord.get("stop_price")) else None)
+                )
+                broker_live_stop = (
+                    float(open_exit_ord["stop_price"])
+                    if (open_exit_ord and open_exit_ord.get("stop_price"))
+                    else broker_init_stop
+                )
+                broker_live_tp = (
+                    float(open_exit_ord["take_profit_price"])
+                    if (open_exit_ord and open_exit_ord.get("take_profit_price"))
+                    else (float(entry_ord_rec["take_profit_price"]) if (entry_ord_rec and entry_ord_rec.get("take_profit_price")) else None)
+                )
+                # Keep alpaca_position_attribution strictly synchronized with live Alpaca stop & target orders
+                if saved_attr and (broker_live_stop or broker_live_tp):
+                    sync_init_s = broker_init_stop or float(saved_attr.get("initial_stop_price") or 0.0)
+                    sync_cur_s = broker_live_stop or float(saved_attr.get("current_stop_price") or 0.0)
+                    sync_tp = broker_live_tp or float(saved_attr.get("take_profit_price") or 0.0)
+                    if (
+                        abs(float(saved_attr.get("initial_stop_price") or 0.0) - sync_init_s) >= 0.01
+                        or abs(float(saved_attr.get("current_stop_price") or 0.0) - sync_cur_s) >= 0.01
+                        or abs(float(saved_attr.get("take_profit_price") or 0.0) - sync_tp) >= 0.01
+                    ):
+                        self.db.execute(
+                            """
+                            UPDATE alpaca_position_attribution
+                            SET initial_stop_price = ?, current_stop_price = ?, take_profit_price = ?, quantity = ?, updated_at = ?
+                            WHERE pod_id = ? AND ticker = ?
+                            """,
+                            (sync_init_s, sync_cur_s, sync_tp, qty, now_iso, pod_id, tkr),
+                        )
+                        saved_attr["initial_stop_price"] = sync_init_s
+                        saved_attr["current_stop_price"] = sync_cur_s
+                        saved_attr["take_profit_price"] = sync_tp
+
                 t_bars_pos = bars_by_tkr.get(tkr) or []
                 bars_high_since = [float(b.adj_high) for b in t_bars_pos if b.bar_date >= entry_dt]
                 bars_low_since = [float(b.adj_low) for b in t_bars_pos if b.bar_date >= entry_dt]
@@ -4170,7 +4260,7 @@ class AlpacaPaperPodManager:
                 lowest_px_since_entry = round(min([live_px, avg_entry] + bars_low_since), 2)
 
                 if is_short_pos:
-                    init_stop = float(saved_attr["initial_stop_price"]) if saved_attr else round(avg_entry + sl_mult * atr_val, 2)
+                    init_stop = broker_init_stop or (float(saved_attr["initial_stop_price"]) if saved_attr else round(avg_entry + sl_mult * atr_val, 2))
                     if init_stop <= avg_entry:
                         init_stop = round(avg_entry + sl_mult * atr_val, 2)
                     one_r = max(0.01, init_stop - avg_entry)
@@ -4178,15 +4268,15 @@ class AlpacaPaperPodManager:
                     stage1_stop = round(max(0.01, avg_entry - 0.10 * one_r), 2)
                     stage2_trigger = round(max(0.01, avg_entry - 1.65 * one_r), 2)
                     stage2_stop = round(max(0.01, min(avg_entry - 1.0 * one_r, lowest_px_since_entry + 1.8 * atr_val)), 2)
-                    tp_price = float(saved_attr["take_profit_price"]) if saved_attr else round(max(0.01, avg_entry - tp_mult * atr_val), 2)
+                    tp_price = broker_live_tp or (float(saved_attr["take_profit_price"]) if saved_attr else round(max(0.01, avg_entry - tp_mult * atr_val), 2))
                     if tp_price >= avg_entry:
                         tp_price = round(max(0.01, avg_entry - tp_mult * atr_val), 2)
                     cur_r_mult = round((avg_entry - live_px) / one_r, 2)
                     peak_r_mult = round((avg_entry - lowest_px_since_entry) / one_r, 2)
-                    old_stop = float(saved_attr["current_stop_price"]) if saved_attr else init_stop
+                    old_stop = broker_live_stop or (float(saved_attr["current_stop_price"]) if saved_attr else init_stop)
                     cur_stop = old_stop
                     stop_stage_label = "Initial Short ATR Stop (-1.0R)"
-                    if lowest_px_since_entry <= stage2_trigger:
+                    if lowest_px_since_entry <= stage2_trigger and (execute_live_orders or not is_broker_linked):
                         new_stop = min(cur_stop, stage2_stop)
                         stop_stage_label = f"Stage 2 Short Profit Lock (+1.0R Locked @ ${new_stop:.2f})"
                         if new_stop < cur_stop - 0.01:
@@ -4205,7 +4295,7 @@ class AlpacaPaperPodManager:
                                     "reason": f"{tkr} (SHORT) reached {peak_r_mult:+.2f}R low-water mark (>= +1.65R): lowered Buy-Stop from ${old_stop:.2f} to ${cur_stop:.2f} (locks +1.0R).",
                                 }
                             )
-                    elif lowest_px_since_entry <= stage1_trigger:
+                    elif lowest_px_since_entry <= stage1_trigger and (execute_live_orders or not is_broker_linked):
                         new_stop = min(cur_stop, stage1_stop)
                         stop_stage_label = f"Stage 1 Short Breakeven+0.1R (@ ${new_stop:.2f})"
                         if new_stop < cur_stop - 0.01:
@@ -4225,7 +4315,7 @@ class AlpacaPaperPodManager:
                                 }
                             )
                 else:
-                    init_stop = float(saved_attr["initial_stop_price"]) if saved_attr else round(avg_entry - sl_mult * atr_val, 2)
+                    init_stop = broker_init_stop or (float(saved_attr["initial_stop_price"]) if saved_attr else round(avg_entry - sl_mult * atr_val, 2))
                     if init_stop >= avg_entry:
                         init_stop = round(avg_entry - sl_mult * atr_val, 2)
                     one_r = max(0.01, avg_entry - init_stop)
@@ -4233,17 +4323,17 @@ class AlpacaPaperPodManager:
                     stage1_stop = round(avg_entry + 0.10 * one_r, 2)
                     stage2_trigger = round(avg_entry + 1.65 * one_r, 2)
                     stage2_stop = round(max(avg_entry + 1.0 * one_r, highest_px_since_entry - 1.8 * atr_val), 2)
-                    tp_price = float(saved_attr["take_profit_price"]) if saved_attr else round(avg_entry + tp_mult * atr_val, 2)
+                    tp_price = broker_live_tp or (float(saved_attr["take_profit_price"]) if saved_attr else round(avg_entry + tp_mult * atr_val, 2))
                     if tp_price <= avg_entry:
                         tp_price = round(avg_entry + tp_mult * atr_val, 2)
 
                     cur_r_mult = round((live_px - avg_entry) / one_r, 2)
                     peak_r_mult = round((highest_px_since_entry - avg_entry) / one_r, 2)
-                    old_stop = float(saved_attr["current_stop_price"]) if saved_attr else init_stop
+                    old_stop = broker_live_stop or (float(saved_attr["current_stop_price"]) if saved_attr else init_stop)
                     cur_stop = old_stop
                     stop_stage_label = "Initial ATR Stop (-1.0R)"
 
-                    if highest_px_since_entry >= stage2_trigger:
+                    if highest_px_since_entry >= stage2_trigger and (execute_live_orders or not is_broker_linked):
                         new_stop = max(cur_stop, stage2_stop)
                         stop_stage_label = f"Stage 2 Profit Lock (+1.0R Locked @ ${new_stop:.2f})"
                         if new_stop > cur_stop + 0.01:
@@ -4262,7 +4352,7 @@ class AlpacaPaperPodManager:
                                     "reason": f"{tkr} reached {peak_r_mult:+.2f}R high-water mark (>= +1.65R): raised Stop-Loss from ${old_stop:.2f} to ${cur_stop:.2f} (locks +1.0R profit).",
                                 }
                             )
-                    elif highest_px_since_entry >= stage1_trigger:
+                    elif highest_px_since_entry >= stage1_trigger and (execute_live_orders or not is_broker_linked):
                         new_stop = max(cur_stop, stage1_stop)
                         stop_stage_label = f"Stage 1 Breakeven+0.1R Ratchet (@ ${new_stop:.2f})"
                         if new_stop > cur_stop + 0.01:
@@ -4315,9 +4405,6 @@ class AlpacaPaperPodManager:
                         or "Chandelier" in tech_exit_sig.reason
                     ):
                         exit_reason_str = f"Strategy Technical Exit ({strat.name}): {tech_exit_sig.reason}"
-
-                exit_order_side = "buy" if is_short_pos else "sell"
-                open_exit_ord = open_buy_orders_by_tkr.get(tkr) if is_short_pos else open_sell_orders_by_tkr.get(tkr)
 
                 if exit_reason_str:
                     sell_ord_status = "EXIT_SIGNAL_READY"
@@ -4461,6 +4548,7 @@ class AlpacaPaperPodManager:
                     "current_price": live_px,
                     "avg_entry_price": avg_entry,
                     "stop_loss_price": cur_stop,
+                    "take_profit_price": tp_price,
                 }
 
             # 2. Evaluate All Active Universe Stocks (40+ Core + AI Discovered) for Today's LONG & SHORT Entry Decisions
@@ -4591,8 +4679,13 @@ class AlpacaPaperPodManager:
                 live_px = cand_item["live_px"]
 
                 client_oid = f"{pod_id}:{tkr}:{cand_side.lower()}:{session_date}:v{strat.version}"[:48]
-                existing_open_ord = open_sell_orders_by_tkr.get(tkr) if is_short_entry else open_buy_orders_by_tkr.get(tkr)
                 expected_entry_ord_side = "SELL" if is_short_entry else "BUY"
+                cand_open_ent = open_entry_orders_by_tkr.get(tkr)
+                existing_open_ord = (
+                    cand_open_ent
+                    if (cand_open_ent and str(cand_open_ent.get("side") or "").upper() == expected_entry_ord_side)
+                    else None
+                )
 
                 # Check A: Already held in this Pod from a PRIOR session?
                 if tkr in sim_open_map and tkr not in same_day_filled_tickers:
@@ -4611,7 +4704,7 @@ class AlpacaPaperPodManager:
 
                 # Check B: Adverse AI / Live News Catalyst Veto (<= -0.35 on Longs; >= +0.30 on Shorts)
                 adverse_news_veto = (ai_sent >= 0.30) if is_short_entry else (ai_sent <= -0.35)
-                if adverse_news_veto:
+                if adverse_news_veto and not (existing_open_ord and not execute_live_orders):
                     if (
                         has_creds
                         and execute_live_orders
@@ -4624,6 +4717,7 @@ class AlpacaPaperPodManager:
                             self._alpaca_request(
                                 api_key, secret_key, f"/v2/orders/{existing_open_ord['order_id']}", method="DELETE"
                             )
+                            open_entry_orders_by_tkr.pop(tkr, None)
                         except Exception:
                             pass
                     veto_cat = "AI_BULLISH_SQUEEZE_VETO" if is_short_entry else "AI_BEARISH_CATALYST_VETO"
@@ -4728,7 +4822,7 @@ class AlpacaPaperPodManager:
                     stage2_lock = round(ref_px + 1.0 * one_r, 2)
                     rr_ratio = round((tp_px - ref_px) / one_r, 2)
 
-                    if live_px < buy_zone_low:
+                    if live_px < buy_zone_low and not (existing_open_ord and not execute_live_orders):
                         if (
                             has_creds
                             and execute_live_orders
@@ -4741,6 +4835,7 @@ class AlpacaPaperPodManager:
                                 self._alpaca_request(
                                     api_key, secret_key, f"/v2/orders/{existing_open_ord['order_id']}", method="DELETE"
                                 )
+                                open_entry_orders_by_tkr.pop(tkr, None)
                             except Exception:
                                 pass
                         skipped_reasons.append(
@@ -4770,11 +4865,71 @@ class AlpacaPaperPodManager:
                         days_to_earn = 1
                 if tkr in same_day_filled_tickers and tkr in sim_open_map:
                     held_info = sim_open_map[tkr]
+                    entry_ord_f = latest_entry_order_by_tkr.get(tkr)
                     shares = int(held_info["quantity"])
                     fill_entry_px = round(float(held_info["avg_entry_price"]), 2)
+                    if entry_ord_f and entry_ord_f.get("limit_price"):
+                        max_chase_px = round(float(entry_ord_f["limit_price"]), 2)
+                    stop_px = round(float(held_info["stop_loss_price"]), 2)
+                    tp_px = round(float(held_info.get("take_profit_price") or tp_px), 2)
+                    one_r = max(0.01, abs(fill_entry_px - stop_px))
+                    if is_short_entry:
+                        stage1_px = round(max(0.01, fill_entry_px - 1.0 * one_r), 2)
+                        stage1_lock = round(max(0.01, fill_entry_px - 0.10 * one_r), 2)
+                        stage2_px = round(max(0.01, fill_entry_px - 1.65 * one_r), 2)
+                        stage2_lock = round(max(0.01, fill_entry_px - 1.0 * one_r), 2)
+                        rr_ratio = round(max(0.01, fill_entry_px - tp_px) / one_r, 2)
+                    else:
+                        stage1_px = round(fill_entry_px + 1.0 * one_r, 2)
+                        stage1_lock = round(fill_entry_px + 0.10 * one_r, 2)
+                        stage2_px = round(fill_entry_px + 1.65 * one_r, 2)
+                        stage2_lock = round(fill_entry_px + 1.0 * one_r, 2)
+                        rr_ratio = round(max(0.01, tp_px - fill_entry_px) / one_r, 2)
                     est_cost = round(shares * fill_entry_px, 2)
                     weight_pct = round((est_cost / pod_equity) * 100.0, 2)
                     est_risk_usd = round(max(0.0, abs(fill_entry_px - stop_px) * shares), 2)
+                    eff_risk_pct = est_risk_usd / max(pod_equity, 1.0)
+                elif existing_open_ord is not None:
+                    # Adopt the EXACT working order sitting on Alpaca Paper (qty, limit, stop, take_profit)
+                    shares = int(existing_open_ord["qty"])
+                    if existing_open_ord.get("limit_price"):
+                        max_chase_px = round(float(existing_open_ord["limit_price"]), 2)
+                    if existing_open_ord.get("stop_price"):
+                        stop_px = round(float(existing_open_ord["stop_price"]), 2)
+                    if existing_open_ord.get("take_profit_price"):
+                        tp_px = round(float(existing_open_ord["take_profit_price"]), 2)
+                    anchor_px = max_chase_px if max_chase_px > 0 else ref_px
+                    one_r = max(0.01, abs(anchor_px - stop_px))
+                    if is_short_entry:
+                        stage1_px = round(max(0.01, anchor_px - 1.0 * one_r), 2)
+                        stage1_lock = round(max(0.01, anchor_px - 0.10 * one_r), 2)
+                        stage2_px = round(max(0.01, anchor_px - 1.65 * one_r), 2)
+                        stage2_lock = round(max(0.01, anchor_px - 1.0 * one_r), 2)
+                        rr_ratio = round(max(0.01, anchor_px - tp_px) / one_r, 2)
+                    else:
+                        stage1_px = round(anchor_px + 1.0 * one_r, 2)
+                        stage1_lock = round(anchor_px + 0.10 * one_r, 2)
+                        stage2_px = round(anchor_px + 1.65 * one_r, 2)
+                        stage2_lock = round(anchor_px + 1.0 * one_r, 2)
+                        rr_ratio = round(max(0.01, tp_px - anchor_px) / one_r, 2)
+                    est_cost = round(shares * anchor_px, 2)
+                    weight_pct = round((est_cost / pod_equity) * 100.0, 2)
+                    est_risk_usd = round(max(0.0, abs(anchor_px - stop_px) * shares), 2)
+                    eff_risk_pct = est_risk_usd / max(pod_equity, 1.0)
+                elif is_broker_linked and not execute_live_orders:
+                    # Read-only UI load on a connected Alpaca Paper account: never list unsubmitted setups as placed orders
+                    skipped_reasons.append(
+                        {
+                            "ticker": tkr,
+                            "sector": sector,
+                            "category": "PENDING_SCHEDULED_EXECUTION",
+                            "status_badge": "Pending Scheduled Run",
+                            "live_price": live_px,
+                            "technical_summary": sig.reason,
+                            "reason": f"{cand_side} setup qualified ({sig.reason}); awaiting next scheduled Daily execution window to submit to Alpaca.",
+                        }
+                    )
+                    continue
                 else:
                     pod_rm = PortfolioRiskManager(self.settings.risk, db=None)
                     open_rets_map = {
@@ -4857,7 +5012,7 @@ class AlpacaPaperPodManager:
                         f"Limit Bracket Order (Limit <= ${max_chase_px:.2f}) with GTC Stop & Target."
                     )
 
-                if has_creds and "unittest" not in _sys.modules:
+                if is_broker_linked:
                     if tkr in same_day_filled_tickers and tkr in sim_open_map:
                         order_exec_status = f"FILLED_ON_ALPACA (@ ${sim_open_map[tkr]['avg_entry_price']:.2f})"
                     elif existing_open_ord and existing_open_ord.get("side") == expected_entry_ord_side:
@@ -4865,7 +5020,7 @@ class AlpacaPaperPodManager:
                         alpaca_ord_id = existing_open_ord.get("order_id")
                     elif pending_cleanup_syms:
                         order_exec_status = "AWAITING_1030PM_OPEN_CLEANUP"
-                    elif execute_live_orders:
+                    elif execute_live_orders and has_creds and "unittest" not in _sys.modules:
                         brk_payload = {
                             "symbol": tkr,
                             "qty": str(shares),
@@ -5025,6 +5180,70 @@ class AlpacaPaperPodManager:
                         "avg_entry_price": ref_px,
                         "stop_loss_price": stop_px,
                     }
+
+            # Guarantee 100% visibility of any working entry order still open on Alpaca that did not appear in triggered_candidates
+            covered_entry_tkrs = {e["ticker"] for e in executed_or_queued}
+            for o_tkr, o_ent in open_entry_orders_by_tkr.items():
+                if o_tkr in covered_entry_tkrs or o_tkr in sim_open_map:
+                    continue
+                is_sh_o = str(o_ent.get("side") or "BUY").upper() == "SELL"
+                o_side_lbl = "SHORT" if is_sh_o else "LONG"
+                o_shs = int(o_ent.get("qty") or 0)
+                o_lim = round(float(o_ent.get("limit_price") or (live_quotes.get(o_tkr, {}).get("indicative_price") or 0.0)), 2)
+                o_stop = round(float(o_ent.get("stop_price") or (o_lim * (1.04 if is_sh_o else 0.96))), 2)
+                o_tp = round(float(o_ent.get("take_profit_price") or (o_lim * (0.92 if is_sh_o else 1.08))), 2)
+                o_one_r = max(0.01, abs(o_lim - o_stop))
+                o_s1 = round(o_lim - o_one_r if is_sh_o else o_lim + o_one_r, 2)
+                o_s1_lock = round(o_lim - 0.10 * o_one_r if is_sh_o else o_lim + 0.10 * o_one_r, 2)
+                o_s2 = round(o_lim - 1.65 * o_one_r if is_sh_o else o_lim + 1.65 * o_one_r, 2)
+                o_s2_lock = round(o_lim - o_one_r if is_sh_o else o_lim + o_one_r, 2)
+                o_rr = round(abs(o_tp - o_lim) / o_one_r, 2)
+                o_cost = round(o_shs * o_lim, 2)
+                o_risk = round(abs(o_lim - o_stop) * o_shs, 2)
+                o_live = round(float((live_quotes.get(o_tkr) or {}).get("indicative_price") or o_lim), 2)
+                saved_o = attr_by_tkr.get(o_tkr) or {}
+                executed_or_queued.append(
+                    {
+                        "ticker": o_tkr,
+                        "side": o_side_lbl,
+                        "sector": sector_by_tkr.get(o_tkr, str(saved_o.get("sector") or "US Equity")),
+                        "pod_id": pod_id,
+                        "pod_label": pod_cfg["short_label"],
+                        "alpaca_account_number": broker_state.get("alpaca_account_number", ""),
+                        "strategy_id": strat.strategy_id,
+                        "strategy_version": strat.version,
+                        "strategy_name": strat.name,
+                        "shares": o_shs,
+                        "reference_close_price": o_lim,
+                        "live_price": o_live,
+                        "gap_pct": 0.0,
+                        "buy_zone_low": o_lim,
+                        "max_chase_price": o_lim,
+                        "buy_zone_str": f"{'>=' if is_sh_o else '<='} ${o_lim:.2f}",
+                        "estimated_cost_usd": o_cost,
+                        "portfolio_weight_pct": round((o_cost / pod_equity) * 100.0, 2),
+                        "conviction_tier": str(saved_o.get("conviction_tier") or "Live Alpaca Working Bracket"),
+                        "composite_alpha_score": 1.0,
+                        "risk_usd": o_risk,
+                        "risk_pct": round((o_risk / max(pod_equity, 1.0)) * 100.0, 2),
+                        "stop_loss_price": o_stop,
+                        "stage1_ratchet_price": o_s1,
+                        "stage1_stop_price": o_s1_lock,
+                        "stage2_ratchet_price": o_s2,
+                        "stage2_stop_price": o_s2_lock,
+                        "take_profit_price": o_tp,
+                        "reward_risk_ratio": o_rr,
+                        "max_hold_days": strat.holding_period_max_days,
+                        "ai_catalyst_sentiment": float(saved_o.get("ai_catalyst_score") or 0.0),
+                        "ai_catalyst_note": str(saved_o.get("ai_catalyst_headline") or ""),
+                        "technical_trigger": str(saved_o.get("technical_trigger") or f"Working {o_side_lbl} Limit Bracket order on Alpaca Paper."),
+                        "pre_open_guidance": f"Working {o_side_lbl} Limit Bracket order on Alpaca ({o_ent.get('status', 'ACCEPTED')}).",
+                        "order_status": f"QUEUED_ON_ALPACA ({o_ent.get('status', 'ACCEPTED')})",
+                        "client_order_id": str(o_ent.get("client_order_id") or ""),
+                        "factors": [],
+                    }
+                )
+                skipped_reasons = [s for s in skipped_reasons if s.get("ticker") != o_tkr]
 
             cat_priority = {
                 "ALREADY_HELD_IN_POD": 1,

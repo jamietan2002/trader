@@ -1082,6 +1082,88 @@ class TestSwingTradingPlatform(unittest.TestCase):
         self.assertGreaterEqual(attr["total_closed_trades"], 2)
         self.assertTrue(len(attr["by_side"]) >= 2)
 
+        # 6. Verify exact Alpaca child-bracket exit & working entry order parity in Pod Manager
+        for gs in all_golden:
+            orch.registry.register_strategy(gs)
+        self.db.set_cached_response(
+            "alpaca_pod_persisted_v1:pod_2_mean_reversion",
+            "alpaca_pod_persisted",
+            {
+                "pod_id": "pod_2_mean_reversion",
+                "strategy_id": "strat_mean_reversion_bb",
+                "broker_mode": "ALPACA_PAPER_LIVE",
+                "broker_connected": True,
+                "alpaca_account_number": "PA3IAK6TV",
+                "account_status": "ACTIVE",
+                "starting_capital": 100_000.0,
+                "total_equity": 100_250.0,
+                "cash_balance": 85_000.0,
+                "positions_market_value": 15_250.0,
+                "total_pnl_usd": 250.0,
+                "total_return_pct": 0.25,
+                "unrealised_pnl": 250.0,
+                "open_positions_count": 1,
+                "positions": [
+                    {
+                        "ticker": "AAPL",
+                        "side": "LONG",
+                        "quantity": 42,
+                        "avg_entry_price": 356.91,
+                        "current_price": 363.10,
+                        "market_value": 15_250.20,
+                        "unrealised_pnl": 260.0,
+                        "unrealised_return_pct": 1.73,
+                    }
+                ],
+                "open_orders": [
+                    {
+                        "order_id": "ord_exit_aapl",
+                        "client_order_id": "pod_2_mean_reversion:2025-05-09:AAPL:LONG",
+                        "ticker": "AAPL",
+                        "side": "SELL",
+                        "qty": 42,
+                        "filled_qty": 0,
+                        "type": "OCO_EXIT",
+                        "order_class": "BRACKET_EXIT",
+                        "limit_price": 388.40,
+                        "stop_price": 341.86,
+                        "take_profit_price": 388.40,
+                        "filled_avg_price": None,
+                        "status": "NEW",
+                    },
+                    {
+                        "order_id": "ord_entry_slb",
+                        "client_order_id": "pod_2_mean_reversion:2025-05-09:SLB:LONG",
+                        "ticker": "SLB",
+                        "side": "BUY",
+                        "qty": 204,
+                        "filled_qty": 0,
+                        "type": "LIMIT",
+                        "order_class": "BRACKET",
+                        "limit_price": 52.13,
+                        "stop_price": 48.78,
+                        "take_profit_price": 57.75,
+                        "filled_avg_price": None,
+                        "status": "ACCEPTED",
+                    },
+                ],
+                "recent_orders": [],
+            },
+            "2099-01-01T00:00:00+00:00",
+        )
+        pods_sync = orch.pod_manager.evaluate_and_sync_all_pods(execute_live_orders=False)
+        pod2_state = next(p for p in pods_sync["pods"] if p["pod_id"] == "pod_2_mean_reversion")
+        aapl_hold = next(h for h in pod2_state["active_holdings_plan"] if h["ticker"] == "AAPL")
+        self.assertTrue(aapl_hold["oco_bracket_active"])
+        self.assertAlmostEqual(aapl_hold["current_stop_price"], 341.86, places=2)
+        self.assertAlmostEqual(aapl_hold["take_profit_price"], 388.40, places=2)
+        slb_work = next(e for e in pod2_state["executed_or_queued"] if e["ticker"] == "SLB")
+        self.assertEqual(slb_work["shares"], 204)
+        self.assertAlmostEqual(slb_work["max_chase_price"], 52.13, places=2)
+        self.assertAlmostEqual(slb_work["stop_loss_price"], 48.78, places=2)
+        self.assertAlmostEqual(slb_work["take_profit_price"], 57.75, places=2)
+        self.assertIn("QUEUED_ON_ALPACA", slb_work["order_status"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

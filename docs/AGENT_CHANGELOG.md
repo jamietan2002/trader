@@ -4,6 +4,25 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-14] — v2.4 Exact Alpaca Paper Order & Child-Bracket Parity Fix
+
+### Summary
+- **Fixed Nested Bracket Child-Leg Extraction & Stale Shadow Stop/Target Fallback (`core/execution/paper_broker.py`)**:
+  - Updated `fetch_alpaca_pod_broker_state()` to inspect `legs` of `FILLED` parent `BRACKET` orders (`/v2/orders?status=all&nested=true`) and promote active `NEW`/`HELD`/`ACCEPTED` Stop-Loss & Take-Profit child legs into `open_orders` (`order_class="BRACKET_EXIT"`, `type="OCO_EXIT"`), while filtering pre-Pod `SIMPLE MARKET` demo orders without a `pod_` prefix.
+  - Updated `evaluate_and_sync_all_pods()` to separate `open_exit_orders_by_tkr` from `open_entry_orders_by_tkr`, prioritize live Alpaca `stop_price` and `take_profit_price` over pre-link Shadow rows in `alpaca_position_attribution`, and adopt exact live Alpaca `qty`, `limit_price`, `stop_price`, and `take_profit_price` on working `QUEUED_ON_ALPACA` entry orders (including orphan working entry orders).
+- **Upgraded Tab 2 & Tab 1 Broker Visibility (`dashboard/streamlit_app.py`)**:
+  - Surfaced `Working Entries` counts in the Top Banner, Top 3 Pod Account Cards, and Tab 2 badge, plus a dedicated **`⏳ Working / Queued Entry Bracket Orders on Alpaca`** card section at the top of Tab 2.
+  - Deduplicated the Tab 2 Broker Orders table by `(account_number, order_id)` and split `Limit / Stop` into separate `Entry / Fill $`, `Stop $`, and `Target $` columns; badged historical pre-link `SHADOW_POD` journal entries as `🧪 SHADOW SIMULATION (Pre-Account Link)` in Tab 1.
+
+### Modules Added / Modified
+- `core/execution/paper_broker.py`, `dashboard/streamlit_app.py`, `tests/test_platform.py`
+- `USER_GUIDE.md`, `docs/AGENT_CHANGELOG.md`
+
+### Verification
+- Audited live Alpaca Paper accounts (`PA3GP0WMH`, `PA3IAK6TV`, `PA3OSGSIE`) against `PlatformApplication.get_dashboard_state()` and `daily_decision_logs`, confirming 100% share-and-penny parity across all 8 open holdings, 8 active OCO exit brackets, and 3 working entry bracket orders (`SLB 204`, `NEE 175`, `HD 42`), and passed `.venv/bin/python .agents/skills/maintain-project-context/scripts/verify_context.py` (`exit code 0`).
+
+---
+
 ## [2026-11-14] — v2.3 Zero-Button Autonomous Sidebar & Sync Removal
 
 ### Summary

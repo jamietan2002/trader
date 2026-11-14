@@ -97,11 +97,12 @@ To ensure strategies are not curve-fit to a single bull run **and** are optimize
 3. **Dual-Horizon Evaluation (`2.3-Yr Multi-Regime` + `6-Month Recent/Rolling` + `SQN`)**:
    - *Decision*: Strategies are evaluated on 9 gates combining 2.3-year survival, Out-of-Sample `SPY` dominance, **Recent 6-Month (`126d`) Return & Win Rate**, **Rolling 6-Month Win Probability (`86%–98%`)**, and **Van Tharp's System Quality Number (`SQN >= 2.85`)**.
    - *Why*: Prevents promoting strategies that made all their money 2 years ago while ensuring trade-by-trade consistency over a 6-month live horizon.
-4. **Broker-Native 3-Pod Alpaca Paper Architecture (`AlpacaPaperPodManager`) + Internal `$100k` Pods**:
-   - *Decision*: `AlpacaPaperPodManager` nominates the **Top 3 Swing Strategy Archetypes** into dedicated pods:
-     - **Pod #1 (`strat_volatility_breakout`)**: Connected to your primary **Alpaca Paper Account (`PA3GP0WMH`)** via `ALPACA_API_KEY` (with automatic single-account regime fallback to `#2 Mean Reversion Pullback` when `SPY < SMA50` and `ALPACA_API_KEY_2` is not yet linked).
-     - **Pod #2 (`strat_mean_reversion_bb`)**: Ready for a 2nd Alpaca Paper account via `ALPACA_API_KEY_2` (or runs as a `$100k` shadow pod).
-     - **Pod #3 (`strat_momentum_trend`)**: Ready for a 3rd Alpaca Paper account via `ALPACA_API_KEY_3` (or runs as a `$100k` shadow pod).
+4. **Broker-Native 3-Pod Alpaca Paper Architecture (`AlpacaPaperPodManager`) + Exact Broker Order & Child-Bracket Parity**:
+   - *Decision*: `AlpacaPaperPodManager` deploys the **Top 3 Swing Strategy Archetypes** across 3 dedicated `$100,000` Alpaca Paper accounts:
+     - **Pod #1 (`strat_volatility_breakout`)**: Connected to **`PA3GP0WMH`** via `ALPACA_API_KEY`.
+     - **Pod #2 (`strat_mean_reversion_bb`)**: Connected to **`PA3IAK6TV`** via `ALPACA_API_KEY_2`.
+     - **Pod #3 (`strat_momentum_trend`)**: Connected to **`PA3OSGSIE`** via `ALPACA_API_KEY_3`.
+   - *Exact Broker Order & Child-Bracket Parity*: `fetch_alpaca_pod_broker_state()` extracts active nested Take-Profit & Stop-Loss child legs from filled `BRACKET` orders (`BRACKET_EXIT` / `OCO_EXIT`) and reconciles `holdings_decisions`, `executed_or_queued` working entry orders, and `alpaca_position_attribution` to the exact live Alpaca share count, fill price, stop price, and target price.
    - *4 Senior Quant Profit-Maximizing Upgrades*:
      1. **Two-Stage Progressive Profit Ratchet**: Stage 1 (`>= +1.0R`) moves Stop-Loss to `Entry + 0.10R` (breakeven + fee lock); Stage 2 (`>= +1.65R`) moves Stop-Loss to `max(Entry + 1.0R, Live - 1.8*ATR)` (`+1.0R` profit lock).
      2. **Conviction-Weighted Fractional Kelly Sizing**: `1.30%` risk on Tier-1 A+ setups (`AI Catalyst >= +0.70`, `20d RS >= +5%`, `Sector Rank <= 2`), `1.00%` on standard setups, and `0.75%` defensive dampener in high-vol pullbacks.

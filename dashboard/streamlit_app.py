@@ -320,7 +320,7 @@ def main() -> None:
     st.markdown(CLASSY_MINIMAL_CSS, unsafe_allow_html=True)
     _sync_streamlit_secrets_to_env(st)
 
-    _code_version = "2026-11-14-v2.3"
+    _code_version = "2026-11-14-v2.4"
     import api.server as _srv_mod
     import core.market_data.models as _md_mod
     import core.execution.paper_broker as _pb_check_mod
@@ -429,7 +429,9 @@ def main() -> None:
 
     # ---------------- AGGREGATE LIVE POD STATE ----------------
     all_open_holdings: List[Dict[str, Any]] = []
+    all_working_entry_orders: List[Dict[str, Any]] = []
     all_broker_orders: List[Dict[str, Any]] = []
+    seen_order_keys: set[str] = set()
     today_entries_count = 0
 
     for pod in pods_list:
@@ -450,9 +452,19 @@ def main() -> None:
             o_item["_pod_name"] = pod_name
             o_item["_account_number"] = acct_num
             o_item["_bucket"] = "OPEN"
+            oid_k = f"{acct_num}:{o_item.get('order_id') or o_item.get('client_order_id')}"
+            seen_order_keys.add(oid_k)
             all_broker_orders.append(o_item)
-        for bo in (b_st.get("recent_orders") or [])[:8]:
+            o_cls = str(o_item.get("order_class") or "").upper()
+            o_cid = str(o_item.get("client_order_id") or "")
+            if o_cls not in ("OCO", "OTO", "BRACKET_EXIT") and ":oco:" not in o_cid and ":exit:" not in o_cid:
+                all_working_entry_orders.append(o_item)
+        for bo in (b_st.get("recent_orders") or [])[:12]:
             o_item = dict(bo)
+            oid_k = f"{acct_num}:{o_item.get('order_id') or o_item.get('client_order_id')}"
+            if oid_k in seen_order_keys:
+                continue
+            seen_order_keys.add(oid_k)
             o_item["_pod_name"] = pod_name
             o_item["_account_number"] = acct_num
             o_item["_bucket"] = "RECENT"
@@ -478,8 +490,8 @@ def main() -> None:
         f"Regime: {html.escape(market_regime)}</span> "
         f"<span style='color:#94a3b8;font-size:0.79rem;margin-left:8px;'>Latest Session: <code>{html.escape(session_dt)}</code></span></div>"
         f"<div style='font-size:0.81rem;color:#cbd5e1;'>"
-        f"Latest Session Orders: <strong style='color:#38bdf8;'>{today_entries_count}</strong> &nbsp;|&nbsp; "
-        f"Open Pod Holdings: <strong>{long_hold_cnt} Long / {short_hold_cnt} Short</strong> &nbsp;|&nbsp; "
+        f"Open Holdings: <strong>{long_hold_cnt} Long / {short_hold_cnt} Short</strong> &nbsp;|&nbsp; "
+        f"Working Entry Orders: <strong style='color:#38bdf8;'>{len(all_working_entry_orders)}</strong> &nbsp;|&nbsp; "
         f"<a href='{ALPACA_PAPER_PORTAL_URL}' target='_blank' style='color:#38bdf8;text-decoration:none;font-weight:600;'>Alpaca Paper Portal ↗</a>"
         f"</div></div>"
         f"<div style='margin-top:6px;font-size:0.78rem;color:#94a3b8;'>"
@@ -501,6 +513,13 @@ def main() -> None:
             p_positions = pod.get("active_holdings_plan") or b_state.get("positions") or []
             n_long = sum(1 for p in p_positions if str(p.get("side", "LONG")).upper() == "LONG")
             n_short = sum(1 for p in p_positions if str(p.get("side", "LONG")).upper() == "SHORT")
+            n_working_ent = sum(
+                1
+                for o in (b_state.get("open_orders") or [])
+                if str(o.get("order_class") or "").upper() not in ("OCO", "OTO", "BRACKET_EXIT")
+                and ":oco:" not in str(o.get("client_order_id") or "")
+                and ":exit:" not in str(o.get("client_order_id") or "")
+            )
             pnl_col = "#10b981" if pnl_d >= 0 else "#f87171"
             conn_col = "#10b981" if connected else "#f59e0b"
             pod_title = str(pod.get("label") or pod.get("short_label") or pod.get("pod_name") or "")
@@ -519,7 +538,8 @@ def main() -> None:
                     f"<span style='font-size:0.82rem;font-weight:600;color:{pnl_col};'>{pnl_d:+,.2f} ({pnl_pct:+.2f}%)</span>"
                     f"</div>"
                     f"<div style='font-size:0.74rem;color:#94a3b8;margin-top:4px;'>"
-                    f"Buying Cash: <code>${cash:,.0f}</code> · Holdings: <strong>{n_long}L / {n_short}S</strong></div>"
+                    f"Cash: <code>${cash:,.0f}</code> · Held: <strong>{n_long}L / {n_short}S</strong> · "
+                    f"Working Entries: <strong style='color:#38bdf8;'>{n_working_ent}</strong></div>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
@@ -528,10 +548,15 @@ def main() -> None:
     decision_logs = app.orchestrator.pod_manager.get_recent_decision_logs(limit=90)
     unique_journal_dates = sorted({str(d.get("session_date", "")) for d in decision_logs if d.get("session_date")}, reverse=True)
 
+    tab2_badge = (
+        f"{len(all_open_holdings)} Held · {len(all_working_entry_orders)} Working"
+        if all_working_entry_orders
+        else f"{len(all_open_holdings)}"
+    )
     tab1, tab2, tab3, tab4 = st.tabs(
         [
             f"📓 Day-by-Day Pod Decision Journal ({len(unique_journal_dates)} Days)",
-            f"🛡️ Active Holdings & Exit Plans ({len(all_open_holdings)})",
+            f"🛡️ Active Holdings & Orders ({tab2_badge})",
             "🏆 Strategy Tournament & Mistake Analyzer",
             f"📰 Live News & Universe ({len(universe_meta)})",
         ]
@@ -646,11 +671,18 @@ def main() -> None:
                         s for s in skips_list if str(s.get("category", "")) == "NO_TECHNICAL_SIGNAL"
                     ]
 
-                    if entries_list:
+                    is_shadow_log = str(p_log.get("broker_mode") or "").startswith("SHADOW_POD")
+                    if is_shadow_log:
+                        status_pill = (
+                            "<span style='background:rgba(245,158,11,0.16);color:#fbbf24;padding:3px 10px;"
+                            "border-radius:999px;font-size:0.74rem;font-weight:700;'>"
+                            "🧪 SHADOW SIMULATION (Pre-Account Link)</span>"
+                        )
+                    elif entries_list:
                         status_pill = (
                             f"<span style='background:rgba(16,185,129,0.20);color:#34d399;padding:3px 10px;"
                             f"border-radius:999px;font-size:0.75rem;font-weight:700;'>"
-                            f"🟢 {len(entries_list)} TRADE(S) PLACED / FILLED</span>"
+                            f"🟢 {len(entries_list)} ALPACA ORDER(S) PLACED / FILLED</span>"
                         )
                     elif holds_list:
                         status_pill = (
@@ -847,8 +879,41 @@ def main() -> None:
     # TAB 2: ACTIVE HOLDINGS & EXIT PLANS (NUMBERS + CONCISE EXPLANATIONS)
     # =========================================================================
     with tab2:
+        if all_working_entry_orders:
+            st.markdown(f"#### ⏳ Working / Queued Entry Bracket Orders on Alpaca ({len(all_working_entry_orders)})")
+            for wo in all_working_entry_orders:
+                w_tkr = str(wo.get("ticker") or "")
+                w_side = "SHORT" if str(wo.get("side") or "BUY").upper() == "SELL" else "LONG"
+                w_qty = int(wo.get("qty") or 0)
+                w_lim = float(wo.get("limit_price") or 0.0)
+                w_stop = float(wo.get("stop_price") or 0.0)
+                w_tp = float(wo.get("take_profit_price") or 0.0)
+                w_val = round(w_qty * w_lim, 2)
+                w_risk = round(abs(w_lim - w_stop) * w_qty, 2) if w_stop > 0 else 0.0
+                w_st = str(wo.get("status") or "ACCEPTED")
+                w_pod = str(wo.get("_pod_name") or "")
+                w_acct = str(wo.get("_account_number") or "")
+                w_dir = "🟢 BUY LONG" if w_side == "LONG" else "🔴 SELL SHORT"
+                st.markdown(
+                    f"<div style='background:rgba(15,23,42,0.58);border:1px solid rgba(56,189,248,0.28);"
+                    f"border-left:4px solid #38bdf8;border-radius:8px;padding:10px 14px;margin-bottom:8px;font-size:0.83rem;'>"
+                    f"<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;'>"
+                    f"<div><strong style='font-size:0.92rem;color:#f8fafc;'>{w_dir} · {html.escape(w_tkr)}</strong> "
+                    f"(<code>{w_qty} shs</code> · Est. Notional <code>${w_val:,.0f}</code> · 1R Risk <code>${w_risk:,.0f}</code>) — "
+                    f"<span style='color:#94a3b8;'>{html.escape(w_pod)} (<code>{html.escape(w_acct)}</code>)</span></div>"
+                    f"<span style='background:rgba(56,189,248,0.16);color:#38bdf8;padding:2px 9px;border-radius:999px;font-size:0.74rem;font-weight:700;'>"
+                    f"WORKING ON ALPACA ({html.escape(w_st)})</span></div>"
+                    f"<div style='margin-top:5px;color:#cbd5e1;'>"
+                    f"<strong>Exact Alpaca Bracket Numbers:</strong> Entry Limit <code>${w_lim:.2f}</code> &nbsp;·&nbsp; "
+                    f"Attached Stop-Loss <code>${w_stop:.2f}</code> &nbsp;·&nbsp; "
+                    f"Attached Take-Profit <code>${w_tp:.2f}</code></div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            st.markdown("---")
+
         if all_open_holdings:
-            st.markdown("#### 🛡️ Live Alpaca Paper Positions — Entry & 4-Step Exit Strategy Numbers")
+            st.markdown(f"#### 🛡️ Live Alpaca Paper Positions — Entry & 4-Step Exit Strategy Numbers ({len(all_open_holdings)})")
             for pos in all_open_holdings:
                 tkr = str(pos.get("ticker", ""))
                 side = str(pos.get("side", "LONG")).upper()
@@ -972,12 +1037,22 @@ def main() -> None:
                             "Account": o.get("_account_number", ""),
                             "Ticker": o.get("ticker") or o.get("symbol", ""),
                             "Side": str(o.get("side", "")).upper(),
-                            "Type": o.get("type", ""),
+                            "Class": o.get("order_class", ""),
                             "Qty": o.get("qty", ""),
+                            "Entry / Fill $": (
+                                f"${float(o['filled_avg_price']):.2f}"
+                                if o.get("filled_avg_price")
+                                else (
+                                    f"${float(o['limit_price']):.2f}"
+                                    if (o.get("limit_price") and str(o.get("order_class", "")).upper() not in ("OCO", "BRACKET_EXIT"))
+                                    else "—"
+                                )
+                            ),
+                            "Stop $": f"${float(o['stop_price']):.2f}" if o.get("stop_price") else "—",
+                            "Target $": f"${float(o['take_profit_price']):.2f}" if o.get("take_profit_price") else "—",
                             "Status": o.get("status", ""),
-                            "Limit / Stop": o.get("limit_price") or o.get("stop_price") or "MKT",
                         }
-                        for o in all_broker_orders[:35]
+                        for o in all_broker_orders[:40]
                     ],
                     use_container_width=True,
                     hide_index=True,
