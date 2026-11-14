@@ -1,8 +1,8 @@
 """Streamlit Community Cloud & Local Dashboard Entrypoint (`streamlit run dashboard/streamlit_app.py`).
 
-v2.1 Autonomous 3-Pod Paper Trading Hub (Zero Manual Live-Account Clutter):
-1. Day-by-Day Pod Decision Journal — Intuitive chronological day-by-day diary across all 3 Alpaca Paper Pods (Entries, Stop Ratchets, Held Positions, News/Risk Vetoes & 60-day Candlestick Charts).
-2. Active Holdings, Charts & Broker Orders — Real-time Long & Short positions across all 3 Alpaca Paper accounts, R-multiple progress bars, GTC OCO verification, Watchlist Chart Inspector, and Broker Orders.
+v2.2 Autonomous 3-Pod Paper Trading Hub (Numbers-First Entry & Exit Plans · Zero Clutter):
+1. Day-by-Day Pod Decision Journal — Intuitive chronological day-by-day diary across all 3 Alpaca Paper Pods with exact Entry & 4-Step Exit Strategy Numbers and concise plain-English explanations.
+2. Active Holdings & Exit Plans — Real-time Long & Short positions across all 3 Alpaca Paper accounts with scannable 4-Point Exit Numbers, GTC OCO verification, Broker Orders, and a 3-Pod Entry/Exit Strategy Rules Cheat-Sheet.
 3. Strategy Tournament & Mistake Analyzer — 9-Gate Out-of-Sample / Walk-Forward leaderboard (6 strategy families incl. Bearish Breakdown) + Post-Trade Attribution & Auto-Tuner Mistake Analyzer.
 4. Live News, Universe & System Health — 24/7 Alpaca News & AI Catalyst stream, 40+ Core & Dynamic Universe Explorer with on-demand ticker onboarding, and autonomous job logs.
 """
@@ -115,133 +115,139 @@ def _format_human_date(iso_dt: str) -> str:
         return str(iso_dt)
 
 
-def _render_candlestick_svg(
-    bars: List[Dict[str, Any]],
-    ticker: str,
-    side: str = "LONG",
-    entry_price: Optional[float] = None,
-    stop_price: Optional[float] = None,
-    stage1_price: Optional[float] = None,
-    stage2_price: Optional[float] = None,
-    target_price: Optional[float] = None,
-    height: int = 235,
+def _compute_exit_ladder_numbers(
+    side: str,
+    entry_px: float,
+    init_stop_px: float,
+    cur_stop_px: float,
+    stage1_trigger_px: float = 0.0,
+    stage1_stop_px: float = 0.0,
+    stage2_trigger_px: float = 0.0,
+    stage2_stop_px: float = 0.0,
+    target_px: float = 0.0,
+) -> Dict[str, float]:
+    """Derive complete, consistent 4-step exit strategy numbers for both current and historical records."""
+    is_short = str(side or "LONG").upper() == "SHORT"
+    eff_init_stop = init_stop_px if init_stop_px > 0 else cur_stop_px
+    one_r = abs(entry_px - eff_init_stop) if (entry_px > 0 and eff_init_stop > 0) else max(entry_px * 0.03, 0.01)
+    one_r = max(one_r, 0.01)
+
+    if is_short:
+        s1_trig = stage1_trigger_px if stage1_trigger_px > 0 else round(entry_px - 1.0 * one_r, 2)
+        s1_lock = stage1_stop_px if stage1_stop_px > 0 else round(entry_px - 0.10 * one_r, 2)
+        s2_trig = stage2_trigger_px if stage2_trigger_px > 0 else round(entry_px - 1.65 * one_r, 2)
+        s2_lock = stage2_stop_px if stage2_stop_px > 0 else round(entry_px - 1.0 * one_r, 2)
+        tp = target_px if target_px > 0 else round(entry_px - 2.2 * one_r, 2)
+        rr = round(max(0.0, (entry_px - tp) / one_r), 2)
+    else:
+        s1_trig = stage1_trigger_px if stage1_trigger_px > 0 else round(entry_px + 1.0 * one_r, 2)
+        s1_lock = stage1_stop_px if stage1_stop_px > 0 else round(entry_px + 0.10 * one_r, 2)
+        s2_trig = stage2_trigger_px if stage2_trigger_px > 0 else round(entry_px + 1.65 * one_r, 2)
+        s2_lock = stage2_stop_px if stage2_stop_px > 0 else round(entry_px + 1.0 * one_r, 2)
+        tp = target_px if target_px > 0 else round(entry_px + 2.2 * one_r, 2)
+        rr = round(max(0.0, (tp - entry_px) / one_r), 2)
+
+    return {
+        "one_r": one_r,
+        "init_stop": eff_init_stop,
+        "cur_stop": cur_stop_px if cur_stop_px > 0 else eff_init_stop,
+        "s1_trig": s1_trig,
+        "s1_lock": s1_lock,
+        "s2_trig": s2_trig,
+        "s2_lock": s2_lock,
+        "tp": tp,
+        "rr": rr,
+    }
+
+
+def _render_four_step_exit_grid_html(
+    stop_px: float,
+    stop_sub: str,
+    s1_trig: float,
+    s1_lock: float,
+    s2_trig: float,
+    s2_lock: float,
+    tp_px: float,
+    tp_sub: str,
 ) -> str:
-    """Render a crisp 60-day OHLC Candlestick + SMA20 + SMA50 SVG chart with horizontal Pod bracket overlays."""
-    if not bars:
-        return (
-            "<div style='padding:18px;background:rgba(15,23,42,0.45);border-radius:8px;"
-            "color:#94a3b8;font-size:0.8rem;text-align:center;'>No 60-day bar history available yet.</div>"
-        )
-
-    width = 680
-    pad_l, pad_r, pad_t, pad_b = 14, 78, 22, 24
-    plot_w = width - pad_l - pad_r
-    plot_h = height - pad_t - pad_b
-
-    all_prices: List[float] = []
-    for b in bars:
-        h_val = float(b.get("h") if b.get("h") is not None else b["high"])
-        l_val = float(b.get("l") if b.get("l") is not None else b["low"])
-        all_prices.extend([h_val, l_val])
-        s20_v = b.get("sma20") if b.get("sma20") is not None else b.get("sma_20")
-        s50_v = b.get("sma50") if b.get("sma50") is not None else b.get("sma_50")
-        if s20_v:
-            all_prices.append(float(s20_v))
-        if s50_v:
-            all_prices.append(float(s50_v))
-    for lvl in (entry_price, stop_price, stage1_price, stage2_price, target_price):
-        if lvl and lvl > 0:
-            all_prices.append(float(lvl))
-
-    min_p = min(all_prices) * 0.992
-    max_p = max(all_prices) * 1.008
-    span_p = max(max_p - min_p, 0.01)
-
-    def _y(px: float) -> float:
-        return pad_t + plot_h - ((px - min_p) / span_p) * plot_h
-
-    n = len(bars)
-    step_x = plot_w / max(n, 1)
-    candle_w = max(2.4, min(7.5, step_x * 0.66))
-
-    grid_svg: List[str] = []
-    for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
-        gy = pad_t + plot_h * frac
-        gp = max_p - span_p * frac
-        grid_svg.append(
-            f"<line x1='{pad_l}' y1='{gy:.1f}' x2='{width - pad_r}' y2='{gy:.1f}' "
-            f"stroke='rgba(148,163,184,0.10)' stroke-width='1'/>"
-            f"<text x='{width - pad_r + 6}' y='{gy + 3:.1f}' fill='#64748b' font-size='9.5' "
-            f"font-family='monospace'>${gp:.2f}</text>"
-        )
-
-    candles_svg: List[str] = []
-    sma20_pts: List[str] = []
-    sma50_pts: List[str] = []
-    for idx, b in enumerate(bars):
-        cx = pad_l + idx * step_x + step_x * 0.5
-        o_px = float(b.get("o") if b.get("o") is not None else b["open"])
-        h_px = float(b.get("h") if b.get("h") is not None else b["high"])
-        l_px = float(b.get("l") if b.get("l") is not None else b["low"])
-        c_px = float(b.get("c") if b.get("c") is not None else b["close"])
-        color = "#10b981" if c_px >= o_px else "#ef4444"
-        y_high, y_low = _y(h_px), _y(l_px)
-        y_open, y_close = _y(o_px), _y(c_px)
-        rect_top = min(y_open, y_close)
-        rect_h = max(1.6, abs(y_close - y_open))
-        candles_svg.append(
-            f"<line x1='{cx:.1f}' y1='{y_high:.1f}' x2='{cx:.1f}' y2='{y_low:.1f}' stroke='{color}' stroke-width='1.15'/>"
-            f"<rect x='{cx - candle_w / 2:.1f}' y='{rect_top:.1f}' width='{candle_w:.1f}' height='{rect_h:.1f}' fill='{color}' rx='0.8'/>"
-        )
-        s20_v = b.get("sma20") if b.get("sma20") is not None else b.get("sma_20")
-        s50_v = b.get("sma50") if b.get("sma50") is not None else b.get("sma_50")
-        if s20_v:
-            sma20_pts.append(f"{cx:.1f},{_y(float(s20_v)):.1f}")
-        if s50_v:
-            sma50_pts.append(f"{cx:.1f},{_y(float(s50_v)):.1f}")
-
-    sma_svg = ""
-    if len(sma20_pts) >= 2:
-        sma_svg += f"<polyline fill='none' stroke='#38bdf8' stroke-width='1.5' points='{' '.join(sma20_pts)}'/>"
-    if len(sma50_pts) >= 2:
-        sma_svg += f"<polyline fill='none' stroke='#f59e0b' stroke-width='1.5' points='{' '.join(sma50_pts)}'/>"
-
-    overlays_svg: List[str] = []
-    level_specs = [
-        (target_price, "#22c55e", "Target", "4,3"),
-        (stage2_price, "#a855f7", "1.65R", "3,3"),
-        (stage1_price, "#eab308", "1.0R BE", "3,3"),
-        (entry_price, "#38bdf8", "Entry", "5,2"),
-        (stop_price, "#ef4444", "Stop", "4,2"),
-    ]
-    for lvl_px, l_col, lbl, dash in level_specs:
-        if lvl_px and lvl_px > 0:
-            ly = _y(float(lvl_px))
-            overlays_svg.append(
-                f"<line x1='{pad_l}' y1='{ly:.1f}' x2='{width - pad_r}' y2='{ly:.1f}' "
-                f"stroke='{l_col}' stroke-width='1.35' stroke-dasharray='{dash}'/>"
-                f"<rect x='{width - pad_r + 2}' y='{ly - 7:.1f}' width='73' height='14' rx='3' fill='rgba(15,23,42,0.88)' stroke='{l_col}' stroke-width='0.7'/>"
-                f"<text x='{width - pad_r + 5}' y='{ly + 3:.1f}' fill='{l_col}' font-size='8.8' font-weight='600' font-family='monospace'>{lbl} ${lvl_px:.2f}</text>"
-            )
-
-    first_dt = str(bars[0].get("d") or bars[0].get("date") or "")
-    last_dt = str(bars[-1].get("d") or bars[-1].get("date") or "")
-    side_col = "#10b981" if side == "LONG" else "#f87171"
-    header_lbl = f"{html.escape(ticker)} · 60D OHLC ({side}) · Blue=SMA20 · Amber=SMA50"
-
+    """Render a crisp 4-column numerical Exit Strategy strip (no charts/diagrams)."""
     return (
-        f"<svg viewBox='0 0 {width} {height}' style='width:100%;height:auto;background:rgba(15,23,42,0.62);"
-        f"border:1px solid rgba(148,163,184,0.16);border-radius:8px;display:block;'>"
-        f"<text x='{pad_l + 4}' y='15' fill='{side_col}' font-size='10.5' font-weight='600' "
-        f"font-family='-apple-system,BlinkMacSystemFont,sans-serif'>{header_lbl}</text>"
-        f"{''.join(grid_svg)}"
-        f"{sma_svg}"
-        f"{''.join(candles_svg)}"
-        f"{''.join(overlays_svg)}"
-        f"<text x='{pad_l + 2}' y='{height - 6}' fill='#64748b' font-size='9' font-family='monospace'>{first_dt}</text>"
-        f"<text x='{width - pad_r - 58}' y='{height - 6}' fill='#64748b' font-size='9' font-family='monospace'>{last_dt}</text>"
-        f"</svg>"
+        "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:8px;margin:7px 0;'>"
+        f"<div style='background:rgba(239,68,68,0.09);border:1px solid rgba(239,68,68,0.28);border-radius:6px;padding:7px 10px;'>"
+        f"<div style='font-size:0.69rem;color:#fca5a5;font-weight:700;text-transform:uppercase;'>1 · Hard Stop (-1.0R)</div>"
+        f"<div style='font-size:0.98rem;font-weight:700;color:#f8fafc;font-family:monospace;margin-top:2px;'>${stop_px:.2f}</div>"
+        f"<div style='font-size:0.72rem;color:#cbd5e1;'>{html.escape(stop_sub)}</div>"
+        "</div>"
+        f"<div style='background:rgba(234,179,8,0.09);border:1px solid rgba(234,179,8,0.28);border-radius:6px;padding:7px 10px;'>"
+        f"<div style='font-size:0.69rem;color:#fde047;font-weight:700;text-transform:uppercase;'>2 · +1.0R Breakeven Trigger</div>"
+        f"<div style='font-size:0.98rem;font-weight:700;color:#f8fafc;font-family:monospace;margin-top:2px;'>Hit ${s1_trig:.2f}</div>"
+        f"<div style='font-size:0.72rem;color:#cbd5e1;'>Moves stop → <code>${s1_lock:.2f}</code> (+0.1R)</div>"
+        "</div>"
+        f"<div style='background:rgba(168,85,247,0.10);border:1px solid rgba(168,85,247,0.28);border-radius:6px;padding:7px 10px;'>"
+        f"<div style='font-size:0.69rem;color:#d8b4fe;font-weight:700;text-transform:uppercase;'>3 · +1.65R Profit Lock</div>"
+        f"<div style='font-size:0.98rem;font-weight:700;color:#f8fafc;font-family:monospace;margin-top:2px;'>Hit ${s2_trig:.2f}</div>"
+        f"<div style='font-size:0.72rem;color:#cbd5e1;'>Locks stop → <code>${s2_lock:.2f}</code> (+1.0R)</div>"
+        "</div>"
+        f"<div style='background:rgba(16,185,129,0.10);border:1px solid rgba(16,185,129,0.28);border-radius:6px;padding:7px 10px;'>"
+        f"<div style='font-size:0.69rem;color:#6ee7b7;font-weight:700;text-transform:uppercase;'>4 · Take-Profit &amp; Time Cap</div>"
+        f"<div style='font-size:0.98rem;font-weight:700;color:#f8fafc;font-family:monospace;margin-top:2px;'>${tp_px:.2f}</div>"
+        f"<div style='font-size:0.72rem;color:#cbd5e1;'>{html.escape(tp_sub)}</div>"
+        "</div>"
+        "</div>"
     )
+
+
+def _render_pod_rules_cheatsheet_html(pods_list: List[Dict[str, Any]]) -> str:
+    """Render concise numerical Entry & Exit Strategy Rules for each of the 3 Autonomous Pods."""
+    pod_specs = [
+        {
+            "pod_id": "pod_1_breakout",
+            "title": "Pod #1 · Breakout & Breakdown",
+            "edge": "Buys tight 10-day consolidations breaking 20-day highs on volume; shorts high-volume support breakdowns.",
+            "long_entry": "Close within 3% of 20d High · > SMA50 · Vol ≥ 1.15x · 10d Range ≤ 25% · 20d RS vs SPY ≥ +2.0%",
+            "short_entry": "Close breaks 20d Low · < SMA50 · Vol ≥ 1.25x · Bearish/Weak RS (vetoed if News ≥ +0.30)",
+            "exit_nums": "Stop 1.9x ATR (-1R) · +1.0R → BE+0.1R · +1.65R → Lock +1.0R · Target 4.0x–4.5x ATR · Time-Stop 15d",
+        },
+        {
+            "pod_id": "pod_2_mean_reversion",
+            "title": "Pod #2 · Value Pullback & Fade",
+            "edge": "Buys institutional uptrend leaders pulling back calmly toward rising 20-day support; fades overbought bear rallies.",
+            "long_entry": "Close > SMA200 · SMA20 > SMA50 · Within +8% of SMA20 · RSI(14) 50–74 · 20d RS vs SPY ≥ +1.5%",
+            "short_entry": "Downtrend (< SMA50 & < SMA200) · Overbought bounce RSI ≥ 62 into resistance",
+            "exit_nums": "Stop 1.8x ATR (-1R) · +1.0R → BE+0.1R · +1.65R → Lock +1.0R · Target 3.6x–4.0x ATR · Time-Stop 10d",
+        },
+        {
+            "pod_id": "pod_3_momentum",
+            "title": "Pod #3 · Momentum & Drift",
+            "edge": "Rides persistent relative-strength leaders and post-earnings catalyst winners; shorts post-miss downward drift.",
+            "long_entry": "Close > SMA20 > SMA50 · 20d Return ≥ +3.5% · 20d RS vs SPY ≥ +2.2% · Vol ≥ 0.95x",
+            "short_entry": "Close < SMA20 < SMA50 · Negative 20d RS & post-catalyst distribution",
+            "exit_nums": "Stop 2.0x ATR (-1R) · +1.0R → BE+0.1R · +1.65R → Lock +1.0R · Target 4.2x–4.5x ATR · Time-Stop 15d",
+        },
+    ]
+
+    acct_by_pod = {}
+    for p in pods_list:
+        pid = str(p.get("pod_id") or "")
+        bs = p.get("broker_state") or p.get("broker") or {}
+        acct_by_pod[pid] = str(bs.get("alpaca_account_number") or bs.get("account_number") or "Paper")
+
+    cards: List[str] = []
+    for sp in pod_specs:
+        acct = acct_by_pod.get(sp["pod_id"], "Paper")
+        cards.append(
+            f"<div style='background:rgba(15,23,42,0.56);border:1px solid rgba(148,163,184,0.18);"
+            f"border-left:3px solid #38bdf8;border-radius:7px;padding:10px 12px;margin-bottom:8px;font-size:0.79rem;'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;'>"
+            f"<strong style='color:#f8fafc;font-size:0.85rem;'>{html.escape(sp['title'])}</strong>"
+            f"<code style='color:#38bdf8;font-size:0.73rem;'>{html.escape(acct)}</code></div>"
+            f"<div style='color:#cbd5e1;margin-bottom:5px;'>{html.escape(sp['edge'])}</div>"
+            f"<div style='color:#94a3b8;'><strong>🟢 Long Trigger:</strong> <code>{html.escape(sp['long_entry'])}</code></div>"
+            f"<div style='color:#94a3b8;margin-top:2px;'><strong>🔴 Short Trigger:</strong> <code>{html.escape(sp['short_entry'])}</code></div>"
+            f"<div style='color:#e2e8f0;margin-top:4px;'><strong>🎯 Exit Numbers:</strong> <code>{html.escape(sp['exit_nums'])}</code></div>"
+            "</div>"
+        )
+    return "".join(cards)
 
 
 def _render_equity_curve_svg(curve: List[Dict[str, Any]], height: int = 195) -> str:
@@ -276,18 +282,6 @@ def _render_equity_curve_svg(curve: List[Dict[str, Any]], height: int = 195) -> 
         f"<text x='{width - pad_r - 60}' y='{height - 6}' fill='#64748b' font-size='9' font-family='monospace'>{curve[-1].get('date', '')}</text>"
         f"</svg>"
     )
-
-
-def _fetch_chart_bars_for_ticker(app: Any, ticker: str) -> List[Dict[str, Any]]:
-    """Fetch 60-day OHLC + SMA20/SMA50 series for any ticker on demand."""
-    from core.indicators.technical import compute_indicator_series
-
-    t_bars = app.orchestrator.market_data.get_bars(ticker)
-    if not t_bars:
-        return []
-    spy_bars = app.orchestrator.market_data.get_bars("SPY")
-    ind_map = compute_indicator_series(t_bars, spy_bars)
-    return app.orchestrator.pod_manager._build_60d_chart_bars(t_bars, ind_map)
 
 
 def _sentiment_badge_html(score: float, label: str = "") -> str:
@@ -326,7 +320,7 @@ def main() -> None:
     st.markdown(CLASSY_MINIMAL_CSS, unsafe_allow_html=True)
     _sync_streamlit_secrets_to_env(st)
 
-    _code_version = "2026-11-14-v2.1"
+    _code_version = "2026-11-14-v2.2"
     import api.server as _srv_mod
     import core.market_data.models as _md_mod
     import core.execution.paper_broker as _pb_check_mod
@@ -381,7 +375,6 @@ def main() -> None:
     universe_meta: List[Dict[str, Any]] = state.get("universe_metadata") or []
     strategies: List[Dict[str, Any]] = state.get("strategies") or []
     experiments: List[Dict[str, Any]] = state.get("experiments") or []
-    research_reports: List[Dict[str, Any]] = state.get("research_reports") or []
     jobs: List[Dict[str, Any]] = state.get("jobs") or []
     risk_alerts: List[Dict[str, Any]] = state.get("risk_alerts") or []
 
@@ -456,7 +449,6 @@ def main() -> None:
 
     # ---------------- AGGREGATE LIVE POD STATE ----------------
     all_open_holdings: List[Dict[str, Any]] = []
-    all_exit_actions: List[Dict[str, Any]] = []
     all_broker_orders: List[Dict[str, Any]] = []
     today_entries_count = 0
 
@@ -473,11 +465,6 @@ def main() -> None:
             p_item["_pod_id"] = pod_id
             p_item["_account_number"] = acct_num
             all_open_holdings.append(p_item)
-        for act in pod.get("ratchets_and_exits") or pod.get("sell_decisions") or []:
-            a_item = dict(act)
-            a_item["_pod_name"] = pod_name
-            a_item["_account_number"] = acct_num
-            all_exit_actions.append(a_item)
         for bo in b_st.get("open_orders") or []:
             o_item = dict(bo)
             o_item["_pod_name"] = pod_name
@@ -564,14 +551,14 @@ def main() -> None:
     tab1, tab2, tab3, tab4 = st.tabs(
         [
             f"📓 Day-by-Day Pod Decision Journal ({len(unique_journal_dates)} Days)",
-            f"🛡️ Active Holdings, Charts & Orders ({len(all_open_holdings)})",
+            f"🛡️ Active Holdings & Exit Plans ({len(all_open_holdings)})",
             "🏆 Strategy Tournament & Mistake Analyzer",
             f"📰 Live News & Universe ({len(universe_meta)})",
         ]
     )
 
     # =========================================================================
-    # TAB 1: DAY-BY-DAY POD DECISION JOURNAL (INTUITIVE CHRONOLOGICAL TIMELINE)
+    # TAB 1: DAY-BY-DAY POD DECISION JOURNAL (NUMBERS-FIRST CHRONOLOGICAL DIARY)
     # =========================================================================
     with tab1:
         jc_filter1, jc_filter2, jc_filter3 = st.columns([1.8, 1.5, 1.7])
@@ -596,12 +583,11 @@ def main() -> None:
             )
         with jc_filter3:
             ticker_search = st.text_input(
-                "Search Ticker in Journal (e.g. AAPL, HD, WMT)",
+                "Search Ticker in Journal (e.g. AAPL, HD, LLY)",
                 placeholder="Filter by ticker...",
                 key="journal_ticker_search",
             ).strip().upper()
 
-        # Group decision_logs by session_date descending
         logs_by_date: Dict[str, List[Dict[str, Any]]] = {}
         for dlog in decision_logs:
             dt_k = str(dlog.get("session_date") or "")
@@ -646,7 +632,6 @@ def main() -> None:
                     else ""
                 )
 
-                # Date Header Banner
                 st.markdown(
                     f"<div style='background:linear-gradient(90deg,rgba(30,41,59,0.92),rgba(15,23,42,0.82));"
                     f"border-left:4px solid #38bdf8;border-top:1px solid rgba(148,163,184,0.18);"
@@ -664,7 +649,6 @@ def main() -> None:
                     unsafe_allow_html=True,
                 )
 
-                # Render each Pod's diary card for this date
                 for p_log in day_pods:
                     pid = str(p_log.get("pod_id") or "")
                     p_disp = POD_DISPLAY_NAMES.get(pid, pid)
@@ -675,7 +659,6 @@ def main() -> None:
                     holds_list = p_log.get("active_holdings_plan") or []
                     skips_list = p_log.get("skipped_reasons") or []
 
-                    # Separate active signal vetoes (News/Risk/Gap) from ordinary non-triggered stocks
                     notable_vetoes = [
                         s for s in skips_list if str(s.get("category", "")) != "NO_TECHNICAL_SIGNAL"
                     ]
@@ -711,55 +694,88 @@ def main() -> None:
                             unsafe_allow_html=True,
                         )
 
-                        # 1. New Orders Executed / Queued on this day
+                        # 1. New Orders Executed / Queued on this day — Clear Entry & 4-Step Exit Numbers + Concise Explanation
                         if entries_list:
-                            st.markdown("**1 · Orders Placed / Filled on Alpaca Paper:**")
+                            st.markdown("**1 · New Orders Placed / Filled — Entry & Exit Strategy Numbers:**")
                             for e in entries_list:
                                 e_side = str(e.get("side") or "LONG").upper()
                                 e_tkr = str(e.get("ticker") or "")
+                                e_sec = str(e.get("sector") or "")
                                 e_shs = int(e.get("shares") or 0)
-                                e_lim = float(e.get("max_chase_price") or e.get("live_price") or 0.0)
-                                e_stop = float(e.get("stop_loss_price") or 0.0)
-                                e_s1 = float(e.get("stage1_ratchet_price") or 0.0)
-                                e_s2 = float(e.get("stage2_ratchet_price") or 0.0)
-                                e_tp = float(e.get("take_profit_price") or 0.0)
+                                e_ref = float(e.get("reference_close_price") or e.get("live_price") or 0.0)
+                                e_live = float(e.get("live_price") or e_ref)
+                                e_lim = float(e.get("max_chase_price") or e_live or e_ref)
+                                e_zone = str(e.get("buy_zone_str") or f"<= ${e_lim:.2f}")
                                 e_stat = str(e.get("order_status") or "QUEUED")
                                 e_cost = float(e.get("estimated_cost_usd") or (e_shs * e_lim))
+                                e_wt = float(e.get("portfolio_weight_pct") or (e_cost / 1000.0))
                                 e_risk = float(e.get("risk_usd") or 0.0)
+                                e_risk_pct = float(e.get("risk_pct") or 1.0)
+                                e_max_d = int(e.get("max_hold_days") or 15)
                                 e_trig = str(e.get("technical_trigger") or e.get("signal_reason") or "")
+                                e_cat_sent = float(e.get("ai_catalyst_sentiment") or 0.0)
                                 e_cat_note = str(e.get("ai_catalyst_note") or "")
+                                e_guide = str(e.get("pre_open_guidance") or "")
+
+                                ladder = _compute_exit_ladder_numbers(
+                                    side=e_side,
+                                    entry_px=e_ref if e_ref > 0 else e_lim,
+                                    init_stop_px=float(e.get("stop_loss_price") or 0.0),
+                                    cur_stop_px=float(e.get("stop_loss_price") or 0.0),
+                                    stage1_trigger_px=float(e.get("stage1_ratchet_price") or 0.0),
+                                    stage1_stop_px=float(e.get("stage1_stop_price") or 0.0),
+                                    stage2_trigger_px=float(e.get("stage2_ratchet_price") or 0.0),
+                                    stage2_stop_px=float(e.get("stage2_stop_price") or 0.0),
+                                    target_px=float(e.get("take_profit_price") or 0.0),
+                                )
+                                rr_val = float(e.get("reward_risk_ratio") or ladder["rr"])
                                 dir_tag = "🟢 LONG" if e_side == "LONG" else "🔴 SHORT"
                                 stat_col = "#34d399" if "FILLED" in e_stat.upper() else "#38bdf8"
+                                cap_lbl = "Short Limit Floor" if e_side == "SHORT" else "Buy Limit Cap"
+
+                                exit_grid_html = _render_four_step_exit_grid_html(
+                                    stop_px=ladder["cur_stop"],
+                                    stop_sub=f"1R Risk = ${e_risk:,.0f} ({e_risk_pct:.2f}% pod)",
+                                    s1_trig=ladder["s1_trig"],
+                                    s1_lock=ladder["s1_lock"],
+                                    s2_trig=ladder["s2_trig"],
+                                    s2_lock=ladder["s2_lock"],
+                                    tp_px=ladder["tp"],
+                                    tp_sub=f"{rr_val:.1f}R Target · Max {e_max_d}d Hold",
+                                )
+
+                                news_clause = (
+                                    f" · <strong>News ({e_cat_sent:+.2f}):</strong> {html.escape(e_cat_note[:125])}"
+                                    if e_cat_note
+                                    else f" · <strong>News ({e_cat_sent:+.2f}):</strong> Clear (no adverse catalyst)"
+                                )
+                                exec_clause = (
+                                    f"<div style='color:#94a3b8;font-size:0.77rem;margin-top:2px;'>"
+                                    f"<strong>Execution Plan:</strong> {html.escape(e_guide)}</div>"
+                                    if e_guide
+                                    else ""
+                                )
 
                                 st.markdown(
-                                    f"<div style='padding:8px 12px;margin:5px 0;background:rgba(15,23,42,0.55);"
-                                    f"border-left:3px solid {stat_col};border-radius:6px;font-size:0.83rem;'>"
-                                    f"<strong>{dir_tag} {html.escape(e_tkr)}</strong> · <code>{e_shs} shs</code> "
-                                    f"(<code>${e_cost:,.0f}</code> · 1R Risk <code>${e_risk:,.0f}</code>) — "
-                                    f"<span style='color:{stat_col};font-weight:600;'>{html.escape(e_stat)}</span><br/>"
-                                    f"<span style='color:#cbd5e1;'>Limit Cap: <code>${e_lim:.2f}</code> · "
-                                    f"Stop: <code>${e_stop:.2f}</code> · 1.0R BE: <code>${e_s1:.2f}</code> · "
-                                    f"Target: <code>${e_tp:.2f}</code></span><br/>"
-                                    f"<span style='color:#94a3b8;font-size:0.78rem;'>Why Entered: {html.escape(e_trig)}"
-                                    f"{(' · News: ' + html.escape(e_cat_note[:110])) if e_cat_note else ''}</span>"
+                                    f"<div style='padding:10px 13px;margin:7px 0;background:rgba(15,23,42,0.58);"
+                                    f"border:1px solid rgba(148,163,184,0.16);border-left:3px solid {stat_col};"
+                                    f"border-radius:7px;font-size:0.82rem;'>"
+                                    f"<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;'>"
+                                    f"<div><strong style='font-size:0.9rem;color:#f8fafc;'>{dir_tag} {html.escape(e_tkr)}</strong> "
+                                    f"<span style='color:#94a3b8;'>({html.escape(e_sec)})</span> · "
+                                    f"<code>{e_shs} shs</code> · Value <code>${e_cost:,.0f}</code> (<code>{e_wt:.1f}%</code> pod)</div>"
+                                    f"<span style='color:{stat_col};font-weight:700;'>{html.escape(e_stat)}</span></div>"
+                                    f"<div style='margin-top:5px;color:#e2e8f0;'>"
+                                    f"<strong>Entry Numbers:</strong> Signal Close <code>${e_ref:.2f}</code> · "
+                                    f"Entry Zone <code>{html.escape(e_zone)}</code> · "
+                                    f"{cap_lbl} <code>${e_lim:.2f}</code> · Quote <code>${e_live:.2f}</code></div>"
+                                    f"{exit_grid_html}"
+                                    f"<div style='color:#cbd5e1;font-size:0.79rem;margin-top:3px;'>"
+                                    f"<strong>Why Entered:</strong> {html.escape(e_trig)}{news_clause}</div>"
+                                    f"{exec_clause}"
                                     f"</div>",
                                     unsafe_allow_html=True,
                                 )
-                                with st.expander(f"📈 View {e_tkr} ({dt_key}) 60-Day Candlestick & Bracket Chart"):
-                                    c_bars = e.get("chart_bars_60d") or _fetch_chart_bars_for_ticker(app, e_tkr)
-                                    st.markdown(
-                                        _render_candlestick_svg(
-                                            bars=c_bars,
-                                            ticker=e_tkr,
-                                            side=e_side,
-                                            entry_price=float(e.get("live_price") or e_lim),
-                                            stop_price=e_stop,
-                                            stage1_price=e_s1,
-                                            stage2_price=e_s2,
-                                            target_price=e_tp,
-                                        ),
-                                        unsafe_allow_html=True,
-                                    )
                         else:
                             st.caption(f"**Why 0 New Entries:** {p_log.get('summary_headline', 'No new setups passed all entry & risk gates.')}")
 
@@ -773,30 +789,43 @@ def main() -> None:
                                     f"({r_act.get('reason', '')})"
                                 )
 
-                        # 3. Open Positions Held on this day
+                        # 3. Open Positions Held on this day — Scannable Entry/Current/Stop/Target/Day Numbers
                         if holds_list:
-                            hold_pills: List[str] = []
+                            hold_rows_html: List[str] = []
                             for h in holds_list:
                                 h_tkr = str(h.get("ticker", ""))
                                 h_side = str(h.get("side", "LONG")).upper()
                                 h_qty = int(h.get("quantity") or h.get("qty") or 0)
+                                h_avg = float(h.get("avg_entry_price") or 0.0)
+                                h_cur = float(h.get("current_price") or h_avg)
                                 h_ret = float(h.get("unrealised_return_pct") or 0.0)
+                                h_r = float(h.get("r_multiple") or 0.0)
                                 h_stop = float(h.get("current_stop_price") or 0.0)
+                                h_tp = float(h.get("take_profit_price") or 0.0)
+                                h_s1 = float(h.get("stage1_ratchet_price") or 0.0)
+                                h_day = int(h.get("holding_days") or 0)
+                                h_max_d = int(h.get("max_hold_days") or 15)
+                                h_stage = str(h.get("stop_stage_label") or "Initial -1R Stop")
                                 h_col = "#34d399" if h_ret >= 0 else "#f87171"
-                                hold_pills.append(
-                                    f"<span style='display:inline-block;background:rgba(30,41,59,0.85);border:1px solid rgba(148,163,184,0.2);"
-                                    f"border-radius:6px;padding:4px 9px;margin:3px 5px 3px 0;font-size:0.78rem;'>"
-                                    f"<strong>{html.escape(h_tkr)}</strong> ({h_side} {h_qty} shs) · "
-                                    f"<span style='color:{h_col};font-weight:600;'>{h_ret:+.2f}%</span> · "
-                                    f"Stop <code>${h_stop:.2f}</code></span>"
+                                hold_rows_html.append(
+                                    f"<div style='background:rgba(30,41,59,0.72);border:1px solid rgba(148,163,184,0.18);"
+                                    f"border-radius:6px;padding:6px 10px;margin:4px 0;font-size:0.79rem;"
+                                    f"display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;'>"
+                                    f"<div><strong>{html.escape(h_tkr)}</strong> ({h_side} <code>{h_qty} shs</code>) · "
+                                    f"Entry <code>${h_avg:.2f}</code> → Now <code>${h_cur:.2f}</code> "
+                                    f"(<span style='color:{h_col};font-weight:700;'>{h_ret:+.2f}% / {h_r:+.2f}R</span>)</div>"
+                                    f"<div style='color:#cbd5e1;'>"
+                                    f"Active Stop <code>${h_stop:.2f}</code> <span style='color:#94a3b8;'>[{html.escape(h_stage)}]</span> · "
+                                    f"1.0R BE <code>${h_s1:.2f}</code> · Target <code>${h_tp:.2f}</code> · "
+                                    f"<code>Day {h_day}/{h_max_d}</code></div>"
+                                    f"</div>"
                                 )
                             st.markdown(
-                                f"<div style='margin-top:6px;'><span style='font-size:0.79rem;color:#94a3b8;font-weight:600;'>"
-                                f"Active Holdings Guarded ({len(holds_list)}):</span><br/>{''.join(hold_pills)}</div>",
+                                f"<div style='margin-top:8px;'><div style='font-size:0.8rem;color:#94a3b8;font-weight:600;margin-bottom:3px;'>"
+                                f"Active Holdings Guarded ({len(holds_list)}):</div>{''.join(hold_rows_html)}</div>",
                                 unsafe_allow_html=True,
                             )
 
-                        # 4. Notable Vetoes (Signals that met technicals but were blocked by News or Risk Caps)
                         if notable_vetoes:
                             with st.expander(
                                 f"🚫 {len(notable_vetoes)} Triggered Signal(s) Blocked by News / Risk Guardrails on {dt_key}",
@@ -835,17 +864,22 @@ def main() -> None:
                 st.info("No journal days matched your current Pod / Ticker filter.")
 
     # =========================================================================
-    # TAB 2: ACTIVE HOLDINGS, CHARTS & BROKER ORDERS
+    # TAB 2: ACTIVE HOLDINGS & EXIT PLANS (NUMBERS + CONCISE EXPLANATIONS)
     # =========================================================================
     with tab2:
         if all_open_holdings:
-            st.markdown("#### 🛡️ Live Alpaca Paper Positions Across All 3 Pods")
+            st.markdown("#### 🛡️ Live Alpaca Paper Positions — Entry & 4-Step Exit Strategy Numbers")
             for pos in all_open_holdings:
                 tkr = str(pos.get("ticker", ""))
                 side = str(pos.get("side", "LONG")).upper()
+                sec = str(pos.get("sector") or "")
                 qty = int(pos.get("quantity") or pos.get("qty") or 0)
                 avg_px = float(pos.get("avg_entry_price") or pos.get("entry_price") or 0.0)
                 cur_px = float(pos.get("current_price") or pos.get("live_price") or avg_px)
+                mkt_val = abs(qty * cur_px)
+                entry_dt = str(pos.get("entry_date") or session_dt)
+                hold_d = int(pos.get("holding_days") or 0)
+                max_d = int(pos.get("max_hold_days") or 15)
                 u_pnl = float(
                     pos.get("unrealised_pnl")
                     if pos.get("unrealised_pnl") is not None
@@ -856,49 +890,93 @@ def main() -> None:
                     if pos.get("unrealised_return_pct") is not None
                     else (pos.get("unrealised_pnl_pct") if pos.get("unrealised_pnl_pct") is not None else (pos.get("unrealized_plpc") or 0.0))
                 )
-                stop_px = float(pos.get("current_stop_price") or pos.get("stop_loss_price") or 0.0)
-                s1_px = float(pos.get("stage1_ratchet_price") or 0.0)
-                s2_px = float(pos.get("stage2_ratchet_price") or 0.0)
-                tp_px = float(pos.get("take_profit_price") or 0.0)
-                has_oco = bool(pos.get("oco_bracket_active") or pos.get("has_live_oco_bracket") or pos.get("stop_stage_label"))
 
-                init_risk = max(abs(avg_px - stop_px), avg_px * 0.02) if stop_px > 0 else max(avg_px * 0.03, 0.01)
+                ladder = _compute_exit_ladder_numbers(
+                    side=side,
+                    entry_px=avg_px,
+                    init_stop_px=float(pos.get("initial_stop_price") or pos.get("current_stop_price") or 0.0),
+                    cur_stop_px=float(pos.get("current_stop_price") or pos.get("stop_loss_price") or 0.0),
+                    stage1_trigger_px=float(pos.get("stage1_ratchet_price") or 0.0),
+                    stage1_stop_px=float(pos.get("stage1_stop_price") or 0.0),
+                    stage2_trigger_px=float(pos.get("stage2_ratchet_price") or 0.0),
+                    stage2_stop_px=float(pos.get("stage2_stop_price") or 0.0),
+                    target_px=float(pos.get("take_profit_price") or 0.0),
+                )
+                stop_px = ladder["cur_stop"]
+                tp_px = ladder["tp"]
+                one_r = ladder["one_r"]
+
                 r_mult = float(
                     pos.get("r_multiple")
                     if pos.get("r_multiple") is not None
-                    else (((cur_px - avg_px) / init_risk) if side == "LONG" else ((avg_px - cur_px) / init_risk))
+                    else (((cur_px - avg_px) / one_r) if side == "LONG" else ((avg_px - cur_px) / one_r))
                 )
                 prog_val = max(0.0, min(1.0, (r_mult + 1.0) / 3.5))
 
+                has_oco = bool(pos.get("oco_bracket_active") or pos.get("has_live_oco_bracket"))
+                stop_stage_lbl = str(pos.get("stop_stage_label") or "Initial -1.0R Hard Stop")
+                entry_thesis = str(pos.get("entry_thesis") or f"{pos.get('strategy_name', 'Pod Strategy')} technical & relative-strength entry.")
+
+                if cur_px > 0:
+                    dist_stop_pct = ((stop_px - cur_px) / cur_px) * 100.0
+                    dist_tp_pct = ((tp_px - cur_px) / cur_px) * 100.0
+                else:
+                    dist_stop_pct, dist_tp_pct = 0.0, 0.0
+
                 dir_pill = "🟢 LONG" if side == "LONG" else "🔴 SHORT"
-                oco_pill = "✅ Live GTC OCO Protected" if has_oco else "⚠️ Self-Healing Bracket Pending"
+                oco_pill = "✅ Live GTC OCO Active" if has_oco else "⚠️ Self-Healing OCO On Next Sync"
                 pnl_txt = f"${u_pnl:+,.2f} ({u_pct:+.2f}%)"
 
                 with st.container(border=True):
-                    hc1, hc2, hc3, hc4 = st.columns([1.5, 1.1, 1.2, 1.2])
-                    hc1.markdown(f"**{dir_pill} · {tkr}** (`{qty} shs`)\n\n{pos.get('_pod_name', '')} (`{pos.get('_account_number', '')}`)")
-                    hc2.metric("Entry → Current", f"${cur_px:.2f}", f"Avg ${avg_px:.2f}")
+                    hc1, hc2, hc3, hc4 = st.columns([1.55, 1.05, 1.15, 1.25])
+                    hc1.markdown(
+                        f"**{dir_pill} · {tkr}** (`{qty} shs` · `${mkt_val:,.0f}`)\n\n"
+                        f"{pos.get('_pod_name', '')} (`{pos.get('_account_number', '')}`) · Entered `{entry_dt}`"
+                    )
+                    hc2.metric("Entry → Current", f"${cur_px:.2f}", f"Avg Entry ${avg_px:.2f}")
                     hc3.metric("Unrealized P&L", pnl_txt, f"{r_mult:+.2f}R")
                     hc4.markdown(
-                        f"**Bracket:** {oco_pill}\n\n"
-                        f"Stop: `${stop_px:.2f}` · Target: `${tp_px:.2f}`"
+                        f"**Protection:** {oco_pill}\n\n"
+                        f"**Stage:** `{stop_stage_lbl}` · **Hold:** `Day {hold_d}/{max_d}`"
                     )
-                    st.progress(prog_val, text=f"R-Multiple Trajectory: {r_mult:+.2f}R (Stage 1 BE @ +1.0R · Stage 2 Profit Lock @ +1.65R)")
-                    with st.expander(f"📈 View {tkr} 60-Day Candlestick & Active Bracket Chart"):
-                        p_bars = pos.get("chart_bars_60d") or _fetch_chart_bars_for_ticker(app, tkr)
-                        st.markdown(
-                            _render_candlestick_svg(
-                                bars=p_bars,
-                                ticker=tkr,
-                                side=side,
-                                entry_price=avg_px,
-                                stop_price=stop_px if stop_px > 0 else None,
-                                stage1_price=s1_px if s1_px > 0 else None,
-                                stage2_price=s2_px if s2_px > 0 else None,
-                                target_price=tp_px if tp_px > 0 else None,
-                            ),
-                            unsafe_allow_html=True,
-                        )
+
+                    st.markdown(
+                        _render_four_step_exit_grid_html(
+                            stop_px=stop_px,
+                            stop_sub=f"{dist_stop_pct:+.2f}% from current (Init ${ladder['init_stop']:.2f})",
+                            s1_trig=ladder["s1_trig"],
+                            s1_lock=ladder["s1_lock"],
+                            s2_trig=ladder["s2_trig"],
+                            s2_lock=ladder["s2_lock"],
+                            tp_px=tp_px,
+                            tp_sub=f"{dist_tp_pct:+.2f}% to target · Exit Day {max_d}",
+                        ),
+                        unsafe_allow_html=True,
+                    )
+
+                    st.progress(
+                        prog_val,
+                        text=(
+                            f"R-Multiple Progress: {r_mult:+.2f}R  |  "
+                            f"Stop ${stop_px:.2f}  →  +1.0R BE ${ladder['s1_trig']:.2f}  →  "
+                            f"+1.65R Lock ${ladder['s2_trig']:.2f}  →  Target ${tp_px:.2f}"
+                        ),
+                    )
+
+                    exit_action_word = "Buy-to-Cover" if side == "SHORT" else "Sell"
+                    news_exit_thresh = ">= +0.50 bullish squeeze" if side == "SHORT" else "<= -0.50 bearish shock"
+                    st.markdown(
+                        f"<div style='background:rgba(15,23,42,0.45);border-radius:6px;padding:7px 11px;font-size:0.8rem;color:#cbd5e1;'>"
+                        f"<div><strong>Why Entered:</strong> {html.escape(entry_thesis)}"
+                        f"{(' (' + html.escape(sec) + ')') if sec else ''}</div>"
+                        f"<div style='margin-top:3px;color:#94a3b8;'><strong>Plain-English Exit Plan:</strong> "
+                        f"Alpaca holds a live GTC OCO bracket to {exit_action_word} automatically at <code>${tp_px:.2f}</code> (profit target) "
+                        f"or <code>${stop_px:.2f}</code> (active stop). Stop ratchets automatically to <code>${ladder['s1_lock']:.2f}</code> "
+                        f"at <code>${ladder['s1_trig']:.2f}</code> (+1.0R) and locks +1.0R profit (<code>${ladder['s2_lock']:.2f}</code>) at "
+                        f"<code>${ladder['s2_trig']:.2f}</code> (+1.65R). Exits early on adverse news ({news_exit_thresh}) or Day <code>{max_d}</code> time-stop.</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
         else:
             st.info("No open positions across the 3 Alpaca Paper accounts right now (`100% Cash`).")
 
@@ -928,15 +1006,8 @@ def main() -> None:
                 st.caption("No open or recent broker orders recorded yet.")
 
         with oc2:
-            st.markdown("##### 📊 Universe 60-Day Candlestick Inspector")
-            watch_tickers = [str(r.get("ticker")) for r in research_reports[:12] if r.get("ticker")] or ["SPY", "AAPL", "NVDA", "AMZN"]
-            sel_watch = st.selectbox("Select Ticker (60-Day OHLC + SMA20/SMA50)", options=watch_tickers, key="tab2_watch_chart")
-            if sel_watch:
-                w_bars = _fetch_chart_bars_for_ticker(app, sel_watch)
-                st.markdown(
-                    _render_candlestick_svg(bars=w_bars, ticker=sel_watch, side="LONG"),
-                    unsafe_allow_html=True,
-                )
+            st.markdown("##### 📐 3-Pod Entry & Exit Strategy Rules Cheat-Sheet")
+            st.markdown(_render_pod_rules_cheatsheet_html(pods_list), unsafe_allow_html=True)
 
     # =========================================================================
     # TAB 3: STRATEGY TOURNAMENT & MISTAKE ANALYZER

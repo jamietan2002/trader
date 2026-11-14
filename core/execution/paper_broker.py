@@ -4437,12 +4437,13 @@ class AlpacaPaperPodManager:
                         "initial_stop_price": init_stop,
                         "current_stop_price": cur_stop,
                         "stage1_ratchet_price": stage1_trigger,
+                        "stage1_stop_price": stage1_stop,
                         "stage2_ratchet_price": stage2_trigger,
+                        "stage2_stop_price": stage2_stop,
                         "take_profit_price": tp_price,
                         "stop_stage_label": stop_stage_label,
                         "oco_bracket_active": open_exit_ord is not None,
                         "entry_thesis": entry_why,
-                        "chart_bars_60d": self._build_60d_chart_bars(t_bars_pos, inds_by_tkr.get(tkr) or {}),
                         "exit_plan_summary": (
                             f"1) Hard Stop: ${cur_stop:.2f} ({stop_stage_label}) · "
                             f"2) Stage 1 (+1.0R @ ${stage1_trigger:.2f}) -> Stop ${stage1_stop:.2f} · "
@@ -5011,7 +5012,6 @@ class AlpacaPaperPodManager:
                         "order_status": order_exec_status,
                         "client_order_id": client_oid,
                         "factors": factors,
-                        "chart_bars_60d": self._build_60d_chart_bars(t_bars_c, ind_map_c),
                     }
                 )
                 if tkr not in same_day_filled_tickers:

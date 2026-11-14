@@ -72,7 +72,7 @@ trader/
 │   └── scheduler/orchestrator.py      # Idempotent Daily & Weekly workflows + holiday calendar
 ├── dashboard/
 │   ├── ui_template.py                 # 7-tab interactive local SVG/HTML/JS dashboard
-│   └── streamlit_app.py               # v2.1 4-Tab Autonomous Paper Hub, Day-by-Day Journal & Candlestick Charts
+│   └── streamlit_app.py               # v2.2 4-Tab Autonomous Paper Hub, Day-by-Day Journal & 4-Step Exit Numbers
 ├── api/
 │   └── server.py                      # REST API & web dashboard server
 ├── tests/

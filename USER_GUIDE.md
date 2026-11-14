@@ -8,7 +8,7 @@ Welcome to **Swing Trading AI**, an autonomous quantitative research, statistica
 
 This platform runs a systematic **All-Weather Long + Short swing-trading engine** (holding liquid US large-cap stocks for **3 to 15 trading days**) with two distinct goals:
 1. **3-Pod Broker-Native Forward Validation (3 Isolated `$100,000` Alpaca Paper Accounts)**: Runs 3 non-overlapping Long + Short Strategy Pods (`PA3GP0WMH` Breakout/Breakdown, `PA3IAK6TV` Value Pullback/Bear-Rally Fade, `PA3OSGSIE` Momentum/Bearish Drift) across a **40+ stock multi-sector + dynamic universe** with 24/7 Alpaca News sentiment vetoes, live `GTC OCO` brackets, and a Post-Trade Mistake Analyzer.
-2. **Intuitive Day-by-Day Pod Decision Journal (`4-Tab Paper Hub`)**: Presents a chronological day-by-day trading diary across all 3 Alpaca Paper Pods (Orders Placed/Filled, Stop Ratchets, Held Positions, News/Risk Vetoes, and embedded **60-day OHLC Candlestick + SMA20/SMA50 charts**).
+2. **Intuitive Day-by-Day Pod Decision Journal (`4-Tab Paper Hub`)**: Presents a chronological day-by-day trading diary across all 3 Alpaca Paper Pods (Orders Placed/Filled, Stop Ratchets, Held Positions, News/Risk Vetoes, scannable **Entry & 4-Step Exit Strategy Numbers**, and concise plain-English explanations — with zero chart clutter).
 
 ### Core Operating Modes
 - **100% Hands-Off Cloud Mode**: GitHub Actions runs the Daily loop (`Mon–Fri 21:30 UTC`) and Weekly self-improvement loop (`Sat 10:00 SGT`), committing updated state to `data/swing_trader.db` so the 24/7 Streamlit Cloud dashboard stays current with zero user intervention.

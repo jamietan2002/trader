@@ -4,6 +4,25 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-14] — v2.2 UI Simplification: Numbers-First Entry & 4-Step Exit Strategy Plans + Concise Explanations (Candlestick Charts Removed)
+
+### Summary
+- **Removed Candlestick Charts & Diagram Clutter (`dashboard/streamlit_app.py`, `core/execution/paper_broker.py`)**:
+  - Removed `_render_candlestick_svg()`, `_fetch_chart_bars_for_ticker()`, all 60-day candlestick chart expanders in Tab 1 & Tab 2, and the Watchlist Candlestick Inspector in Tab 2 per operator preference.
+  - Stopped embedding 60-day bar JSON arrays (`chart_bars_60d`) inside `daily_decision_logs` rows in `core/execution/paper_broker.py` while persisting explicit `stage1_stop_price` and `stage2_stop_price` fields on `active_holdings_plan`.
+- **Replaced Diagrams with Scannable Entry & 4-Step Exit Strategy Numbers + Concise Plain-English Explanations (`dashboard/streamlit_app.py`)**:
+  - Added `_compute_exit_ladder_numbers()` and `_render_four_step_exit_grid_html()` displaying exact Entry numbers (`Signal Close`, `Entry Zone`, `Limit Cap/Floor`, `Shares`, `$Notional`, `1R Risk $`) and a 4-column Exit Strategy grid (`1 · Hard Stop -1.0R`, `2 · +1.0R Breakeven Trigger -> +0.1R Stop`, `3 · +1.65R Profit Lock -> +1.0R Stop`, `4 · Take-Profit Target & Max Hold Days`) plus concise plain-English **Why Entered** and **Exit Plan** explanations in both Tab 1 (`Day-by-Day Pod Decision Journal`) and Tab 2 (`Active Holdings & Exit Plans`).
+  - Added `_render_pod_rules_cheatsheet_html()` in Tab 2 summarizing exact numerical Long & Short triggers and ATR exit rules across all 3 Autonomous Pods (`PA3GP0WMH`, `PA3IAK6TV`, `PA3OSGSIE`).
+
+### Modules Added / Modified
+- `dashboard/streamlit_app.py`, `core/execution/paper_broker.py`
+- `AGENTS.md`, `USER_GUIDE.md`, `ARCHITECTURE.md`, `DEPLOYMENT.md`, `docs/AGENT_CHANGELOG.md`
+
+### Verification
+- Executed `.venv/bin/python .agents/skills/maintain-project-context/scripts/verify_context.py`: headless multi-branch Streamlit check + all 11 unit & integration test suites passed (`exit code 0`).
+
+---
+
 ## [2026-11-14] — v2.1 UI Streamlining: Pure Autonomous 3-Pod Paper Hub & Full-Width Day-by-Day Pod Decision Journal
 
 ### Summary
