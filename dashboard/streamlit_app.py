@@ -320,7 +320,7 @@ def main() -> None:
     st.markdown(CLASSY_MINIMAL_CSS, unsafe_allow_html=True)
     _sync_streamlit_secrets_to_env(st)
 
-    _code_version = "2026-11-14-v2.2"
+    _code_version = "2026-11-14-v2.3"
     import api.server as _srv_mod
     import core.market_data.models as _md_mod
     import core.execution.paper_broker as _pb_check_mod
@@ -407,37 +407,17 @@ def main() -> None:
             )
 
         st.markdown("---")
-        st.markdown("#### 🔄 Live Broker & News Sync")
-        if st.button("Sync All 3 Alpaca Pods & News Now", type="primary", use_container_width=True):
-            with st.spinner("Pulling live Alpaca news, quotes & syncing all 3 Paper Pods..."):
-                if hasattr(app.orchestrator.market_data, "ensure_latest_market_data"):
-                    app.orchestrator.market_data.ensure_latest_market_data()
-                if hasattr(app.orchestrator.market_data, "scan_live_alpaca_news_and_movers"):
-                    app.orchestrator.market_data.scan_live_alpaca_news_and_movers(cache_ttl_seconds=0)
-                spy_bars_now = app.orchestrator.market_data.get_bars("SPY")
-                latest_dt = spy_bars_now[-1].bar_date if spy_bars_now else today_iso
-                app.orchestrator.research_agent.run_market_scan(as_of_date=latest_dt, top_n=10)
-                app.orchestrator.pod_manager.evaluate_and_sync_all_pods(
-                    session_date=latest_dt,
-                    execute_live_orders=True,
-                )
-            st.rerun()
-
-        with st.expander("? What does Sync do?"):
-            st.markdown(
-                "1. **Updates Prices & Bars**: Fetches latest daily bars + live/extended-hours quotes from Alpaca.\n"
-                "2. **Scans Live News & Movers**: Pulls real-time Alpaca news headlines & active NYSE/NASDAQ movers to flag bearish traps (`≤ -0.35`) and bullish catalysts (`≥ +0.30`).\n"
-                "3. **Protects Open Holdings**: Checks all 3 Alpaca Paper accounts (`PA3GP0WMH`, `PA3IAK6TV`, `PA3OSGSIE`), attaches missing `GTC OCO` brackets, and ratchets stops at `+1.0R` / `+1.65R`.\n"
-                "4. **Submits New Pod Orders**: Evaluates Long & Short rules and places new Limit Bracket orders on Alpaca Paper (without duplicating existing orders).\n"
-                "5. **Logs to Journal**: Updates today's entry in the **Day-by-Day Pod Decision Journal**."
-            )
-
-        if st.button("Run 9-Gate Strategy Tournament", use_container_width=True):
-            with st.spinner("Running 9-Gate OOS + Walk-Forward + Mistake Analyzer Tournament..."):
-                spy_bars_now = app.orchestrator.market_data.get_bars("SPY")
-                latest_dt = spy_bars_now[-1].bar_date if spy_bars_now else today_iso
-                app.orchestrator.run_weekly_workflow(week_ending_date=latest_dt, force=True)
-            st.rerun()
+        st.markdown(
+            "#### 🤖 Autonomous Schedule\n"
+            "• **Daily Runs (`Mon–Fri`)**:\n"
+            "  - `5:30 AM SGT` · Post-Close Scan\n"
+            "  - `9:00/10:00 PM SGT` · Pre-Open News & Gap Gate\n"
+            "  - `9:35/10:35 PM SGT` · Market-Open Execution\n"
+            "• **Weekly Run (`Sat 10:00 AM SGT`)**:\n"
+            "  - Mistake Analyzer + 9-Gate Tournament\n"
+            "• **IDE AI (`type run`)**:\n"
+            "  - Live Web Catalyst Search + AI Strategy Tuning"
+        )
 
         st.markdown("---")
         st.markdown(
@@ -486,7 +466,7 @@ def main() -> None:
     latest_news_headline = (
         f"{live_catalysts[0]['ticker']}: {live_catalysts[0]['headline']}"
         if live_catalysts
-        else "24/7 Alpaca News & Screener active — click 'Sync All 3 Alpaca Pods & News Now' to refresh."
+        else "24/7 Alpaca News & Screener active — updates automatically on scheduled Daily & Weekly runs."
     )
 
     st.markdown(
@@ -600,7 +580,7 @@ def main() -> None:
         ordered_dates = sorted(logs_by_date.keys(), reverse=True)
 
         if not ordered_dates:
-            st.info("No Pod decision journal entries recorded yet — click **Sync All 3 Alpaca Pods & News Now** in the sidebar.")
+            st.info("No Pod decision journal entries recorded yet — entries populate automatically on each scheduled Daily run.")
         else:
             rendered_days = 0
             for day_idx, dt_key in enumerate(ordered_dates):
@@ -1117,7 +1097,7 @@ def main() -> None:
                         unsafe_allow_html=True,
                     )
             else:
-                st.caption("No catalysts stored yet — click 'Sync All 3 Alpaca Pods & News Now' in the sidebar.")
+                st.caption("No catalysts stored yet — headlines populate automatically on scheduled Daily runs.")
 
         with nc2:
             st.markdown(f"#### 🌐 Liquid Equity Universe ({len(universe_meta)} Active)")

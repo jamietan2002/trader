@@ -4,6 +4,18 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-14] — v2.3 Zero-Button Autonomous Sidebar & Sync Removal
+
+### Summary
+- **Removed Manual Sidebar Sync & Tournament Buttons (`dashboard/streamlit_app.py`)**:
+  - Removed the redundant `Sync All 3 Alpaca Pods & News Now` button, `? What does Sync do?` expander, and manual tournament trigger from the Streamlit sidebar so the dashboard operates as a pure, hands-free monitoring hub backed by scheduled Daily & Weekly GitHub Actions runs (plus optional IDE `run` cycles).
+  - Added a concise **Autonomous Schedule** reference card in the sidebar summarizing the Daily (`5:30 AM`, `9:00/10:00 PM`, `9:35/10:35 PM SGT`), Weekly (`Sat 10:00 AM SGT`), and IDE AI (`run`) workflows.
+
+### Modules Added / Modified
+- `dashboard/streamlit_app.py`, `DEPLOYMENT.md`, `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-14] — v2.2 UI Simplification: Numbers-First Entry & 4-Step Exit Strategy Plans + Concise Explanations (Candlestick Charts Removed)
 
 ### Summary
