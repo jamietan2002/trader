@@ -26,4 +26,7 @@ All providers implement the `MarketDataProvider` abstract base class:
 2. **Survivorship Bias Protection**: `equities_universe` includes `is_active` and `delisted_date` (e.g., `FRC_DELIST` delisting on `2024-06-14`). Historical backtests include delisted securities up to their delisting bar.
 3. **Split & Dividend Normalization**: `MarketDataService.normalize_and_deduplicate_bars` validates OHLC bounds, deduplicates dates, applies backward cumulative split adjustments, and tracks cash dividends.
 4. **Rate Limiting & Persistent Caching**: `HttpRateLimitedClient` enforces minimum inter-request intervals, exponential backoff on HTTP `429`, and caches responses in the `api_cache` table.
+5. **40-Stock Multi-Sector Core + Dynamic Catalyst Onboarding**: `AlpacaDataProvider.EXTENDED_UNIVERSE` covers 40 liquid US equities across 10 GICS sectors, while `MarketDataService.onboard_dynamic_tickers()` dynamically validates (`Price >= $15`, `20d ADV >= $50M/day`, NYSE/NASDAQ, Alpaca `tradable`/`shortable`/`easy_to_borrow`) and backfills emerging catalyst movers.
+6. **24/7 Live Alpaca News & Movers Sentiment Scanner**: `MarketDataService.scan_live_alpaca_news_and_movers()` polls `/v1beta1/news` and `/v1beta1/screener/stocks/most-actives` to score real-time news sentiment into `market_catalysts` (`ALPACA_LIVE_NEWS`) without requiring external paid news keys.
+
 

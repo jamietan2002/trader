@@ -150,16 +150,32 @@ class BacktestEngine:
                 if ticker not in open_positions:
                     continue
                 pos = open_positions[ticker]
+                pos_side = str(pos.get("side", "LONG")).upper()
                 bar = bars_by_ticker.get(ticker, {}).get(current_date)
                 raw_exec_price = bar.adj_open if bar else pos["current_price"]
-                fill_price, comm, slip = self._compute_execution_costs(
-                    "SELL", pos["quantity"], raw_exec_price, cost_multiplier
-                )
-                proceeds = pos["quantity"] * fill_price - comm
-                cash += proceeds
-                gross_pnl = (fill_price - pos["avg_entry_price"]) * pos["quantity"]
-                net_pnl = gross_pnl - comm - pos["entry_commission"] + pos.get("dividends_collected", 0.0)
-                ret_pct = ((fill_price / pos["avg_entry_price"]) - 1.0) * 100.0
+                if pos_side == "SHORT":
+                    fill_price, comm, slip = self._compute_execution_costs(
+                        "BUY", pos["quantity"], raw_exec_price, cost_multiplier
+                    )
+                    cash -= pos["quantity"] * fill_price + comm
+                    gross_pnl = (pos["avg_entry_price"] - fill_price) * pos["quantity"]
+                    net_pnl = (
+                        gross_pnl
+                        - comm
+                        - pos["entry_commission"]
+                        + pos.get("dividends_collected", 0.0)
+                        - pos.get("borrow_fees_paid", 0.0)
+                    )
+                    ret_pct = ((pos["avg_entry_price"] - fill_price) / pos["avg_entry_price"]) * 100.0
+                else:
+                    fill_price, comm, slip = self._compute_execution_costs(
+                        "SELL", pos["quantity"], raw_exec_price, cost_multiplier
+                    )
+                    proceeds = pos["quantity"] * fill_price - comm
+                    cash += proceeds
+                    gross_pnl = (fill_price - pos["avg_entry_price"]) * pos["quantity"]
+                    net_pnl = gross_pnl - comm - pos["entry_commission"] + pos.get("dividends_collected", 0.0)
+                    ret_pct = ((fill_price / pos["avg_entry_price"]) - 1.0) * 100.0
 
                 closed_trades.append(
                     {
@@ -167,6 +183,7 @@ class BacktestEngine:
                         "strategy_id": strategy.strategy_id,
                         "strategy_version": strategy.version,
                         "ticker": ticker,
+                        "side": pos_side,
                         "sector": pos["sector"],
                         "entry_date": pos["entry_date"],
                         "exit_date": current_date,
@@ -179,6 +196,7 @@ class BacktestEngine:
                         "return_pct": round(ret_pct, 2),
                         "commission_usd": round(comm + pos["entry_commission"], 2),
                         "slippage_usd": round(slip + pos["entry_slippage"], 2),
+                        "borrow_fees_usd": round(pos.get("borrow_fees_paid", 0.0), 2),
                         "entry_reason": pos["entry_reason"],
                         "exit_reason": exit_sig.reason,
                         "market_regime": pos.get("entry_regime", "UNKNOWN"),
@@ -197,24 +215,33 @@ class BacktestEngine:
                 ind_prev = indicators_by_ticker.get(ticker, {}).get(entry_sig.signal_date)
                 meta = universe_meta.get(ticker)
                 sector = meta.sector if meta else "Unknown"
+                is_short_entry = entry_sig.action == "ENTRY_SHORT"
+                entry_side = "SHORT" if is_short_entry else "LONG"
 
-                # Current portfolio equity at open before new entry
-                pos_val_open = sum(
-                    p["quantity"]
-                    * (
+                # Current portfolio equity and unencumbered cash at open before new entry
+                pos_val_open = 0.0
+                short_collateral_locked = 0.0
+                for t, p in open_positions.items():
+                    open_px = (
                         bars_by_ticker.get(t, {}).get(current_date).adj_open
                         if bars_by_ticker.get(t, {}).get(current_date)
                         else p["current_price"]
                     )
-                    for t, p in open_positions.items()
-                )
+                    if str(p.get("side", "LONG")).upper() == "SHORT":
+                        pos_val_open -= p["quantity"] * open_px
+                        # Lock short sale proceeds + 100% cash collateral (zero-leverage short accounting)
+                        short_collateral_locked += 2.0 * p["quantity"] * open_px
+                    else:
+                        pos_val_open += p["quantity"] * open_px
                 curr_eq_open = cash + pos_val_open
+                unencumbered_cash = max(0.0, cash - short_collateral_locked)
 
                 # Adjust stop/target relative to actual open gap & enforce Opening Gap-Chase Cap
                 open_gap = bar.adj_open - entry_sig.close_at_signal
                 max_gap_atr = float(strategy.entry_rules.get("max_entry_gap_atr", 1.25))
                 if entry_sig.atr_at_signal and entry_sig.atr_at_signal > 0:
-                    if open_gap > max_gap_atr * entry_sig.atr_at_signal:
+                    adverse_chase_gap = (-open_gap) if is_short_entry else open_gap
+                    if adverse_chase_gap > max_gap_atr * entry_sig.atr_at_signal:
                         continue
                 adj_stop = (
                     round(max(0.01, entry_sig.stop_loss_price + open_gap), 2)
@@ -222,7 +249,7 @@ class BacktestEngine:
                     else None
                 )
                 adj_tp = (
-                    round(entry_sig.take_profit_price + open_gap, 2)
+                    round(max(0.01, entry_sig.take_profit_price + open_gap), 2)
                     if entry_sig.take_profit_price
                     else None
                 )
@@ -242,13 +269,16 @@ class BacktestEngine:
                     atr_14=entry_sig.atr_at_signal,
                     portfolio_equity=curr_eq_open,
                     peak_equity=peak_equity,
-                    available_cash=cash,
+                    available_cash=unencumbered_cash,
                     open_positions=open_positions,
                     avg_daily_dollar_volume_20d=ind_prev.avg_dollar_volume_20d if ind_prev else None,
                     upcoming_earnings_days=days_to_earn,
                     kill_switch_engaged=kill_switch_engaged,
                     strategy_risk_pct=strategy.risk_params.get("risk_per_trade_pct"),
                     strategy_max_exp_pct=strategy.risk_params.get("max_position_exposure_pct"),
+                    side=entry_side,
+                    is_shortable=getattr(meta, "is_shortable", True) if meta else True,
+                    easy_to_borrow=getattr(meta, "easy_to_borrow", True) if meta else True,
                 )
 
                 if not decision.approved or decision.recommended_shares <= 0:
@@ -257,27 +287,39 @@ class BacktestEngine:
                     continue
 
                 shares = decision.recommended_shares
-                fill_price, comm, slip = self._compute_execution_costs(
-                    "BUY", shares, bar.adj_open, cost_multiplier
-                )
-                total_cost = shares * fill_price + comm
-                if total_cost > cash:
-                    shares = int((cash - comm) // fill_price)
-                    if shares <= 0:
-                        continue
+                if is_short_entry:
+                    fill_price, comm, slip = self._compute_execution_costs(
+                        "SELL", shares, bar.adj_open, cost_multiplier
+                    )
+                    if shares * fill_price + comm > unencumbered_cash:
+                        shares = int(max(0.0, unencumbered_cash - comm) // fill_price)
+                        if shares <= 0:
+                            continue
+                    cash += shares * fill_price - comm
+                else:
+                    fill_price, comm, slip = self._compute_execution_costs(
+                        "BUY", shares, bar.adj_open, cost_multiplier
+                    )
                     total_cost = shares * fill_price + comm
+                    if total_cost > unencumbered_cash:
+                        shares = int(max(0.0, unencumbered_cash - comm) // fill_price)
+                        if shares <= 0:
+                            continue
+                        total_cost = shares * fill_price + comm
+                    cash -= total_cost
 
-                cash -= total_cost
                 spy_ind_now = spy_indicators.get(current_date)
                 entry_regime = self._classify_regime(spy_ind_now)
 
                 open_positions[ticker] = {
                     "ticker": ticker,
+                    "side": entry_side,
                     "sector": sector,
                     "quantity": shares,
                     "avg_entry_price": fill_price,
                     "current_price": bar.adj_close,
                     "highest_price_since_entry": max(fill_price, bar.adj_high),
+                    "lowest_price_since_entry": min(fill_price, bar.adj_low),
                     "stop_loss_price": adj_stop,
                     "take_profit_price": adj_tp,
                     "entry_date": current_date,
@@ -285,6 +327,7 @@ class BacktestEngine:
                     "entry_commission": comm,
                     "entry_slippage": slip,
                     "dividends_collected": 0.0,
+                    "borrow_fees_paid": 0.0,
                     "entry_reason": entry_sig.reason,
                     "entry_regime": entry_regime,
                 }
@@ -292,20 +335,34 @@ class BacktestEngine:
 
             # ------------------------------------------------------------------
             # STEP 2: Intraday & Market Close updates for open positions
-            # (dividends, delisting check, stop/exit evaluation for next open)
+            # (dividends, borrow fees, delisting check, stop/exit evaluation for next open)
             # ------------------------------------------------------------------
+            borrow_daily_rate = (getattr(self.cost_config, "short_borrow_bps_annual", 50.0) / 10_000.0) / 252.0
             for ticker, pos in list(open_positions.items()):
+                pos_side = str(pos.get("side", "LONG")).upper()
                 bar = bars_by_ticker.get(ticker, {}).get(current_date)
                 if bar is not None:
                     pos["current_price"] = bar.adj_close
                     pos["highest_price_since_entry"] = max(
                         pos["highest_price_since_entry"], bar.adj_high
                     )
+                    pos["lowest_price_since_entry"] = min(
+                        pos.get("lowest_price_since_entry", pos["avg_entry_price"]), bar.adj_low
+                    )
                     pos["holding_days"] += 1
-                    if bar.dividend_amount > 0:
-                        div_cash = pos["quantity"] * bar.dividend_amount
-                        cash += div_cash
-                        pos["dividends_collected"] += div_cash
+                    if pos_side == "SHORT":
+                        borrow_fee = pos["quantity"] * bar.adj_close * borrow_daily_rate * cost_multiplier
+                        cash -= borrow_fee
+                        pos["borrow_fees_paid"] = pos.get("borrow_fees_paid", 0.0) + borrow_fee
+                        if bar.dividend_amount > 0:
+                            div_cash = pos["quantity"] * bar.dividend_amount
+                            cash -= div_cash
+                            pos["dividends_collected"] -= div_cash
+                    else:
+                        if bar.dividend_amount > 0:
+                            div_cash = pos["quantity"] * bar.dividend_amount
+                            cash += div_cash
+                            pos["dividends_collected"] += div_cash
 
                 # Survivorship bias protection: if security delists on `current_date`, liquidate at close
                 meta = universe_meta.get(ticker)
@@ -316,18 +373,35 @@ class BacktestEngine:
                     and not meta.is_active
                 )
                 if is_delisting_today:
-                    fill_price, comm, slip = self._compute_execution_costs(
-                        "SELL", pos["quantity"], pos["current_price"], cost_multiplier
-                    )
-                    cash += pos["quantity"] * fill_price - comm
-                    gross_pnl = (fill_price - pos["avg_entry_price"]) * pos["quantity"]
-                    net_pnl = gross_pnl - comm - pos["entry_commission"] + pos["dividends_collected"]
+                    if pos_side == "SHORT":
+                        fill_price, comm, slip = self._compute_execution_costs(
+                            "BUY", pos["quantity"], pos["current_price"], cost_multiplier
+                        )
+                        cash -= pos["quantity"] * fill_price + comm
+                        gross_pnl = (pos["avg_entry_price"] - fill_price) * pos["quantity"]
+                        net_pnl = (
+                            gross_pnl
+                            - comm
+                            - pos["entry_commission"]
+                            + pos["dividends_collected"]
+                            - pos.get("borrow_fees_paid", 0.0)
+                        )
+                        ret_pct = ((pos["avg_entry_price"] - fill_price) / pos["avg_entry_price"]) * 100.0
+                    else:
+                        fill_price, comm, slip = self._compute_execution_costs(
+                            "SELL", pos["quantity"], pos["current_price"], cost_multiplier
+                        )
+                        cash += pos["quantity"] * fill_price - comm
+                        gross_pnl = (fill_price - pos["avg_entry_price"]) * pos["quantity"]
+                        net_pnl = gross_pnl - comm - pos["entry_commission"] + pos["dividends_collected"]
+                        ret_pct = ((fill_price / pos["avg_entry_price"]) - 1.0) * 100.0
                     closed_trades.append(
                         {
                             "trade_id": f"bt_trd_{uuid.uuid4().hex[:10]}",
                             "strategy_id": strategy.strategy_id,
                             "strategy_version": strategy.version,
                             "ticker": ticker,
+                            "side": pos_side,
                             "sector": pos["sector"],
                             "entry_date": pos["entry_date"],
                             "exit_date": current_date,
@@ -337,9 +411,10 @@ class BacktestEngine:
                             "exit_price": round(fill_price, 4),
                             "gross_pnl": round(gross_pnl, 2),
                             "net_pnl": round(net_pnl, 2),
-                            "return_pct": round(((fill_price / pos["avg_entry_price"]) - 1.0) * 100.0, 2),
+                            "return_pct": round(ret_pct, 2),
                             "commission_usd": round(comm + pos["entry_commission"], 2),
                             "slippage_usd": round(slip + pos["entry_slippage"], 2),
+                            "borrow_fees_usd": round(pos.get("borrow_fees_paid", 0.0), 2),
                             "entry_reason": pos["entry_reason"],
                             "exit_reason": f"Delisting liquidation on {current_date}",
                             "market_regime": pos.get("entry_regime", "UNKNOWN"),
@@ -358,6 +433,8 @@ class BacktestEngine:
                         holding_days=pos["holding_days"],
                         stop_loss_price=pos["stop_loss_price"],
                         take_profit_price=pos["take_profit_price"],
+                        side=pos_side,
+                        lowest_price_since_entry=pos.get("lowest_price_since_entry"),
                     )
                     if exit_sig is not None:
                         pending_exit_signals[ticker] = exit_sig
@@ -366,7 +443,10 @@ class BacktestEngine:
             # STEP 3: Update End-of-Day Portfolio Valuation & Drawdown
             # ------------------------------------------------------------------
             positions_val = sum(
-                p["quantity"] * p["current_price"] for p in open_positions.values()
+                (-p["quantity"] * p["current_price"])
+                if str(p.get("side", "LONG")).upper() == "SHORT"
+                else (p["quantity"] * p["current_price"])
+                for p in open_positions.values()
             )
             total_equity = cash + positions_val
             if total_equity > peak_equity:

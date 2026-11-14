@@ -59,20 +59,20 @@ trader/
 │   │   ├── models.py                  # DailyBar, EarningsEvent (BMO/AMC), USTradingCalendar
 │   │   └── providers.py               # LocalSeeded, Alpaca, Polygon, FMP, Finnhub, SEC EDGAR
 │   ├── indicators/technical.py        # Causal SMA, EMA, RSI, ATR, Bollinger, MACD, RS vs SPY
-│   ├── strategies/registry.py         # 5 Strategy families, SignalEngine, immutable versioning
-│   ├── backtesting/engine.py          # Chronological bar-by-bar backtester, WF, stress tests
-│   ├── risk/manager.py                # ATR sizing, exposure caps, correlation, kill switch
-│   └── execution/paper_broker.py      # $100K paper account, order types, idempotency, ledger
+│   ├── strategies/registry.py         # 6 Strategy families (Long & Short), SignalEngine, immutable versioning
+│   ├── backtesting/engine.py          # Chronological Long & Short bar-by-bar backtester, WF, stress tests
+│   ├── risk/manager.py                # ATR sizing, Long/Short exposure & squeeze caps, kill switch
+│   └── execution/paper_broker.py      # $100K paper account, 3-Pod All-Weather Alpaca Manager & Mistake Analyzer
 ├── evaluation/
 │   └── metrics/performance.py         # 16+ metrics (Sharpe, Sortino, Calmar, PF) & Monte Carlo
 ├── infrastructure/
 │   ├── configuration/settings.py      # Env settings, TRADING_MODE=paper lock, secret scrubbing
-│   ├── database/db.py                 # 16-table relational schema (SQLite / PostgreSQL)
+│   ├── database/db.py                 # 23-table relational schema (SQLite / PostgreSQL)
 │   ├── logging/logger.py              # Regex secret-scrubbing structured logger
 │   └── scheduler/orchestrator.py      # Idempotent Daily & Weekly workflows + holiday calendar
 ├── dashboard/
-│   ├── ui_template.py                 # 7-tab interactive SVG/HTML/JS dashboard
-│   └── streamlit_app.py               # Streamlit entrypoint
+│   ├── ui_template.py                 # 7-tab interactive local SVG/HTML/JS dashboard
+│   └── streamlit_app.py               # v2.0 4-Tab All-Weather Decision Hub, Candlestick Charts & Capital Slider
 ├── api/
 │   └── server.py                      # REST API & web dashboard server
 ├── tests/

@@ -64,3 +64,13 @@ DRAFT ──▶ BACKTESTING ──▶ VALIDATION ──▶ PAPER_TRADING ──�
 - **Entry Rules**: Stock belongs to top-2 ranked GICS sector by 20-day momentum, stock `rs_vs_spy_20d >= 3.0%`, and `Close > SMA(20) > SMA(50)`.
 - **Exit Rules**: $2.0 \times \text{ATR}(14)$ stop-loss, $2.3 \times \text{ATR}(14)$ trailing stop, or 5–14 day holding window.
 
+### 6. Structural Breakdown & Relative-Weakness Short (`BEARISH_BREAKDOWN`) — `strat_bearish_breakdown`
+- **Observable Phenomenon**: Institutional distribution below 20-day support in laggards underperforming `SPY` creates multi-day downside continuation swings across bear and dispersion regimes.
+- **Entry Rules (`ENTRY_SHORT`)**:
+  - Asset verified `is_shortable=True` (`easy_to_borrow` prioritized) and outside 3-day pre-earnings blackout.
+  - `Close < SMA(50)`, breaking near/below prior 15–20 day support (`low_20d_prior`), `rs_vs_spy_20d <= -3.0%`, `26.0 <= RSI(14) <= 54.0`, and `Volume >= 1.15x` 20-day average.
+  - Each of the 3 Alpaca Paper Pods also runs a non-overlapping Short sub-mandate (`Pod #1`: 20d Low Breakdown; `Pod #2`: Downtrend Bear-Rally Exhaustion `RSI >= 60`; `Pod #3`: Bearish Catalyst / Negative PEAD Drift).
+- **Exit Rules (`EXIT_SHORT`)**:
+  - Hard buy-to-cover stop at `Entry + 1.8x ATR(14)`, downward breakeven/profit ratchets at `-1.0R` and `-1.65R`, take-profit at `Entry - 3.4x ATR(14)`, oversold cover at `RSI(14) <= 26.0`, or short-squeeze cover on `AI Catalyst >= +0.50`.
+
+

@@ -51,6 +51,7 @@ Based on the detected `market_regime`, recent closed trade attribution (`recent_
 Apply both your qualitative research updates (including `sentiment_score` from `-1.0` to `+1.0`) and your strategy tournament candidates using `main.py ide-apply` (which also persists `IDE_AI_RESEARCH` catalyst records to `market_catalysts` and logs `ide_ai_cycle` in `job_executions` so the dashboard's **IDE AI Reminder Checklist** turns green):
 ```bash
 .venv/bin/python main.py ide-apply --json '{
+  "discovered_tickers": ["CRWD", "NOW"],
   "research_updates": [
     {
       "ticker": "NVDA",

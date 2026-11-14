@@ -231,6 +231,51 @@ class StrategyDiscoveryAgent(BaseAgent):
                 },
             }
 
+        if family == StrategyFamily.BEARISH_BREAKDOWN.value:
+            return {
+                "strategy_id": "strat_bearish_breakdown",
+                "name": "Structural Breakdown & Relative Weakness Short",
+                "strategy_family": StrategyFamily.BEARISH_BREAKDOWN.value,
+                "observable_phenomenon": (
+                    "Institutional distribution below 20-day support in laggards underperforming SPY "
+                    "produces multi-day downside continuation swings with negative drift."
+                ),
+                "hypothesis": (
+                    "Shorting liquid, easy-to-borrow equities breaking below 20d structural support "
+                    "(Close < SMA50, 20d RS vs SPY <= -3.0%, 26 <= RSI14 <= 52, Vol >= 1.15x) "
+                    "generates uncorrelated bear-market and dispersion alpha."
+                ),
+                "invalidation_conditions": (
+                    "Short-squeeze reclaim above SMA20 + 0.5x ATR, 1.8x ATR hard buy-to-cover stop, or RSI14 <= 26 oversold cover."
+                ),
+                "target_market_regimes": ["BEAR_TREND", "HIGH_VOL_CORRECTION", "SIDEWAYS_CHOPPY"],
+                "holding_period_min_days": 3,
+                "holding_period_max_days": 10,
+                "universe": universe,
+                "required_indicators": ["sma_20", "sma_50", "rsi_14", "atr_14", "rs_vs_spy_20d", "volume_ratio_20"],
+                "entry_rules": {
+                    "side": "SHORT",
+                    "breakdown_lookback_days": 15,
+                    "breakdown_tolerance_pct": 1.2,
+                    "max_rs_vs_spy_20d": -3.0,
+                    "min_volume_ratio_20": 1.15,
+                    "min_rsi_14": 26.0,
+                    "max_rsi_14": 52.0,
+                    "require_below_sma50": True,
+                },
+                "exit_rules": {
+                    "stop_loss_atr_mult": 1.8,
+                    "take_profit_atr_mult": 3.4,
+                    "trailing_stop_atr_mult": 2.1,
+                    "exit_above_sma20": True,
+                    "cover_rsi_below": 26.0,
+                },
+                "risk_params": {
+                    "risk_per_trade_pct": 0.01,
+                    "max_position_exposure_pct": 0.12,
+                },
+            }
+
         # Default adaptive momentum variant with regime filter
         return {
             "strategy_id": f"strat_adaptive_momentum_{uuid.uuid4().hex[:4]}",

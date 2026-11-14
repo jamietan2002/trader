@@ -4,6 +4,34 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-14] — v2.0 All-Weather Platform Upgrade: Long + Short Swing Engine, 40-Stock + Dynamic Universe, 24/7 Alpaca News Scanner, 4-Tab Decision Hub & Mistake Analyzer
+
+### Summary
+- **Phase 1 — 40-Stock Multi-Sector Core + Dynamic Catalyst Ticker Onboarding (`core/market_data/models.py`, `core/market_data/providers.py`, `infrastructure/database/db.py`)**:
+  - Expanded `AlpacaDataProvider.EXTENDED_UNIVERSE` to 40 liquid US equities across 10 GICS sectors while keeping unit tests fast on the 16-symbol `LocalSeededDataProvider`.
+  - Added `is_shortable`, `easy_to_borrow`, and `discovery_source` (`CORE`, `ALPACA_SCREENER`, `IDE_AI_DISCOVERY`, `UI_OPERATOR`) to `EquityMetadata` and `equities_universe` (with automatic `ALTER TABLE` schema migrations).
+  - Implemented `MarketDataService.onboard_dynamic_tickers()` enforcing strict liquidity & asset gates (`Price >= $15`, `20d ADV >= $50M/day`, `NYSE`/`NASDAQ`, Alpaca `/v2/assets/{sym}` `tradable`/`shortable`/`easy_to_borrow`) and wired screener/IDE dynamic onboarding into `AutonomousWorkflowOrchestrator`.
+- **Phase 2 — Automated 24/7 Live Alpaca News & Movers Sentiment Scanner (`core/market_data/providers.py`)**:
+  - Implemented `MarketDataService.scan_live_alpaca_news_and_movers()` polling `/v1beta1/news` and `/v1beta1/screener/stocks/most-actives` plus deterministic financial-lexicon sentiment scoring (`score_headline_sentiment_deterministic`) into `market_catalysts` (`ALPACA_LIVE_NEWS`) so news vetoes (`<= -0.35` on longs, `>= +0.30` on shorts) operate 24/7 without requiring manual IDE runs.
+- **Phase 3 — All-Weather Long + Short Swing Engine Across 3 Isolated Alpaca Paper Accounts (`core/strategies/registry.py`, `core/risk/manager.py`, `core/backtesting/engine.py`, `core/execution/paper_broker.py`)**:
+  - Added 6th strategy family `StrategyFamily.BEARISH_BREAKDOWN` (`strat_bearish_breakdown`), `ENTRY_SHORT` / `EXIT_SHORT`, `evaluate_pod_short_entry()` (non-overlapping short mandates for Pod #1 `PA3GP0WMH`, Pod #2 `PA3IAK6TV`, and Pod #3 `PA3OSGSIE`), and `compute_effective_short_stop_price()` (`-1.0R` / `-1.65R` downward stop ratchets).
+  - Upgraded `PortfolioRiskManager` with short-squeeze protections (`SHORT_NOT_SHORTABLE` veto, 3-day pre-earnings short blackout, `1.00%` max short risk/trade, `12%` max single-short exposure, `40%` `MAX_GROSS_SHORT_EXPOSURE`, and direction-aware correlation checks).
+  - Upgraded `BacktestEngine` with chronological `ENTRY_SHORT` / `EXIT_SHORT` execution, zero-leverage 100%-cash-collateralized short margin, `50 bps/yr` borrow fee drag, and short dividend liability.
+  - Upgraded `AlpacaPaperPodManager` to execute and manage both `LONG` and `SHORT` Limit Bracket Orders + Self-Healing `BUY` `GTC OCO` buy-to-cover brackets across all 3 connected Alpaca Paper accounts.
+- **Phase 4 — Streamlined 4-Tab Decision Hub, 60-Day Candlestick Charts & Custom Capital Sizing Slider (`dashboard/streamlit_app.py`, `api/server.py`)**:
+  - Replaced the 7-tab Streamlit layout with a clean **4-Tab All-Weather Decision Hub** (`Today's Trade Cards`, `Active Holdings & Exit Guardian`, `Strategy Tournament & Mistake Analyzer`, `Live News & Universe`), featuring embedded **60-day OHLC Candlestick + SMA20/SMA50 SVG charts** with horizontal Entry/Stop/Stage-1/Stage-2/Target overlays, a **Custom Real-Capital Sizing Slider (`$10k – $500k`)**, and 1-click links to all 3 Alpaca Paper accounts (`PA3GP0WMH`, `PA3IAK6TV`, `PA3OSGSIE`). (Skipped email notifications per user request; surfaced Pre-Open Briefing and Catalyst alerts directly in the UI banner.)
+- **Phase 5 — Post-Trade Attribution (`alpaca_closed_trades`), Autonomous Mistake Analyzer & Suite 11 Tests (`core/execution/paper_broker.py`, `infrastructure/scheduler/orchestrator.py`, `tests/test_platform.py`)**:
+  - Added Table 23 `alpaca_closed_trades`, `_sync_closed_alpaca_orders_to_ledger()`, and `get_post_trade_attribution_analysis()` feeding detected mistake remedies directly into `run_weekly_workflow` challenger tournaments (guarded by 9-Gate OOS/Walk-Forward + Champion Protection).
+  - Added Suite 11 (`test_11_v2_short_selling_risk_gates_news_and_mistake_analyzer`) to `tests/test_platform.py`.
+
+### Modules Added / Modified
+- `core/market_data/models.py`, `core/market_data/providers.py`, `core/strategies/registry.py`, `core/risk/manager.py`, `core/backtesting/engine.py`, `core/execution/paper_broker.py`
+- `infrastructure/database/db.py`, `infrastructure/configuration/settings.py`, `infrastructure/scheduler/orchestrator.py`
+- `agents/strategy_architect/agent.py`, `api/server.py`, `dashboard/streamlit_app.py`, `tests/test_platform.py`
+- `AGENTS.md`, `core/AGENTS.md`, `USER_GUIDE.md`, `STRATEGY_GUIDE.md`, `ARCHITECTURE.md`, `DATA_SOURCES.md`, `BACKTESTING_METHODOLOGY.md`, `DEPLOYMENT.md`, `ENVIRONMENT_VARIABLES.md`, `README.md`, `docs/AGENT_CHANGELOG.md`
+
+---
+
 ## [2026-11-13] — Alpaca Paper Portal Quick Links, Self-Healing GTC OCO Exit Bracket Guardian, Senior Engineer Bug Audit & 8 Senior Quant Upgrades
 
 ### Summary

@@ -30,6 +30,7 @@ class StrategyFamily(str, Enum):
     BREAKOUT = "BREAKOUT"
     MEAN_REVERSION = "MEAN_REVERSION"
     SECTOR_ROTATION = "SECTOR_ROTATION"
+    BEARISH_BREAKDOWN = "BEARISH_BREAKDOWN"
 
 
 class StrategyStatus(str, Enum):
@@ -386,6 +387,170 @@ class StrategySignalEngine:
                     take_profit_price=tp_price,
                 )
 
+        elif family == StrategyFamily.BEARISH_BREAKDOWN.value:
+            if ind.sma_20 is None or ind.sma_50 is None or ind.rsi_14 is None or ind.rs_vs_spy_20d is None:
+                return None
+            max_rs = float(rules.get("max_rs_vs_spy_20d", -3.0))
+            min_rsi = float(rules.get("min_rsi_14", 28.0))
+            max_rsi = float(rules.get("max_rsi_14", 58.0))
+            min_vol_ratio = float(rules.get("min_volume_ratio_20", 1.05))
+            breakdown_buf_pct = float(rules.get("breakdown_buffer_pct", 2.5))
+            require_below_sma50 = bool(rules.get("require_below_sma50", True))
+
+            below_sma20 = ind.close < ind.sma_20
+            below_sma50 = not require_below_sma50 or (ind.close < ind.sma_50)
+            rs_weak = ind.rs_vs_spy_20d <= max_rs
+            rsi_ok = min_rsi <= ind.rsi_14 <= max_rsi
+            vol_ok = ind.volume_ratio_20 is None or ind.volume_ratio_20 >= min_vol_ratio
+            broke_20d_low = (
+                ind.low_20d_prior is None
+                or ind.close <= ind.low_20d_prior * (1.0 + breakdown_buf_pct / 100.0)
+            )
+
+            if below_sma20 and below_sma50 and rs_weak and rsi_ok and vol_ok and broke_20d_low:
+                short_stop = round(ind.close + stop_atr_mult * ind.atr_14, 2)
+                short_tp = round(max(0.01, ind.close - tp_atr_mult * ind.atr_14), 2)
+                score = min(
+                    0.999,
+                    0.54 + abs(min(0.0, ind.rs_vs_spy_20d)) / 45.0 + max(0.0, (ind.volume_ratio_20 or 1.0) - 1.0) * 0.08,
+                )
+                return TradeSignal(
+                    strategy_id=config.strategy_id,
+                    strategy_version=config.version,
+                    strategy_family=family,
+                    ticker=ind.ticker,
+                    signal_date=ind.bar_date,
+                    action="ENTRY_SHORT",
+                    reason=(
+                        f"Bearish Breakdown Short: Close ${ind.close:.2f} < SMA20 ${ind.sma_20:.2f} & SMA50 ${ind.sma_50:.2f}, "
+                        f"RS20d={ind.rs_vs_spy_20d:+.2f}%, RSI={ind.rsi_14:.1f}, VolRatio={ind.volume_ratio_20 or 1.0:.2f}x"
+                    ),
+                    conviction_score=round(score, 4),
+                    atr_at_signal=ind.atr_14,
+                    close_at_signal=ind.close,
+                    stop_loss_price=short_stop,
+                    take_profit_price=short_tp,
+                )
+
+        return None
+
+    @staticmethod
+    def evaluate_pod_short_entry(
+        pod_id: str,
+        config: StrategyConfig,
+        ind: IndicatorSnapshot,
+        spy_ind: Optional[IndicatorSnapshot],
+        ai_sentiment: float = 0.0,
+        recent_earnings: Optional[Sequence[EarningsEvent]] = None,
+        ai_catalyst_sentiment: Optional[float] = None,
+    ) -> Optional[TradeSignal]:
+        """Evaluate specialized All-Weather Short-Selling Sub-Mandate for each Strategy Pod.
+
+        Ensures the 3 Pods stay strictly non-overlapping on the Short side as well:
+        - Pod #1 (`pod_1_breakout`): 20-Day Low Structural Breakdown Short (`Close < SMA20 < SMA50`, near/below 20d low).
+        - Pod #2 (`pod_2_mean_reversion`): Downtrend Bear-Rally Exhaustion Short (`Close < SMA200` or `SMA20 < SMA50`, `RSI >= 60`).
+        - Pod #3 (`pod_3_momentum`): Relative-Weakness & Bearish Catalyst Drift Short (`Close < SMA50`, `RS20d <= -3.5%`, `AI <= -0.20`).
+        """
+        if ai_catalyst_sentiment is not None:
+            ai_sentiment = float(ai_catalyst_sentiment)
+        if ind.atr_14 is None or ind.atr_14 <= 0 or ind.close <= 0:
+            return None
+        if ind.sma_20 is None or ind.sma_50 is None or ind.rsi_14 is None or ind.rs_vs_spy_20d is None:
+            return None
+        # Never short deeply washed-out rubber-band stocks (RSI < 28) or stocks with strong bullish catalysts (>= +0.30)
+        if ind.rsi_14 < 28.0 or ai_sentiment >= 0.30:
+            return None
+
+        stop_mult = float(config.exit_rules.get("stop_loss_atr_mult", 1.85))
+        tp_mult = float(config.exit_rules.get("take_profit_atr_mult", 3.6))
+        short_stop = round(ind.close + stop_mult * ind.atr_14, 2)
+        short_tp = round(max(0.01, ind.close - tp_mult * ind.atr_14), 2)
+
+        if pod_id == "pod_1_breakout":
+            near_20d_low = ind.low_20d_prior is not None and ind.close <= ind.low_20d_prior * 1.022
+            vol_ok = (ind.volume_ratio_20 or 1.0) >= 1.05
+            if (
+                ind.close < ind.sma_20 < ind.sma_50
+                and near_20d_low
+                and ind.rs_vs_spy_20d <= -3.0
+                and 28.0 <= ind.rsi_14 <= 54.0
+                and vol_ok
+            ):
+                score = min(0.99, 0.56 + abs(ind.rs_vs_spy_20d) / 45.0 + max(0.0, -ai_sentiment) * 0.18)
+                return TradeSignal(
+                    strategy_id=config.strategy_id,
+                    strategy_version=config.version,
+                    strategy_family=StrategyFamily.BEARISH_BREAKDOWN.value,
+                    ticker=ind.ticker,
+                    signal_date=ind.bar_date,
+                    action="ENTRY_SHORT",
+                    reason=(
+                        f"20d Low Breakdown Short: Close ${ind.close:.2f} <= 20dLow ${ind.low_20d_prior:.2f} (+2.2% buf), "
+                        f"Close < SMA20 < SMA50, RS20d={ind.rs_vs_spy_20d:+.1f}%, Vol={ind.volume_ratio_20 or 1.0:.2f}x"
+                    ),
+                    conviction_score=round(score, 4),
+                    atr_at_signal=ind.atr_14,
+                    close_at_signal=ind.close,
+                    stop_loss_price=short_stop,
+                    take_profit_price=short_tp,
+                )
+
+        elif pod_id == "pod_2_mean_reversion":
+            in_downtrend = (ind.sma_200 is not None and ind.close < ind.sma_200) or (ind.sma_20 < ind.sma_50)
+            overbought_bounce = ind.rsi_14 >= 60.0 or (ind.bb_upper_20 is not None and ind.close >= ind.bb_upper_20 * 0.985)
+            if in_downtrend and overbought_bounce and ind.rs_vs_spy_20d <= -1.5:
+                score = min(0.99, 0.55 + (ind.rsi_14 - 58.0) / 55.0 + abs(ind.rs_vs_spy_20d) / 55.0)
+                return TradeSignal(
+                    strategy_id=config.strategy_id,
+                    strategy_version=config.version,
+                    strategy_family=StrategyFamily.BEARISH_BREAKDOWN.value,
+                    ticker=ind.ticker,
+                    signal_date=ind.bar_date,
+                    action="ENTRY_SHORT",
+                    reason=(
+                        f"Downtrend Bear-Rally Exhaustion Short: RSI={ind.rsi_14:.1f} >= 60 in structural downtrend "
+                        f"(SMA20 < SMA50 / < SMA200), RS20d={ind.rs_vs_spy_20d:+.1f}%"
+                    ),
+                    conviction_score=round(score, 4),
+                    atr_at_signal=ind.atr_14,
+                    close_at_signal=ind.close,
+                    stop_loss_price=short_stop,
+                    take_profit_price=short_tp,
+                )
+
+        elif pod_id == "pod_3_momentum":
+            ret20 = float(ind.ret_20d_pct or 0.0)
+            neg_pead = any(
+                (ev.eps_surprise_pct or 0.0) <= -3.0
+                for ev in (recent_earnings or [])
+            )
+            if (
+                ind.close < ind.sma_20
+                and ind.close < ind.sma_50
+                and ind.rs_vs_spy_20d <= -3.5
+                and ret20 <= -3.5
+                and 28.0 <= ind.rsi_14 <= 56.0
+                and (ai_sentiment <= -0.20 or neg_pead)
+            ):
+                score = min(0.99, 0.57 + abs(ind.rs_vs_spy_20d) / 45.0 + abs(ai_sentiment) * 0.22)
+                return TradeSignal(
+                    strategy_id=config.strategy_id,
+                    strategy_version=config.version,
+                    strategy_family=StrategyFamily.BEARISH_BREAKDOWN.value,
+                    ticker=ind.ticker,
+                    signal_date=ind.bar_date,
+                    action="ENTRY_SHORT",
+                    reason=(
+                        f"Bearish Catalyst & Relative-Weakness Short: RS20d={ind.rs_vs_spy_20d:+.1f}%, "
+                        f"Ret20d={ret20:+.1f}%, AI Catalyst={ai_sentiment:+.2f}, Close < SMA20 & SMA50"
+                    ),
+                    conviction_score=round(score, 4),
+                    atr_at_signal=ind.atr_14,
+                    close_at_signal=ind.close,
+                    stop_loss_price=short_stop,
+                    take_profit_price=short_tp,
+                )
+
         return None
 
     @staticmethod
@@ -446,6 +611,46 @@ class StrategySignalEngine:
         return round(effective_stop, 2), mode_label
 
     @staticmethod
+    def compute_effective_short_stop_price(
+        config: StrategyConfig,
+        entry_price: float,
+        lowest_price_since_entry: float,
+        holding_days: int,
+        initial_stop_price: Optional[float] = None,
+        atr_14: Optional[float] = None,
+    ) -> Tuple[float, str]:
+        """Compute downward-ratcheting stop price for SHORT positions."""
+        exits = config.exit_rules
+        stop_mult = float(exits.get("stop_loss_atr_mult", 2.0))
+        resolved_atr = float(atr_14) if (atr_14 is not None and atr_14 > 0) else max(0.01, entry_price * 0.02)
+        base_stop = (
+            float(initial_stop_price)
+            if (initial_stop_price is not None and initial_stop_price > entry_price)
+            else round(entry_price + stop_mult * resolved_atr, 2)
+        )
+        effective_stop = base_stop
+        mode_label = "Initial Short ATR Stop"
+
+        if holding_days >= config.holding_period_min_days:
+            risk_1r = max(entry_price * 0.015, base_stop - entry_price)
+            breakeven_trigger_r = float(exits.get("breakeven_trigger_r", 1.25))
+            if (entry_price - lowest_price_since_entry) >= breakeven_trigger_r * risk_1r:
+                be_minus_friction = round(max(0.01, entry_price - 0.15 * resolved_atr), 2)
+                if be_minus_friction < effective_stop:
+                    effective_stop = be_minus_friction
+                    mode_label = "Short Breakeven+Friction Ratchet (+1.25R)"
+
+            trailing_atr_mult = exits.get("trailing_stop_atr_mult")
+            trail_activation_r = float(exits.get("trail_activation_r", 1.0))
+            if trailing_atr_mult is not None and (entry_price - lowest_price_since_entry) >= trail_activation_r * risk_1r:
+                trail_stop = round(lowest_price_since_entry + float(trailing_atr_mult) * resolved_atr, 2)
+                if trail_stop < effective_stop:
+                    effective_stop = trail_stop
+                    mode_label = f"Short Chandelier Trail ({trailing_atr_mult}x ATR)"
+
+        return round(effective_stop, 2), mode_label
+
+    @staticmethod
     def evaluate_exit(
         config: StrategyConfig,
         ind: IndicatorSnapshot,
@@ -454,9 +659,107 @@ class StrategySignalEngine:
         holding_days: int,
         stop_loss_price: Optional[float],
         take_profit_price: Optional[float],
+        side: str = "LONG",
+        lowest_price_since_entry: Optional[float] = None,
     ) -> Optional[TradeSignal]:
         exits = config.exit_rules
         atr = ind.atr_14 or (ind.close * 0.02)
+
+        if side.upper() == "SHORT":
+            low_water = lowest_price_since_entry if lowest_price_since_entry is not None else min(entry_price, ind.low)
+            if stop_loss_price is not None and ind.high >= stop_loss_price:
+                return TradeSignal(
+                    strategy_id=config.strategy_id,
+                    strategy_version=config.version,
+                    strategy_family=config.strategy_family,
+                    ticker=ind.ticker,
+                    signal_date=ind.bar_date,
+                    action="EXIT_SHORT",
+                    reason=f"Short Stop-Loss triggered at ${stop_loss_price:.2f} (Bar High=${ind.high:.2f})",
+                    conviction_score=1.0,
+                    atr_at_signal=atr,
+                    close_at_signal=stop_loss_price,
+                )
+            eff_short_stop, short_mode = StrategySignalEngine.compute_effective_short_stop_price(
+                config=config,
+                entry_price=entry_price,
+                lowest_price_since_entry=low_water,
+                holding_days=holding_days,
+                initial_stop_price=stop_loss_price,
+                atr_14=atr,
+            )
+            if holding_days >= config.holding_period_min_days and ind.close >= eff_short_stop:
+                return TradeSignal(
+                    strategy_id=config.strategy_id,
+                    strategy_version=config.version,
+                    strategy_family=config.strategy_family,
+                    ticker=ind.ticker,
+                    signal_date=ind.bar_date,
+                    action="EXIT_SHORT",
+                    reason=f"{short_mode} triggered at ${ind.close:.2f} (Stop=${eff_short_stop:.2f}, Trough=${low_water:.2f})",
+                    conviction_score=1.0,
+                    atr_at_signal=atr,
+                    close_at_signal=ind.close,
+                )
+            if (
+                take_profit_price is not None
+                and holding_days >= config.holding_period_min_days
+                and ind.low <= take_profit_price
+            ):
+                return TradeSignal(
+                    strategy_id=config.strategy_id,
+                    strategy_version=config.version,
+                    strategy_family=config.strategy_family,
+                    ticker=ind.ticker,
+                    signal_date=ind.bar_date,
+                    action="EXIT_SHORT",
+                    reason=f"Short Take-Profit target reached at ${take_profit_price:.2f}",
+                    conviction_score=1.0,
+                    atr_at_signal=atr,
+                    close_at_signal=take_profit_price,
+                )
+            if holding_days >= config.holding_period_min_days:
+                if exits.get("exit_above_sma20", True) and ind.sma_20 is not None and ind.close > ind.sma_20:
+                    return TradeSignal(
+                        strategy_id=config.strategy_id,
+                        strategy_version=config.version,
+                        strategy_family=config.strategy_family,
+                        ticker=ind.ticker,
+                        signal_date=ind.bar_date,
+                        action="EXIT_SHORT",
+                        reason=f"Short Trend Reclaim exit: Close ${ind.close:.2f} reclaimed SMA20 ${ind.sma_20:.2f}",
+                        conviction_score=0.9,
+                        atr_at_signal=atr,
+                        close_at_signal=ind.close,
+                    )
+                rsi_cover = exits.get("exit_rsi_below", 28.0)
+                if rsi_cover is not None and ind.rsi_14 is not None and ind.rsi_14 <= float(rsi_cover):
+                    return TradeSignal(
+                        strategy_id=config.strategy_id,
+                        strategy_version=config.version,
+                        strategy_family=config.strategy_family,
+                        ticker=ind.ticker,
+                        signal_date=ind.bar_date,
+                        action="EXIT_SHORT",
+                        reason=f"Short RSI Oversold Cover target: RSI={ind.rsi_14:.1f} <= {rsi_cover}",
+                        conviction_score=0.9,
+                        atr_at_signal=atr,
+                        close_at_signal=ind.close,
+                    )
+            if holding_days >= config.holding_period_max_days:
+                return TradeSignal(
+                    strategy_id=config.strategy_id,
+                    strategy_version=config.version,
+                    strategy_family=config.strategy_family,
+                    ticker=ind.ticker,
+                    signal_date=ind.bar_date,
+                    action="EXIT_SHORT",
+                    reason=f"Max short swing holding period ({config.holding_period_max_days} trading days) reached",
+                    conviction_score=1.0,
+                    atr_at_signal=atr,
+                    close_at_signal=ind.close,
+                )
+            return None
 
         # 1. Hard stop-loss check (can trigger intraday via low or close)
         if stop_loss_price is not None and ind.low <= stop_loss_price:
@@ -702,7 +1005,7 @@ def get_baseline_strategies() -> List[StrategyConfig]:
 
 
 def get_all_golden_base_strategies() -> List[StrategyConfig]:
-    """Return all 5 Golden Base (v1) strategies across all 5 strategy families."""
+    """Return all 6 Golden Base (v1) strategies across all 6 strategy families."""
     core_universe = [
         "AAPL", "MSFT", "NVDA", "AMD", "AMZN", "TSLA", "META",
         "JPM", "GS", "LLY", "UNH", "XOM", "CAT", "AVGO",
@@ -789,6 +1092,48 @@ def get_all_golden_base_strategies() -> List[StrategyConfig]:
             risk_params={
                 "risk_per_trade_pct": 0.01,
                 "max_position_exposure_pct": 0.15,
+            },
+        ),
+        StrategyConfig(
+            strategy_id="strat_bearish_breakdown",
+            version=1,
+            name="20-Day Low Structural Breakdown & Relative Weakness Short",
+            strategy_family=StrategyFamily.BEARISH_BREAKDOWN.value,
+            status=StrategyStatus.DRAFT.value,
+            hypothesis=(
+                "Equities breaking down near or below 20-day lows beneath declining SMA20 & SMA50 with "
+                "bottom-decile relative strength vs SPY (<= -3.0%) continue drifting lower over 3-10 trading days."
+            ),
+            observable_phenomenon=(
+                "Institutional distribution and failed support levels create persistent downward swing momentum "
+                "during corrections and sector rotations."
+            ),
+            invalidation_conditions=(
+                "Short squeeze above 1.85x ATR stop-loss or trend reclaim above 20-day moving average."
+            ),
+            target_market_regimes=["BEAR_TREND", "HIGH_VOL_CORRECTION", "SIDEWAYS_CHOPPY"],
+            holding_period_min_days=3,
+            holding_period_max_days=10,
+            universe=core_universe,
+            required_indicators=["low_20d_prior", "sma_20", "sma_50", "rsi_14", "atr_14", "volume_ratio_20", "rs_vs_spy_20d"],
+            entry_rules={
+                "max_rs_vs_spy_20d": -3.0,
+                "min_rsi_14": 28.0,
+                "max_rsi_14": 58.0,
+                "min_volume_ratio_20": 1.05,
+                "breakdown_buffer_pct": 2.5,
+                "require_below_sma50": True,
+            },
+            exit_rules={
+                "stop_loss_atr_mult": 1.85,
+                "take_profit_atr_mult": 3.6,
+                "trailing_stop_atr_mult": 2.2,
+                "exit_above_sma20": True,
+                "exit_rsi_below": 28.0,
+            },
+            risk_params={
+                "risk_per_trade_pct": 0.0085,
+                "max_position_exposure_pct": 0.12,
             },
         ),
     ]

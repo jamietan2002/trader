@@ -55,11 +55,23 @@ class PlatformApplication:
             if hasattr(self.orchestrator, "pod_manager")
             else {"pods": []}
         )
+        catalyst_rows = self.db.fetch_all(
+            "SELECT * FROM market_catalysts ORDER BY published_date DESC, id DESC LIMIT 40"
+        )
         return {
             "settings": self.settings.sanitized_dict(),
             "account": self.orchestrator.paper_engine.get_account_summary(),
             "paper_books": self.orchestrator.paper_engine.get_all_paper_accounts_summary(strats_dicts),
             "strategy_pods": strategy_pods_state,
+            "mistake_analyzer": (
+                self.orchestrator.pod_manager.get_post_trade_attribution_analysis()
+                if hasattr(self.orchestrator, "pod_manager")
+                else {}
+            ),
+            "live_catalysts": [dict(r) for r in catalyst_rows],
+            "universe_metadata": [
+                m.to_dict() for m in self.orchestrator.market_data.get_universe_metadata().values()
+            ],
             "positions": self.orchestrator.paper_engine.get_open_positions(),
             "orders": self.orchestrator.paper_engine.get_orders(limit=50),
             "trade_ledger": self.orchestrator.paper_engine.get_trade_ledger(limit=100),

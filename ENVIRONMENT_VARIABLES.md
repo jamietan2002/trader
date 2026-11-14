@@ -14,8 +14,12 @@ All environment variables are loaded via `infrastructure/configuration/settings.
 | `OPERATOR_TIMEZONE` | `Asia/Singapore` | Operator reporting timezone. |
 | `DATABASE_URL` | `sqlite:///data/swing_trader.db` | Relational database connection URL (SQLite or PostgreSQL). |
 | `MARKET_DATA_PROVIDER` | `alpaca` | Active provider: `alpaca` (with automatic `local_seeded` fallback), `local_seeded`, `polygon`, `fmp`, or `finnhub`. |
-| `ALPACA_API_KEY` | *(empty)* | Alpaca API key ID (redacted in logs). |
-| `ALPACA_SECRET_KEY` | *(empty)* | Alpaca secret key (redacted in logs). |
+| `ALPACA_API_KEY` | *(empty)* | Alpaca Paper Pod #1 (`pod_1_breakout`) API key ID (redacted in logs). |
+| `ALPACA_SECRET_KEY` | *(empty)* | Alpaca Paper Pod #1 (`pod_1_breakout`) secret key (redacted in logs). |
+| `ALPACA_API_KEY_2` | *(empty)* | Alpaca Paper Pod #2 (`pod_2_mean_reversion`) API key ID (redacted in logs). |
+| `ALPACA_SECRET_KEY_2` | *(empty)* | Alpaca Paper Pod #2 (`pod_2_mean_reversion`) secret key (redacted in logs). |
+| `ALPACA_API_KEY_3` | *(empty)* | Alpaca Paper Pod #3 (`pod_3_momentum`) API key ID (redacted in logs). |
+| `ALPACA_SECRET_KEY_3` | *(empty)* | Alpaca Paper Pod #3 (`pod_3_momentum`) secret key (redacted in logs). |
 | `ALPACA_PAPER_BASE_URL` | `https://paper-api.alpaca.markets` | Alpaca paper trading endpoint. |
 | `POLYGON_API_KEY` | *(empty)* | Polygon.io / Massive API key. |
 | `FMP_API_KEY` | *(empty)* | Financial Modeling Prep API key. |

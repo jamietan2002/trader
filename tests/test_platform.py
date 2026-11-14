@@ -929,6 +929,159 @@ class TestSwingTradingPlatform(unittest.TestCase):
         self.assertEqual(USTradingCalendar.market_open_sgt(date(2026, 11, 9)), "10:30 PM SGT")
         self.assertEqual(USTradingCalendar.market_open_sgt(date(2026, 7, 15)), "9:30 PM SGT")
 
+    # ------------------------------------------------------------------
+    # 11. v2.0 All-Weather Short-Selling, Squeeze Caps, News & Mistake Analyzer
+    # ------------------------------------------------------------------
+    def test_11_v2_short_selling_risk_gates_news_and_mistake_analyzer(self) -> None:
+        from core.strategies.registry import (
+            StrategyFamily,
+            StrategySignalEngine,
+            get_all_golden_base_strategies,
+        )
+        from core.risk.manager import PortfolioRiskManager
+        from core.backtesting.engine import BacktestEngine
+        from core.market_data.providers import MarketDataService
+
+        self.market_data.ingest_universe_and_history(start_date="2023-06-01", end_date="2025-06-30")
+
+        # 1. Verify all 6 golden base strategies include BEARISH_BREAKDOWN
+        all_golden = get_all_golden_base_strategies()
+        self.assertEqual(len(all_golden), 6)
+        short_strat = [s for s in all_golden if s.strategy_family == StrategyFamily.BEARISH_BREAKDOWN.value][0]
+        self.assertEqual(short_strat.strategy_id, "strat_bearish_breakdown")
+
+        # 2. Verify downward stop ratchet for SHORT positions
+        s_stop_init, s_lbl_init = StrategySignalEngine.compute_effective_short_stop_price(
+            config=short_strat,
+            entry_price=100.0,
+            lowest_price_since_entry=98.0,
+            holding_days=4,
+            initial_stop_price=104.0,
+            atr_14=2.0,
+        )
+        self.assertEqual(s_stop_init, 104.0)
+        self.assertIn("Initial", s_lbl_init)
+
+        # After dropping to $93.0 (-1.75R favorable move on $4 initial risk), stop ratchets below entry
+        s_stop_ratchet, _ = StrategySignalEngine.compute_effective_short_stop_price(
+            config=short_strat,
+            entry_price=100.0,
+            lowest_price_since_entry=93.0,
+            holding_days=5,
+            initial_stop_price=104.0,
+            atr_14=2.0,
+        )
+        self.assertLess(s_stop_ratchet, 100.0)
+
+        # 3. Verify PortfolioRiskManager short-squeeze protections
+        rm = PortfolioRiskManager(self.settings.risk, self.db)
+        # Non-shortable asset is strictly vetoed
+        veto_non_short = rm.evaluate_proposed_entry(
+            account_id="paper_test",
+            eval_date="2025-05-09",
+            ticker="AAPL",
+            sector="Technology",
+            strategy_id="strat_bearish_breakdown",
+            strategy_family="BEARISH_BREAKDOWN",
+            entry_price=200.0,
+            stop_loss_price=208.0,
+            atr_14=4.0,
+            portfolio_equity=100_000.0,
+            peak_equity=100_000.0,
+            available_cash=100_000.0,
+            open_positions={},
+            side="SHORT",
+            is_shortable=False,
+        )
+        self.assertFalse(veto_non_short.approved)
+        self.assertEqual(veto_non_short.rule_triggered, "SHORT_NOT_SHORTABLE")
+
+        # Valid shortable asset respects 1.0% risk cap ($1,000 / $8 risk = 125 shs, capped by 12% = $12,000 / $200 = 60 shs)
+        ok_short = rm.evaluate_proposed_entry(
+            account_id="paper_test",
+            eval_date="2025-05-09",
+            ticker="AAPL",
+            sector="Technology",
+            strategy_id="strat_bearish_breakdown",
+            strategy_family="BEARISH_BREAKDOWN",
+            entry_price=200.0,
+            stop_loss_price=208.0,
+            atr_14=4.0,
+            portfolio_equity=100_000.0,
+            peak_equity=100_000.0,
+            available_cash=100_000.0,
+            open_positions={},
+            side="SHORT",
+            is_shortable=True,
+            easy_to_borrow=True,
+        )
+        self.assertTrue(ok_short.approved)
+        self.assertEqual(ok_short.recommended_shares, 60)
+
+        # Gross short exposure >= 40% is vetoed
+        veto_gross_short = rm.evaluate_proposed_entry(
+            account_id="paper_test",
+            eval_date="2025-05-09",
+            ticker="MSFT",
+            sector="Technology",
+            strategy_id="strat_bearish_breakdown",
+            strategy_family="BEARISH_BREAKDOWN",
+            entry_price=200.0,
+            stop_loss_price=208.0,
+            atr_14=4.0,
+            portfolio_equity=100_000.0,
+            peak_equity=100_000.0,
+            available_cash=60_000.0,
+            open_positions={
+                "NVDA": {"ticker": "NVDA", "side": "SHORT", "sector": "Semiconductors", "market_value": 20_000.0, "quantity": -100, "avg_entry_price": 200.0, "stop_loss_price": 208.0},
+                "AMZN": {"ticker": "AMZN", "side": "SHORT", "sector": "Consumer", "market_value": 20_000.0, "quantity": -100, "avg_entry_price": 200.0, "stop_loss_price": 208.0},
+            },
+            side="SHORT",
+            is_shortable=True,
+        )
+        self.assertFalse(veto_gross_short.approved)
+        self.assertEqual(veto_gross_short.rule_triggered, "MAX_GROSS_SHORT_EXPOSURE")
+
+        # 4. Run chronological BacktestEngine on BEARISH_BREAKDOWN short strategy
+        bt_engine = BacktestEngine(self.settings, self.market_data)
+        bt_res = bt_engine.run_backtest(
+            strategy=short_strat,
+            start_date="2023-08-01",
+            end_date="2025-06-30",
+        )
+        self.assertGreaterEqual(len(bt_res.equity_curve), 50)
+        for tr in bt_res.trades:
+            self.assertEqual(tr.get("side"), "SHORT")
+
+        # 5. Verify deterministic headline sentiment scorer & Mistake Analyzer
+        bull_score = MarketDataService.score_headline_sentiment_deterministic(
+            "Company beats earnings and raises full-year revenue guidance on record demand"
+        )
+        bear_score = MarketDataService.score_headline_sentiment_deterministic(
+            "Stock plunges after SEC investigation, guidance cut, and analyst downgrade"
+        )
+        self.assertGreater(bull_score, 0.25)
+        self.assertLess(bear_score, -0.35)
+
+        orch = AutonomousWorkflowOrchestrator(self.settings, self.db, self.market_data)
+        self.db.execute(
+            """
+            INSERT INTO alpaca_closed_trades (
+                trade_id, pod_id, alpaca_account_number, ticker, side, sector,
+                strategy_id, strategy_version, strategy_name, entry_date, exit_date,
+                holding_days, quantity, entry_price, exit_price, initial_stop_price,
+                realised_pnl_usd, realised_return_pct, r_multiple, ai_catalyst_score,
+                market_regime, conviction_tier, exit_reason, created_at
+            ) VALUES
+            ('tr_short_1', 'pod_1_breakout', 'PA_TEST', 'TSLA', 'SHORT', 'Consumer', 'strat_bearish_breakdown', 1, 'Breakdown Short', '2025-05-05', '2025-05-09', 4, 10, 250.0, 232.0, 260.0, 180.0, 7.2, 1.8, -0.45, 'BEAR_TREND', 'STANDARD', 'TAKE_PROFIT', '2025-05-09T20:00:00Z'),
+            ('tr_long_1', 'pod_1_breakout', 'PA_TEST', 'AMD', 'LONG', 'Technology', 'strat_volatility_breakout', 1, 'Vol Breakout', '2025-05-07', '2025-05-09', 2, 20, 120.0, 114.0, 114.0, -120.0, -5.0, -1.0, -0.10, 'BEAR_TREND', 'STANDARD', 'STOP_LOSS', '2025-05-09T20:00:00Z')
+            """
+        )
+        attr = orch.pod_manager.get_post_trade_attribution_analysis()
+        self.assertEqual(attr["live_alpaca_closed_count"], 2)
+        self.assertGreaterEqual(attr["total_closed_trades"], 2)
+        self.assertTrue(len(attr["by_side"]) >= 2)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

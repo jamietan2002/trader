@@ -1,6 +1,6 @@
 # Swing Trading AI — Systematic Quantitative Research & Paper-Trading Platform
 
-A production-quality, autonomous AI-powered swing trading research, backtesting, validation, and paper-trading platform for US equities (NYSE & NASDAQ).
+A production-quality, autonomous **v2.0 All-Weather (Long + Short)** AI-powered swing trading research, backtesting, validation, and 3-Pod Alpaca Paper execution platform for US equities (`NYSE` & `NASDAQ`, 40-stock core + dynamic catalyst onboarding).
 
 > **Core Governance Principle**: Deterministic financial software handles all price/indicator math, signal generation, ATR position sizing, risk checks, order simulation, portfolio accounting, P&L reconciliation, and promotion gating. AI agents operate strictly via structured, validated schemas to research markets, propose falsifiable hypotheses, audit backtest results, and diagnose strategy weaknesses.
 >

@@ -12,8 +12,8 @@ We evaluated **QuantConnect LEAN**, **Backtrader**, **VectorBT**, and a **custom
 ## 2. Strict Chronological Execution (Zero Look-Ahead Bias)
 
 On each simulated trading day $T$:
-1. **Market Open ($T$)**: Pending exit and entry signals generated at Day $T-1$ close are executed against Day $T$'s actual opening price (`adj_open`) plus half-spread (`2.5 bps`), market impact slippage (`3.0 bps`), and per-share commissions (`$0.005/sh`, min `$1.00`, plus SEC fees on sells).
-2. **Intraday & Corporate Actions ($T$)**: Open positions collect cash dividends on ex-dates, update highest price since entry (`adj_high`), and check for security delistings (forcibly liquidating delisted stocks on their final trading bar to eliminate survivorship bias).
+1. **Market Open ($T$)**: Pending `LONG` and `SHORT` exit and entry signals generated at Day $T-1$ close are executed against Day $T$'s actual opening price (`adj_open`) plus half-spread (`2.5 bps`), market impact slippage (`3.0 bps`), and per-share commissions (`$0.005/sh`, min `$1.00`, plus SEC fees on sells). Short positions enforce zero-leverage 100%-cash-collateralized margin.
+2. **Intraday & Corporate Actions ($T$)**: Long positions collect cash dividends on ex-dates while short positions pay short dividend liabilities and accrue daily stock-borrow fee drag (`50 bps/yr`), track `highest_price_since_entry` / `lowest_price_since_entry`, and forcibly liquidate delisted stocks on their final trading bar.
 3. **Market Close ($T$)**: Portfolio equity and drawdown are marked-to-market. Causal indicators up to Day $T$ and point-in-time `BMO`/`AMC` earnings are evaluated to queue signals for Day $T+1$ open.
 
 ---

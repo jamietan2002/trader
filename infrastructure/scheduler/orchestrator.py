@@ -51,6 +51,7 @@ from core.strategies.registry import (
     StrategyConfig,
     StrategyRegistry,
     StrategyStatus,
+    get_all_golden_base_strategies,
     get_baseline_strategies,
 )
 from infrastructure.configuration.settings import Settings
@@ -260,6 +261,46 @@ class AutonomousWorkflowOrchestrator:
             "baseline_evaluations": strategy_results,
         }
 
+    def ensure_all_golden_strategies_registered(self) -> List[str]:
+        """Ensure all 6 golden base strategies (including Mean Reversion, Sector Rotation, and Bearish Breakdown) exist in registry."""
+        added: List[str] = []
+        for g_strat in get_all_golden_base_strategies():
+            existing = self.registry.list_strategies(strategy_id=g_strat.strategy_id)
+            if not existing:
+                reg_s = self.registry.register_strategy(g_strat)
+                self.registry.update_status(
+                    reg_s.strategy_id,
+                    reg_s.version,
+                    StrategyStatus.PAPER_TRADING,
+                    reason="Registered v2.0 All-Weather Golden Base Strategy",
+                )
+                added.append(g_strat.strategy_id)
+        return added
+
+    def _refresh_live_news_and_screener_onboarding(self, session_date: str) -> Dict[str, Any]:
+        """Run 24/7 Alpaca news + movers scan and dynamically onboard up to 3 top liquid screener movers."""
+        import sys as _sys
+        if "unittest" in _sys.modules:
+            return {"articles_ingested": 0, "onboarded_tickers": []}
+        res: Dict[str, Any] = {"articles_ingested": 0, "onboarded_tickers": []}
+        if hasattr(self.market_data, "scan_live_alpaca_news_and_movers"):
+            try:
+                news_scan = self.market_data.scan_live_alpaca_news_and_movers(session_date=session_date)
+                res["articles_ingested"] = int(news_scan.get("articles_ingested", 0))
+                screener_movers = [
+                    str(t).upper()
+                    for t in (news_scan.get("screener_most_actives") or [])
+                    if str(t).upper() not in self.market_data.get_universe_metadata()
+                ][:3]
+                if screener_movers and hasattr(self.market_data, "onboard_dynamic_tickers"):
+                    onboard_res = self.market_data.onboard_dynamic_tickers(
+                        screener_movers, source="ALPACA_SCREENER"
+                    )
+                    res["onboarded_tickers"] = onboard_res.get("onboarded") or []
+            except Exception as exc:
+                logger.warning("Live news & screener onboarding warning: %s", exc)
+        return res
+
     def run_daily_workflow(
         self,
         trading_date: str,
@@ -276,6 +317,11 @@ class AutonomousWorkflowOrchestrator:
 
         if hasattr(self.market_data, "ensure_latest_market_data"):
             self.market_data.ensure_latest_market_data(target_date=trading_date)
+
+        import sys as _sys
+        if "unittest" not in _sys.modules:
+            self.ensure_all_golden_strategies_registered()
+            self._refresh_live_news_and_screener_onboarding(trading_date)
 
         # 1. Pre-Market: Market Research Scan
         pre_market_res = self.run_idempotent_job(
@@ -359,6 +405,10 @@ class AutonomousWorkflowOrchestrator:
 
     def run_pre_open_refresh(self, session_date: str) -> Dict[str, Any]:
         """Stage 2 (Pre-Open 9:00 AM ET / 9:00 PM SGT): Refresh research scan, live extended-hours quote cache, and paper AI catalyst sync."""
+        import sys as _sys
+        if "unittest" not in _sys.modules:
+            self.ensure_all_golden_strategies_registered()
+            self._refresh_live_news_and_screener_onboarding(session_date)
         scan_res = self.research_agent.run_market_scan(as_of_date=session_date, top_n=8)
         active_strats = self.registry.list_strategies(status=StrategyStatus.PAPER_TRADING.value)
         sync_res = self.paper_engine.sync_ai_catalysts_to_paper_accounts(
@@ -408,6 +458,24 @@ class AutonomousWorkflowOrchestrator:
                 prop_sid = str((latest_proposal or {}).get("target_strategy_id", ""))
                 if not prop_sid or top_research_fam.lower() not in prop_sid.lower():
                     candidate_specs.append((top_research_fam, None))
+
+            # 3) Autonomous Mistake Analyzer Auto-Tuner candidate (learns from closed-trade attribution)
+            if preferred_family is None and hasattr(self.pod_manager, "get_post_trade_attribution_analysis"):
+                attr_diag = self.pod_manager.get_post_trade_attribution_analysis()
+                for rem in (attr_diag.get("detected_weaknesses") or [])[:1]:
+                    rem_sid = str(rem.get("target_strategy_id") or "strat_momentum_trend")
+                    rem_patch = rem.get("suggested_rule_patch") or {}
+                    if rem_patch and self.registry.list_strategies(strategy_id=rem_sid):
+                        candidate_specs.append(
+                            (
+                                None,
+                                {
+                                    "target_strategy_id": rem_sid,
+                                    "proposed_hypothesis": str(rem.get("remedy") or "Auto-tuner post-trade attribution adjustment."),
+                                    "proposed_changes": rem_patch,
+                                },
+                            )
+                        )
 
             tournament_results: List[Dict[str, Any]] = []
             seen_Strat_versions: set[tuple[str, int]] = set()
@@ -626,6 +694,8 @@ class AutonomousWorkflowOrchestrator:
                 session_date=latest_date,
                 execute_live_orders=("unittest" not in _sys.modules),
             ),
+            "mistake_analyzer": self.pod_manager.get_post_trade_attribution_analysis(),
+            "universe_count": len(self.market_data.get_universe_metadata()),
             "daily_workflow_status": daily_res.get("status", "COMPLETED") if isinstance(daily_res, dict) else "COMPLETED",
         }
 
@@ -641,6 +711,17 @@ class AutonomousWorkflowOrchestrator:
         spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker)
         dt_str = session_date or payload.get("session_date") or (spy_bars[-1].bar_date if spy_bars else date.today().isoformat())
         now_iso = utc_now_iso()
+
+        # 0. Dynamically onboard AI-discovered catalyst tickers (liquidity & tradable/shortable gated)
+        discovered_tickers_in = payload.get("discovered_tickers") or []
+        dynamic_onboarding_res: Dict[str, Any] = {"onboarded": [], "rejected": []}
+        if discovered_tickers_in and hasattr(self.market_data, "onboard_dynamic_tickers"):
+            dynamic_onboarding_res = self.market_data.onboard_dynamic_tickers(
+                [str(t).strip().upper() for t in discovered_tickers_in if str(t).strip()],
+                source="IDE_AI_DISCOVERY",
+            )
+            if dynamic_onboarding_res.get("onboarded"):
+                self.research_agent.run_market_scan(as_of_date=dt_str, top_n=8)
 
         # 1. Enrich candidate research reports and catalyst table with IDE LLM's live web-search analysis
         research_updates = payload.get("research_updates") or []
@@ -812,6 +893,7 @@ class AutonomousWorkflowOrchestrator:
 
         res_summary = {
             "session_date": dt_str,
+            "dynamic_onboarding": dynamic_onboarding_res,
             "research_tickers_enriched": updated_tickers,
             "recorded_proposal_id": recorded_proposal_id,
             "tournament_results": tournament_results,

@@ -51,16 +51,16 @@ This repository implements an autonomous **AI-Powered Swing Trading Research, Ba
 |---|---|---|
 | `main.py` | CLI entrypoint (`demo`, `bootstrap`, `daily`, `weekly`, `ide-context`, `ide-apply`, `serve`) | `main()`, `cmd_demo()` |
 | `infrastructure/configuration/settings.py` | Environment config, risk & promotion defaults, paper-mode lock | `Settings`, `RiskParametersConfig`, `PromotionCriteriaConfig`, `LiveTradingProhibitedError` |
-| `infrastructure/database/db.py` | 22-table SQLite/PostgreSQL relational persistence & API cache | `DatabaseManager`, `SCHEMA_SQL` |
+| `infrastructure/database/db.py` | 23-table SQLite/PostgreSQL relational persistence & API cache | `DatabaseManager`, `SCHEMA_SQL` |
 | `infrastructure/logging/logger.py` | Structured logging with regex & explicit secret redaction | `get_logger()`, `SecretScrubbingFilter` |
 | `infrastructure/scheduler/orchestrator.py` | Idempotent Daily & Weekly workflow job orchestration | `AutonomousWorkflowOrchestrator` |
 | `core/market_data/models.py` | Domain models & NYSE/NASDAQ holiday calendar | `DailyBar`, `EarningsEvent`, `EquityMetadata`, `USTradingCalendar` |
-| `core/market_data/providers.py` | Pluggable data providers & normalization/deduplication service | `MarketDataService`, `LocalSeededDataProvider`, `AlpacaDataProvider`, `PolygonDataProvider` |
+| `core/market_data/providers.py` | Pluggable data providers, 40-stock + dynamic universe & 24/7 Alpaca news scanner | `MarketDataService`, `LocalSeededDataProvider`, `AlpacaDataProvider`, `PolygonDataProvider` |
 | `core/indicators/technical.py` | Causal technical indicators & relative strength vs `SPY` | `compute_indicator_series()`, `IndicatorSnapshot` |
-| `core/strategies/registry.py` | 5 Strategy families, deterministic signal engine, version registry | `StrategyConfig`, `StrategySignalEngine`, `StrategyRegistry`, `get_baseline_strategies()` |
-| `core/backtesting/engine.py` | Event-driven chronological backtester, walk-forward, stress tests | `BacktestEngine`, `BacktestResult` |
-| `core/risk/manager.py` | Trade veto authority, ATR sizing, sector/stock caps, kill switch | `PortfolioRiskManager`, `RiskDecision` |
-| `core/execution/paper_broker.py` | $100k simulated brokerage, Broker-Native 3-Pod Alpaca Paper Manager, and air-gapped Live Trading Copilot | `PaperTradingEngine`, `AlpacaPaperPodManager`, `LiveTradingCopilotEngine`, `OrderSubmissionResult` |
+| `core/strategies/registry.py` | 6 Strategy families (Long & Short), deterministic signal engine, version registry | `StrategyConfig`, `StrategySignalEngine`, `StrategyRegistry`, `get_baseline_strategies()`, `get_all_golden_base_strategies()` |
+| `core/backtesting/engine.py` | Event-driven Long & Short chronological backtester, walk-forward, stress tests | `BacktestEngine`, `BacktestResult` |
+| `core/risk/manager.py` | Trade veto authority, Long/Short ATR sizing, short-squeeze/sector caps, kill switch | `PortfolioRiskManager`, `RiskDecision` |
+| `core/execution/paper_broker.py` | $100k simulated brokerage, All-Weather Long+Short 3-Pod Alpaca Paper Manager, Mistake Analyzer & Live Copilot | `PaperTradingEngine`, `AlpacaPaperPodManager`, `LiveTradingCopilotEngine`, `OrderSubmissionResult` |
 | `evaluation/metrics/performance.py` | 16+ performance metrics & Monte Carlo trade-sequence simulator | `calculate_performance_metrics()`, `run_monte_carlo_trade_sequence()` |
 | `agents/base.py` | LLM abstraction (`deterministic_research`, `gemini`, `openai`), permissions | `BaseAgent`, `LLMProvider`, `validate_required_fields()` |
 | `agents/market_researcher/agent.py` | Universe scanner & multi-factor candidate ranker | `MarketResearchAgent`, `CandidateResearchReport` |
@@ -68,11 +68,11 @@ This repository implements an autonomous **AI-Powered Swing Trading Research, Ba
 | `agents/strategy_evaluator/agent.py` | 9-gate promotion/rejection auditor | `StrategyEvaluationAgent`, `StrategyEvaluationReport` |
 | `agents/performance_analyst/agent.py` | Post-session attribution & `ExperimentProposal` generator | `PerformanceAnalystAgent`, `ExperimentProposal` |
 | `agents/risk_manager/agent.py` | Portfolio health & kill-switch governance agent | `RiskManagerAgent` |
-| `api/server.py` | HTTP REST API & 7-tab Web Dashboard server | `PlatformApplication`, `run_server()` |
-| `dashboard/ui_template.py` | Interactive 7-tab HTML/SVG/JS frontend | `DASHBOARD_HTML` |
-| `dashboard/streamlit_app.py` | Streamlit Community Cloud 24/7 hosted dashboard & Weekly Digest | `main()` |
+| `api/server.py` | HTTP REST API & Web Dashboard server | `PlatformApplication`, `run_server()` |
+| `dashboard/ui_template.py` | Interactive 7-tab local HTML/SVG/JS frontend | `DASHBOARD_HTML` |
+| `dashboard/streamlit_app.py` | Streamlit Cloud 24/7 All-Weather 4-Tab Decision Hub, Candlestick Charts & Capital Slider | `main()` |
 | `.github/workflows/autonomous_trading.yml` | Scheduled Daily & Weekly GitHub Actions automation | `autonomous-trading-cycle` |
-| `tests/test_platform.py` | 10-suite unit & end-to-end integration test runner | `TestSwingTradingPlatform` |
+| `tests/test_platform.py` | 11-suite unit & end-to-end integration test runner | `TestSwingTradingPlatform` |
 
 ---
 

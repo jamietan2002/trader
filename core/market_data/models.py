@@ -18,6 +18,9 @@ class EquityMetadata:
     market_cap_usd: float
     is_active: bool = True
     delisted_date: Optional[str] = None
+    is_shortable: bool = True
+    easy_to_borrow: bool = True
+    discovery_source: str = "CORE"
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

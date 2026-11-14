@@ -6,9 +6,9 @@ Welcome to **Swing Trading AI**, an autonomous quantitative research, statistica
 
 ## 1. What This Project Does (In 60 Seconds)
 
-This platform runs a systematic **swing-trading engine** (holding liquid US large-cap stocks for **3 to 15 trading days**) with two distinct goals:
-1. **Autonomous Forward Validation (`$100,000` Paper Account)**: Automatically tests and runs 5 uncorrelated swing-trading strategies every weekday after the US market close, tracking forward Daily, Weekly, and Total P&L net of realistic brokerage commissions and slippage.
-2. **Air-Gapped Real-Account Execution (`Live Copilot` Tab)**: Generates a daily step-by-step `SELL`, `HOLD / Raise Stop`, and `BUY` checklist sized to your personal brokerage cash and confirmed holdings—**without ever connecting to or having access to your real trading account**.
+This platform runs a systematic **All-Weather Long + Short swing-trading engine** (holding liquid US large-cap stocks for **3 to 15 trading days**) with two distinct goals:
+1. **3-Pod Broker-Native Forward Validation (3 Isolated `$100,000` Alpaca Paper Accounts)**: Runs 3 non-overlapping Long + Short Strategy Pods (`PA3GP0WMH` Breakout/Breakdown, `PA3IAK6TV` Value Pullback/Bear-Rally Fade, `PA3OSGSIE` Momentum/Bearish Drift) across a **40+ stock multi-sector + dynamic universe** with 24/7 Alpaca News sentiment vetoes, live `GTC OCO` brackets, and a Post-Trade Mistake Analyzer.
+2. **Custom Real-Account Trade Cards (`4-Tab Decision Hub`)**: Scales every Long and Short setup dynamically to your **Custom Capital Slider (`$10k – $500k`)** with embedded **60-day OHLC Candlestick + SMA20/SMA50 charts** and exact stop/ratchet/target price overlays.
 
 ### Core Operating Modes
 - **100% Hands-Off Cloud Mode**: GitHub Actions runs the Daily loop (`Mon–Fri 21:30 UTC`) and Weekly self-improvement loop (`Sat 10:00 SGT`), committing updated state to `data/swing_trader.db` so the 24/7 Streamlit Cloud dashboard stays current with zero user intervention.

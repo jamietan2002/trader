@@ -80,15 +80,27 @@ class PortfolioRiskManager:
         strategy_max_exposure_pct: Optional[float] = None,
         current_drawdown_pct: float = 0.0,
         market_vol_annualised: Optional[float] = None,
+        side: str = "LONG",
     ) -> int:
         """Calculate deterministic ATR-based position size subject to risk, drawdown de-gearing, and volatility caps."""
         if portfolio_equity <= 0 or available_cash <= 0 or entry_price <= 0:
             return 0
 
-        effective_risk_pct = (
-            min(0.015, float(strategy_risk_per_trade_pct))
-            if (strategy_risk_per_trade_pct is not None and strategy_risk_per_trade_pct > 0)
+        is_short = str(side).upper() == "SHORT"
+        max_cap_risk_pct = (
+            getattr(self.config, "max_short_risk_per_trade_pct", 0.01)
+            if is_short
+            else 0.015
+        )
+        default_risk_pct = (
+            getattr(self.config, "max_short_risk_per_trade_pct", 0.01)
+            if is_short
             else self.config.max_risk_per_trade_pct
+        )
+        effective_risk_pct = (
+            min(max_cap_risk_pct, float(strategy_risk_per_trade_pct))
+            if (strategy_risk_per_trade_pct is not None and strategy_risk_per_trade_pct > 0)
+            else default_risk_pct
         )
         # Dynamic Drawdown De-Gearing: scale risk by 0.65x when drawdown reaches 50% of suspension threshold (e.g., >=7.5%)
         half_dd_threshold = 0.5 * self.config.drawdown_suspension_threshold_pct
@@ -102,18 +114,32 @@ class PortfolioRiskManager:
         max_risk_dollars = portfolio_equity * effective_risk_pct
 
         # Risk per share is distance from entry to stop-loss (or 2.0 * ATR fallback)
-        if stop_loss_price is not None and 0 < stop_loss_price < entry_price:
-            risk_per_share = entry_price - stop_loss_price
+        if is_short:
+            if stop_loss_price is not None and stop_loss_price > entry_price:
+                risk_per_share = stop_loss_price - entry_price
+            else:
+                risk_per_share = max(entry_price * 0.015, 2.0 * max(atr_14, entry_price * 0.01))
         else:
-            risk_per_share = max(entry_price * 0.015, 2.0 * max(atr_14, entry_price * 0.01))
+            if stop_loss_price is not None and 0 < stop_loss_price < entry_price:
+                risk_per_share = entry_price - stop_loss_price
+            else:
+                risk_per_share = max(entry_price * 0.015, 2.0 * max(atr_14, entry_price * 0.01))
 
         shares_by_risk = int(max_risk_dollars // risk_per_share)
 
-        effective_max_exp_pct = (
-            min(0.20, float(strategy_max_exposure_pct))
-            if (strategy_max_exposure_pct is not None and strategy_max_exposure_pct > 0)
-            else self.config.max_single_stock_exposure_pct
-        )
+        if is_short:
+            max_short_exp_cap = getattr(self.config, "max_single_short_exposure_pct", 0.12)
+            effective_max_exp_pct = (
+                min(max_short_exp_cap, float(strategy_max_exposure_pct))
+                if (strategy_max_exposure_pct is not None and strategy_max_exposure_pct > 0)
+                else max_short_exp_cap
+            )
+        else:
+            effective_max_exp_pct = (
+                min(0.20, float(strategy_max_exposure_pct))
+                if (strategy_max_exposure_pct is not None and strategy_max_exposure_pct > 0)
+                else self.config.max_single_stock_exposure_pct
+            )
         max_position_dollars = min(portfolio_equity * effective_max_exp_pct, available_cash * 0.98)
         shares_by_exposure = int(max_position_dollars // entry_price)
 
@@ -142,9 +168,13 @@ class PortfolioRiskManager:
         strategy_risk_pct: Optional[float] = None,
         strategy_max_exp_pct: Optional[float] = None,
         market_vol_annualised: Optional[float] = None,
+        side: str = "LONG",
+        is_shortable: bool = True,
+        easy_to_borrow: bool = True,
     ) -> RiskDecision:
-        """Evaluate all portfolio, drawdown, sector, correlation, liquidity, and event risk constraints."""
+        """Evaluate all portfolio, drawdown, sector, short-squeeze, correlation, liquidity, and event risk constraints."""
         warnings: List[str] = []
+        is_short = str(side).upper() == "SHORT"
 
         # 0. Emergency Kill Switch Check
         if kill_switch_engaged:
@@ -219,11 +249,22 @@ class PortfolioRiskManager:
                 f"minimum (${self.config.min_avg_daily_dollar_volume:,.0f}).",
             )
 
-        # 5. Earnings Blackout Check (for non-PEAD strategies)
+        # 5. Shortability & Borrow Check + Earnings Blackout Check
+        if is_short and (not is_shortable or not easy_to_borrow):
+            return self._veto(
+                account_id,
+                eval_date,
+                ticker,
+                strategy_id,
+                "SHORT_NOT_SHORTABLE",
+                f"{ticker} is not shortable or not easy-to-borrow (shortable={is_shortable}, ETB={easy_to_borrow}); short entry blocked.",
+            )
+
+        short_blackout_days = max(3, self.config.earnings_blackout_days_before) if is_short else self.config.earnings_blackout_days_before
         if (
-            strategy_family != "PEAD"
+            (is_short or strategy_family != "PEAD")
             and upcoming_earnings_days is not None
-            and 0 <= upcoming_earnings_days <= self.config.earnings_blackout_days_before
+            and 0 <= upcoming_earnings_days <= short_blackout_days
         ):
             return self._veto(
                 account_id,
@@ -232,7 +273,7 @@ class PortfolioRiskManager:
                 strategy_id,
                 "EARNINGS_EVENT_BLACKOUT",
                 f"{ticker} has earnings scheduled in {upcoming_earnings_days} day(s); "
-                f"non-PEAD entries blocked within {self.config.earnings_blackout_days_before} days.",
+                f"entries blocked within {short_blackout_days} days.",
             )
 
         # 6. Calculate ATR Position Size (with dynamic drawdown de-gearing & vol targeting)
@@ -246,6 +287,7 @@ class PortfolioRiskManager:
             strategy_max_exposure_pct=strategy_max_exp_pct,
             current_drawdown_pct=current_dd,
             market_vol_annualised=market_vol_annualised,
+            side=side,
         )
         if current_dd >= 0.5 * self.config.drawdown_suspension_threshold_pct > 0:
             warnings.append(
@@ -263,12 +305,20 @@ class PortfolioRiskManager:
 
         proposed_value = shares * entry_price
 
-        # 7. Single-Stock Exposure Check (15% default cap, up to 20% for Conviction Tier-1 override)
-        max_allowed_single_exp = (
-            min(0.20, float(strategy_max_exp_pct))
-            if (strategy_max_exp_pct is not None and strategy_max_exp_pct > 0)
-            else self.config.max_single_stock_exposure_pct
-        )
+        # 7. Single-Stock Exposure Check (15% long / 12% short default cap)
+        if is_short:
+            max_short_single = getattr(self.config, "max_single_short_exposure_pct", 0.12)
+            max_allowed_single_exp = (
+                min(max_short_single, float(strategy_max_exp_pct))
+                if (strategy_max_exp_pct is not None and strategy_max_exp_pct > 0)
+                else max_short_single
+            )
+        else:
+            max_allowed_single_exp = (
+                min(0.20, float(strategy_max_exp_pct))
+                if (strategy_max_exp_pct is not None and strategy_max_exp_pct > 0)
+                else self.config.max_single_stock_exposure_pct
+            )
         stock_exposure_pct = proposed_value / portfolio_equity if portfolio_equity > 0 else 1.0
         if stock_exposure_pct > max_allowed_single_exp + 1e-6:
             return self._veto(
@@ -277,13 +327,45 @@ class PortfolioRiskManager:
                 ticker,
                 strategy_id,
                 "MAX_SINGLE_STOCK_EXPOSURE",
-                f"Proposed {ticker} exposure {stock_exposure_pct * 100:.2f}% exceeds "
+                f"Proposed {ticker} {'short ' if is_short else ''}exposure {stock_exposure_pct * 100:.2f}% exceeds "
                 f"{max_allowed_single_exp * 100:.1f}% limit.",
             )
 
+        # 7b. Aggregate Gross Short Exposure Cap (40% max across portfolio)
+        if is_short:
+            max_gross_short_pct = getattr(self.config, "max_gross_short_exposure_pct", 0.40)
+            existing_short_val = sum(
+                abs(float(pos.get("quantity", 0))) * float(pos.get("current_price", pos.get("avg_entry_price", 0.0)))
+                for pos in open_positions.values()
+                if str(pos.get("side", "LONG")).upper() == "SHORT"
+            )
+            new_gross_short_pct = (
+                (existing_short_val + proposed_value) / portfolio_equity
+                if portfolio_equity > 0
+                else 1.0
+            )
+            if new_gross_short_pct > max_gross_short_pct + 1e-6:
+                remaining_short_dollars = max(0.0, (max_gross_short_pct * portfolio_equity) - existing_short_val)
+                adjusted_short_shares = int(remaining_short_dollars // entry_price)
+                if adjusted_short_shares <= 0 or (adjusted_short_shares * entry_price) < portfolio_equity * 0.02:
+                    return self._veto(
+                        account_id,
+                        eval_date,
+                        ticker,
+                        strategy_id,
+                        "MAX_GROSS_SHORT_EXPOSURE",
+                        f"Aggregate gross short exposure would reach {new_gross_short_pct * 100:.2f}%, "
+                        f"exceeding {max_gross_short_pct * 100:.1f}% limit.",
+                    )
+                shares = adjusted_short_shares
+                proposed_value = shares * entry_price
+                warnings.append(
+                    f"Scaled down {ticker} short shares to {shares} to respect {max_gross_short_pct * 100:.0f}% gross short cap."
+                )
+
         # 8. Sector Concentration Check (30% cap)
         existing_sector_val = sum(
-            float(pos.get("quantity", 0)) * float(pos.get("current_price", pos.get("avg_entry_price", 0.0)))
+            abs(float(pos.get("quantity", 0))) * float(pos.get("current_price", pos.get("avg_entry_price", 0.0)))
             for pos in open_positions.values()
             if pos.get("sector") == sector
         )
@@ -314,9 +396,12 @@ class PortfolioRiskManager:
                 f"Scaled down {ticker} shares to {shares} to respect {self.config.max_sector_exposure_pct * 100:.0f}% '{sector}' sector cap."
             )
 
-        # 9. Pairwise Correlation Check
+        # 9. Pairwise Correlation Check (same-direction positions)
         if candidate_returns_20d and open_positions_returns_20d:
             for existing_ticker, existing_rets in open_positions_returns_20d.items():
+                existing_side = str(open_positions.get(existing_ticker, {}).get("side", "LONG")).upper()
+                if existing_side != ("SHORT" if is_short else "LONG"):
+                    continue
                 corr = compute_return_correlation(candidate_returns_20d, existing_rets)
                 if corr > self.config.max_pairwise_correlation:
                     return self._veto(
@@ -325,27 +410,41 @@ class PortfolioRiskManager:
                         ticker,
                         strategy_id,
                         "HIGH_PORTFOLIO_CORRELATION",
-                        f"{ticker} 20d return correlation with open position {existing_ticker} "
+                        f"{ticker} 20d return correlation with open {existing_side.lower()} position {existing_ticker} "
                         f"is {corr:.2f} > {self.config.max_pairwise_correlation:.2f} limit.",
                     )
 
-        risk_per_share = (
-            (entry_price - stop_loss_price)
-            if (stop_loss_price is not None and stop_loss_price < entry_price)
-            else 2.0 * atr_14
-        )
+        if is_short:
+            risk_per_share = (
+                (stop_loss_price - entry_price)
+                if (stop_loss_price is not None and stop_loss_price > entry_price)
+                else 2.0 * atr_14
+            )
+        else:
+            risk_per_share = (
+                (entry_price - stop_loss_price)
+                if (stop_loss_price is not None and stop_loss_price < entry_price)
+                else 2.0 * atr_14
+            )
         est_risk_usd = round(shares * max(0.0, risk_per_share), 2)
 
         # 10. Portfolio Heat Cap (Maximum Total Open Stop-Loss Risk Across All Positions)
         existing_open_risk_usd = 0.0
         for pos in open_positions.values():
-            pos_qty = float(pos.get("quantity", 0))
+            pos_qty = abs(float(pos.get("quantity", 0)))
             pos_curr = float(pos.get("current_price", pos.get("avg_entry_price", 0.0)))
             pos_stop = pos.get("stop_loss_price")
-            if pos_stop is not None and float(pos_stop) < pos_curr:
-                existing_open_risk_usd += pos_qty * (pos_curr - float(pos_stop))
+            pos_side = str(pos.get("side", "LONG")).upper()
+            if pos_side == "SHORT":
+                if pos_stop is not None and float(pos_stop) > pos_curr:
+                    existing_open_risk_usd += pos_qty * (float(pos_stop) - pos_curr)
+                elif pos_stop is None:
+                    existing_open_risk_usd += pos_qty * pos_curr * 0.03
             else:
-                existing_open_risk_usd += pos_qty * pos_curr * 0.03
+                if pos_stop is not None and float(pos_stop) < pos_curr:
+                    existing_open_risk_usd += pos_qty * (pos_curr - float(pos_stop))
+                elif pos_stop is None:
+                    existing_open_risk_usd += pos_qty * pos_curr * 0.03
 
         max_open_risk_usd = portfolio_equity * getattr(self.config, "max_total_open_risk_pct", 0.05)
         if existing_open_risk_usd + est_risk_usd > max_open_risk_usd + 1e-6:

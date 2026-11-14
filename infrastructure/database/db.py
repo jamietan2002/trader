@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS equities_universe (
     market_cap_usd REAL NOT NULL,
     is_active INTEGER NOT NULL DEFAULT 1,
     delisted_date TEXT,
+    is_shortable INTEGER NOT NULL DEFAULT 1,
+    easy_to_borrow INTEGER NOT NULL DEFAULT 1,
+    discovery_source TEXT NOT NULL DEFAULT 'CORE',
     updated_at TEXT NOT NULL
 );
 
@@ -376,6 +379,8 @@ CREATE TABLE IF NOT EXISTS alpaca_position_attribution (
     ai_catalyst_headline TEXT NOT NULL DEFAULT '',
     factors_json TEXT NOT NULL DEFAULT '[]',
     alpaca_order_id TEXT,
+    side TEXT NOT NULL DEFAULT 'LONG',
+    market_regime TEXT NOT NULL DEFAULT 'UNKNOWN',
     updated_at TEXT NOT NULL,
     PRIMARY KEY (pod_id, ticker)
 );
@@ -396,6 +401,34 @@ CREATE TABLE IF NOT EXISTS daily_decision_logs (
     summary_headline TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL,
     PRIMARY KEY (session_date, pod_id)
+);
+
+-- 23. Alpaca Closed Trades Attribution Ledger (For Post-Trade Mistake Analyzer & Auto-Tuner)
+CREATE TABLE IF NOT EXISTS alpaca_closed_trades (
+    trade_id TEXT PRIMARY KEY,
+    pod_id TEXT NOT NULL,
+    alpaca_account_number TEXT,
+    ticker TEXT NOT NULL,
+    side TEXT NOT NULL DEFAULT 'LONG',
+    sector TEXT NOT NULL DEFAULT 'Unknown',
+    strategy_id TEXT NOT NULL,
+    strategy_version INTEGER NOT NULL DEFAULT 1,
+    strategy_name TEXT NOT NULL,
+    entry_date TEXT NOT NULL,
+    exit_date TEXT NOT NULL,
+    holding_days INTEGER NOT NULL DEFAULT 1,
+    quantity INTEGER NOT NULL,
+    entry_price REAL NOT NULL,
+    exit_price REAL NOT NULL,
+    initial_stop_price REAL,
+    realised_pnl_usd REAL NOT NULL,
+    realised_return_pct REAL NOT NULL,
+    r_multiple REAL NOT NULL DEFAULT 0.0,
+    ai_catalyst_score REAL NOT NULL DEFAULT 0.0,
+    market_regime TEXT NOT NULL DEFAULT 'UNKNOWN',
+    conviction_tier TEXT NOT NULL DEFAULT 'STANDARD',
+    exit_reason TEXT NOT NULL DEFAULT 'BRACKET_EXIT',
+    created_at TEXT NOT NULL
 );
 """
 
@@ -430,6 +463,21 @@ class DatabaseManager:
     def initialize_schema(self) -> None:
         with self.connection() as conn:
             conn.executescript(SCHEMA_SQL)
+            # Backwards-compatible column migrations for existing SQLite databases
+            migrations = [
+                ("equities_universe", "is_shortable", "INTEGER NOT NULL DEFAULT 1"),
+                ("equities_universe", "easy_to_borrow", "INTEGER NOT NULL DEFAULT 1"),
+                ("equities_universe", "discovery_source", "TEXT NOT NULL DEFAULT 'CORE'"),
+                ("alpaca_position_attribution", "side", "TEXT NOT NULL DEFAULT 'LONG'"),
+                ("alpaca_position_attribution", "market_regime", "TEXT NOT NULL DEFAULT 'UNKNOWN'"),
+            ]
+            for tbl, col, col_def in migrations:
+                existing_cols = {
+                    str(r["name"])
+                    for r in conn.execute(f"PRAGMA table_info({tbl})").fetchall()
+                }
+                if col not in existing_cols:
+                    conn.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {col_def}")
 
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         with self.connection() as conn:

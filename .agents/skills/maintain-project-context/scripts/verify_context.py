@@ -138,9 +138,20 @@ def main() -> int:
             def bar_chart(self, *args: object, **kwargs: object) -> None: pass
             def code(self, *args: object, **kwargs: object) -> None: pass
             def divider(self, *args: object, **kwargs: object) -> None: pass
+            def progress(self, *args: object, **kwargs: object) -> None: pass
             def toast(self, *args: object, **kwargs: object) -> None: pass
             def rerun(self) -> None: pass
             def button(self, *args: object, **kwargs: object) -> bool: return False
+
+            def slider(self, label: str, min_value: object = 0, max_value: object = 100, value: object = 25000, **kwargs: object) -> object:
+                k = kwargs.get("key")
+                return self.session_state.get(k, value) if k else value
+
+            def select_slider(self, label: str, options: object = (), value: object = None, **kwargs: object) -> object:
+                opts = list(options)  # type: ignore[call-overload]
+                k = kwargs.get("key")
+                default_val = value if value is not None else (opts[0] if opts else 1.0)
+                return self.session_state.get(k, default_val) if k else default_val
 
             def checkbox(self, label: str, value: bool = False, **kwargs: object) -> bool:
                 k = kwargs.get("key")

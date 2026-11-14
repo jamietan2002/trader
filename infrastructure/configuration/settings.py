@@ -18,9 +18,12 @@ class RiskParametersConfig:
     """Default conservative portfolio risk limits."""
 
     max_risk_per_trade_pct: float = 0.01  # 1% of portfolio equity
+    max_short_risk_per_trade_pct: float = 0.01  # 1.00% max equity risk per short trade
     max_total_open_risk_pct: float = 0.05  # 5% max aggregate open stop-loss risk across all positions
     max_simultaneous_positions: int = 10
-    max_single_stock_exposure_pct: float = 0.15  # 15% of portfolio equity
+    max_single_stock_exposure_pct: float = 0.15  # 15% of portfolio equity (long)
+    max_single_short_exposure_pct: float = 0.12  # 12% max single-stock short exposure (anti-squeeze)
+    max_gross_short_exposure_pct: float = 0.40  # 40% max aggregate gross short exposure
     max_sector_exposure_pct: float = 0.30  # 30% of portfolio equity
     drawdown_warning_threshold_pct: float = 0.10  # 10% warning
     drawdown_suspension_threshold_pct: float = 0.15  # 15% trading suspension (kill switch)
@@ -56,6 +59,7 @@ class TransactionCostConfig:
     default_half_spread_bps: float = 2.5  # 2.5 bps half-spread (5 bps full spread)
     default_slippage_bps: float = 3.0  # 3.0 bps market impact / slippage
     sec_fee_per_dollar_sold: float = 0.0000278  # SEC regulatory fee on sells
+    short_borrow_bps_annual: float = 50.0  # 50 bps/year annualized stock-borrow fee drag on shorts
 
 
 @dataclass
