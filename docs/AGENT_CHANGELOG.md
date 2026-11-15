@@ -4,6 +4,22 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-15] — Dedicated Account #3 (`ALPACA_API_KEY_3`) Reallocation to `spy-daytrader` & 2-Account Swing Pod Streamlining
+
+### Summary
+- **Removed Account #3 (`pod_3_momentum` / `ALPACA_API_KEY_3`) from `trader` for Dedicated Intraday Isolation**:
+  - Removed `ALPACA_API_KEY_3` and `ALPACA_SECRET_KEY_3` from `.env`, `.env.example`, `infrastructure/configuration/settings.py`, `.github/workflows/autonomous_trading.yml`, and `jamietan2002/trader` GitHub Actions Secrets so Paper Account #3 (`PA3OSGSIE`) is dedicated 100% exclusively to `jamietan2002/spy-daytrader`.
+  - Streamlined `AlpacaPaperPodManager.NOMINATED_PODS` (`core/execution/paper_broker.py`) and `dashboard/streamlit_app.py` (`.md-acct-grid` 2-column layout, `$200,000` 2-account portfolio KPI baseline, and active-pod `daily_decision_logs` filter) around `Account 1 · Breakout` (`pod_1_breakout`) and `Account 2 · Pullback` (`pod_2_mean_reversion`).
+
+### Modules Added / Modified
+- `core/execution/paper_broker.py`, `infrastructure/configuration/settings.py`, `dashboard/streamlit_app.py`, `.github/workflows/autonomous_trading.yml`, `.env.example`
+- `AGENTS.md`, `GEMINI.md`, `USER_GUIDE.md`, `ENVIRONMENT_VARIABLES.md`, `ARCHITECTURE.md`, `README.md`, `docs/AGENT_CHANGELOG.md`
+
+### Verification
+- Executed `.venv/bin/python .agents/skills/maintain-project-context/scripts/verify_context.py`: all 16 context files, headless Streamlit checks, and 11 unit & integration test suites passed (`exit code 0`).
+
+---
+
 ## [2026-11-14] — Added `minimalist-ui-design` Workspace Skill for Persistent UI/UX Standards
 
 ### Summary

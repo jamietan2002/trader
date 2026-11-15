@@ -7,7 +7,7 @@ Welcome to **Swing Trading AI**, an autonomous quantitative research, statistica
 ## 1. What This Project Does (In 60 Seconds)
 
 This platform runs a systematic **All-Weather Long + Short swing-trading engine** (holding liquid US large-cap stocks for **3 to 15 trading days**) with two distinct goals:
-1. **3-Pod Broker-Native Forward Validation (3 Isolated `$100,000` Alpaca Paper Accounts)**: Runs 3 non-overlapping Long + Short Strategy Pods (`PA3GP0WMH` Breakout/Breakdown, `PA3IAK6TV` Value Pullback/Bear-Rally Fade, `PA3OSGSIE` Momentum/Bearish Drift) across a **40+ stock multi-sector + dynamic universe** with 24/7 Alpaca News sentiment vetoes, live `GTC OCO` brackets, and a Post-Trade Mistake Analyzer.
+1. **2-Pod Broker-Native Forward Validation (2 Isolated `$100,000` Alpaca Paper Accounts)**: Runs 2 non-overlapping Long + Short Strategy Pods (`PA3GP0WMH` Breakout/Breakdown and `PA3IAK6TV` Value Pullback/Bear-Rally Fade; Account #3 `PA3OSGSIE` is dedicated exclusively to `spy-daytrader`) across a **40+ stock multi-sector + dynamic universe** with 24/7 Alpaca News sentiment vetoes, live `GTC OCO` brackets, and a Post-Trade Mistake Analyzer.
 2. **Minimalist Dark 3-Tab Portfolio Hub (`dashboard/streamlit_app.py`)**: A clean, beginner-friendly Linear / Apple Stocks matte-dark interface with no left sidebar, zero emojis, zero neon borders, and plain-English trade explanations across 3 focused views: `Overview & Open Trades`, `Daily Journal` (single-day focused view with `← Previous` / `Next →` navigation, 1-sentence Daily Takeaway, unified activity grouping, compact Positions Held table, and a single combined expandable footer), and `Performance & System`.
 
 ### Core Operating Modes
@@ -97,11 +97,10 @@ To ensure strategies are not curve-fit to a single bull run **and** are optimize
 3. **Dual-Horizon Evaluation (`2.3-Yr Multi-Regime` + `6-Month Recent/Rolling` + `SQN`)**:
    - *Decision*: Strategies are evaluated on 9 gates combining 2.3-year survival, Out-of-Sample `SPY` dominance, **Recent 6-Month (`126d`) Return & Win Rate**, **Rolling 6-Month Win Probability (`86%–98%`)**, and **Van Tharp's System Quality Number (`SQN >= 2.85`)**.
    - *Why*: Prevents promoting strategies that made all their money 2 years ago while ensuring trade-by-trade consistency over a 6-month live horizon.
-4. **Broker-Native 3-Pod Alpaca Paper Architecture (`AlpacaPaperPodManager`) + Exact Broker Order & Child-Bracket Parity**:
-   - *Decision*: `AlpacaPaperPodManager` deploys the **Top 3 Swing Strategy Archetypes** across 3 dedicated `$100,000` Alpaca Paper accounts:
+4. **Broker-Native 2-Pod Alpaca Paper Architecture (`AlpacaPaperPodManager`) + Exact Broker Order & Child-Bracket Parity**:
+   - *Decision*: `AlpacaPaperPodManager` deploys the **Top 2 Swing Strategy Archetypes** across 2 dedicated `$100,000` Alpaca Paper accounts (while Paper Account #3 `PA3OSGSIE` is dedicated exclusively to the standalone `spy-daytrader` intraday system):
      - **Pod #1 (`strat_volatility_breakout`)**: Connected to **`PA3GP0WMH`** via `ALPACA_API_KEY`.
      - **Pod #2 (`strat_mean_reversion_bb`)**: Connected to **`PA3IAK6TV`** via `ALPACA_API_KEY_2`.
-     - **Pod #3 (`strat_momentum_trend`)**: Connected to **`PA3OSGSIE`** via `ALPACA_API_KEY_3`.
    - *Exact Broker Order & Child-Bracket Parity*: `fetch_alpaca_pod_broker_state()` extracts active nested Take-Profit & Stop-Loss child legs from filled `BRACKET` orders (`BRACKET_EXIT` / `OCO_EXIT`) and reconciles `holdings_decisions`, `executed_or_queued` working entry orders, and `alpaca_position_attribution` to the exact live Alpaca share count, fill price, stop price, and target price.
    - *4 Senior Quant Profit-Maximizing Upgrades*:
      1. **Two-Stage Progressive Profit Ratchet**: Stage 1 (`>= +1.0R`) moves Stop-Loss to `Entry + 0.10R` (breakeven + fee lock); Stage 2 (`>= +1.65R`) moves Stop-Loss to `max(Entry + 1.0R, Live - 1.8*ATR)` (`+1.0R` profit lock).

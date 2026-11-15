@@ -3,7 +3,7 @@
 v3.0 Minimalist Dark Autonomous Portfolio Hub (Linear / Apple Stocks Aesthetic):
 - Clean full-width layout with no left sidebar, zero emojis, zero neon borders, and plain-English explanations.
 - 3 focused tabs:
-  1. Overview & Open Trades — Portfolio summary, 3 Paper Account cards, Working Entry Orders, and Open Positions with plain-English entry reasons and automatic Stop-Loss / Profit Target prices.
+  1. Overview & Open Trades — Portfolio summary, 2 Paper Account cards, Working Entry Orders, and Open Positions with plain-English entry reasons and automatic Stop-Loss / Profit Target prices.
   2. Daily Journal — Clean chronological day-by-day log of orders placed/filled, positions held, and skipped setups.
   3. Performance & System — Strategy track record, closed-trade review, latest market news, and automated Daily/Weekly run log.
 """
@@ -30,13 +30,11 @@ ALPACA_PAPER_PORTAL_URL = "https://app.alpaca.markets/paper/dashboard/overview"
 POD_DISPLAY_NAMES = {
     "pod_1_breakout": "Account 1 · Breakout",
     "pod_2_mean_reversion": "Account 2 · Pullback",
-    "pod_3_momentum": "Account 3 · Momentum",
 }
 
 POD_STRATEGY_DESCRIPTIONS = {
     "pod_1_breakout": "Buys stocks breaking above 20-day highs on strong volume; shorts support breakdowns.",
     "pod_2_mean_reversion": "Buys uptrending stocks during calm dips near their 20-day trend; shorts overextended bounces.",
-    "pod_3_momentum": "Follows market leaders with sustained upward momentum and positive earnings catalysts.",
 }
 
 MINIMAL_DARK_CSS = """
@@ -119,7 +117,7 @@ MINIMAL_DARK_CSS = """
   }
   .md-acct-grid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
     margin-bottom: 20px;
   }
@@ -195,8 +193,6 @@ def _sync_streamlit_secrets_to_env(st: Any) -> None:
         "ALPACA_SECRET_KEY",
         "ALPACA_API_KEY_2",
         "ALPACA_SECRET_KEY_2",
-        "ALPACA_API_KEY_3",
-        "ALPACA_SECRET_KEY_3",
         "POLYGON_API_KEY",
         "MARKET_DATA_PROVIDER",
     )
@@ -598,9 +594,9 @@ def main() -> None:
             all_broker_orders.append(o_item)
 
     if total_start_cap <= 0:
-        total_start_cap = 300_000.0
-        total_equity = 300_000.0
-        total_cash = 300_000.0
+        total_start_cap = 200_000.0
+        total_equity = 200_000.0
+        total_cash = 200_000.0
 
     total_pnl = total_equity - total_start_cap
     total_ret_pct = (total_pnl / total_start_cap) * 100.0
@@ -639,7 +635,7 @@ def main() -> None:
         f"<div>"
         f"<div class='md-label'>Open Positions</div>"
         f"<div class='md-num-lg'>{len(all_open_holdings)}</div>"
-        f"<div class='md-sub'>Active across {active_pod_accounts} of 3 accounts</div>"
+        f"<div class='md-sub'>Active across {active_pod_accounts} of {len(pods_list) or 2} accounts</div>"
         f"</div>"
         f"<div>"
         f"<div class='md-label'>Working Entry Orders</div>"

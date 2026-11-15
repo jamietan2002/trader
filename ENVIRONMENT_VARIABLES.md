@@ -18,8 +18,6 @@ All environment variables are loaded via `infrastructure/configuration/settings.
 | `ALPACA_SECRET_KEY` | *(empty)* | Alpaca Paper Pod #1 (`pod_1_breakout`) secret key (redacted in logs). |
 | `ALPACA_API_KEY_2` | *(empty)* | Alpaca Paper Pod #2 (`pod_2_mean_reversion`) API key ID (redacted in logs). |
 | `ALPACA_SECRET_KEY_2` | *(empty)* | Alpaca Paper Pod #2 (`pod_2_mean_reversion`) secret key (redacted in logs). |
-| `ALPACA_API_KEY_3` | *(empty)* | Alpaca Paper Pod #3 (`pod_3_momentum`) API key ID (redacted in logs). |
-| `ALPACA_SECRET_KEY_3` | *(empty)* | Alpaca Paper Pod #3 (`pod_3_momentum`) secret key (redacted in logs). |
 | `ALPACA_PAPER_BASE_URL` | `https://paper-api.alpaca.markets` | Alpaca paper trading endpoint. |
 | `POLYGON_API_KEY` | *(empty)* | Polygon.io / Massive API key. |
 | `FMP_API_KEY` | *(empty)* | Financial Modeling Prep API key. |

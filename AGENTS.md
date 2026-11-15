@@ -60,7 +60,7 @@ This repository implements an autonomous **AI-Powered Swing Trading Research, Ba
 | `core/strategies/registry.py` | 6 Strategy families (Long & Short), deterministic signal engine, version registry | `StrategyConfig`, `StrategySignalEngine`, `StrategyRegistry`, `get_baseline_strategies()`, `get_all_golden_base_strategies()` |
 | `core/backtesting/engine.py` | Event-driven Long & Short chronological backtester, walk-forward, stress tests | `BacktestEngine`, `BacktestResult` |
 | `core/risk/manager.py` | Trade veto authority, Long/Short ATR sizing, short-squeeze/sector caps, kill switch | `PortfolioRiskManager`, `RiskDecision` |
-| `core/execution/paper_broker.py` | $100k simulated brokerage, All-Weather Long+Short 3-Pod Alpaca Paper Manager, Mistake Analyzer & Live Copilot | `PaperTradingEngine`, `AlpacaPaperPodManager`, `LiveTradingCopilotEngine`, `OrderSubmissionResult` |
+| `core/execution/paper_broker.py` | $100k simulated brokerage, All-Weather Long+Short 2-Pod Alpaca Paper Manager, Mistake Analyzer & Live Copilot | `PaperTradingEngine`, `AlpacaPaperPodManager`, `LiveTradingCopilotEngine`, `OrderSubmissionResult` |
 | `evaluation/metrics/performance.py` | 16+ performance metrics & Monte Carlo trade-sequence simulator | `calculate_performance_metrics()`, `run_monte_carlo_trade_sequence()` |
 | `agents/base.py` | LLM abstraction (`deterministic_research`, `gemini`, `openai`), permissions | `BaseAgent`, `LLMProvider`, `validate_required_fields()` |
 | `agents/market_researcher/agent.py` | Universe scanner & multi-factor candidate ranker | `MarketResearchAgent`, `CandidateResearchReport` |

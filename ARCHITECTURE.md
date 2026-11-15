@@ -62,7 +62,7 @@ trader/
 │   ├── strategies/registry.py         # 6 Strategy families (Long & Short), SignalEngine, immutable versioning
 │   ├── backtesting/engine.py          # Chronological Long & Short bar-by-bar backtester, WF, stress tests
 │   ├── risk/manager.py                # ATR sizing, Long/Short exposure & squeeze caps, kill switch
-│   └── execution/paper_broker.py      # $100K paper account, 3-Pod All-Weather Alpaca Manager & Mistake Analyzer
+│   └── execution/paper_broker.py      # $100K paper account, 2-Pod All-Weather Alpaca Manager & Mistake Analyzer
 ├── evaluation/
 │   └── metrics/performance.py         # 16+ metrics (Sharpe, Sortino, Calmar, PF) & Monte Carlo
 ├── infrastructure/

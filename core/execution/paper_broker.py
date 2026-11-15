@@ -3251,12 +3251,12 @@ class LiveTradingCopilotEngine:
 
 
 class AlpacaPaperPodManager:
-    """Broker-Truth 3-Strategy Pod Manager & Explainability Decision Engine.
+    """Broker-Truth 2-Strategy Pod Manager & Explainability Decision Engine.
 
-    Manages the Top 3 Nominated Uncorrelated Swing Strategies across 3 isolated Paper Pods:
+    Manages the Top 2 Nominated Uncorrelated Swing Strategies across 2 isolated Paper Pods:
       - Pod #1 (`pod_1_breakout`): `strat_volatility_breakout` (#1 Champion) -> `ALPACA_API_KEY`
       - Pod #2 (`pod_2_mean_reversion`): `strat_mean_reversion_bb` (#2 Pullback Specialist) -> `ALPACA_API_KEY_2`
-      - Pod #3 (`pod_3_momentum`): `strat_momentum_trend` (#3 Momentum & RS Leader) -> `ALPACA_API_KEY_3`
+      *(Account #3 is dedicated exclusively to the standalone `spy-daytrader` intraday repository.)*
 
     Incorporates 4 Senior Quant Upgrades:
       1. Two-Stage Progressive Profit Ratchet (`+1.0R -> Entry + 0.10R`, `+1.65R -> max(Entry + 1.0R, High - 1.8*ATR)`).
@@ -3292,19 +3292,6 @@ class AlpacaPaperPodManager:
             "env_secret_attr": "alpaca_secret_key_2",
             "env_key_name": "ALPACA_API_KEY_2",
             "why_nominated": "All-Weather Mean-Reversion Pod: Long oversold SMA20/Bollinger pullbacks above SMA200 + Short overextended bear-market bounces into declining SMA50 resistance below SMA200.",
-        },
-        {
-            "pod_id": "pod_3_momentum",
-            "pod_rank": 3,
-            "strategy_id": "strat_momentum_trend",
-            "pod_title": "Pod #3 · RS Momentum Long & Catalyst Drift Short (#3 Trend Leader)",
-            "short_label": "Pod #3: RS Leader / Drift Short",
-            "archetype": "MOMENTUM_TREND",
-            "short_mandate": "Relative-Weakness & Bearish Catalyst Drift Short",
-            "env_key_attr": "alpaca_api_key_3",
-            "env_secret_attr": "alpaca_secret_key_3",
-            "env_key_name": "ALPACA_API_KEY_3",
-            "why_nominated": "All-Weather Institutional Drift Pod: Long top-decile RS & PEAD leaders + Short relative-weakness laggards suffering negative earnings surprises or bearish news catalysts.",
         },
     ]
 
@@ -5446,13 +5433,16 @@ class AlpacaPaperPodManager:
         }
 
     def get_recent_decision_logs(self, limit: int = 90) -> List[Dict[str, Any]]:
+        active_ids = tuple(p["pod_id"] for p in self.NOMINATED_PODS)
+        placeholders = ",".join("?" for _ in active_ids)
         rows = self.db.fetch_all(
-            """
+            f"""
             SELECT * FROM daily_decision_logs
+            WHERE pod_id IN ({placeholders})
             ORDER BY session_date DESC, pod_id ASC
             LIMIT ?
             """,
-            (limit,),
+            (*active_ids, limit),
         )
         out: List[Dict[str, Any]] = []
         for raw_row in rows:
