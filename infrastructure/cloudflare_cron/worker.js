@@ -1,25 +1,23 @@
 /**
  * Cloudflare Worker Edge Cron -> GitHub Actions `workflow_dispatch` Bridge ($0/month)
+ * Repository: `jamietan2002/trader` (Swing Trading AI Platform)
  *
- * Orchestrates BOTH repositories on exact US Eastern (`America/New_York`) wall-clock time
- * (automatically handling EDT <-> EST Daylight Saving Time shifts) using a single 5-minute
- * Cloudflare Cron Trigger (`*/5 * * * *`):
+ * Connects directly to `jamietan2002/trader` via Cloudflare Workers Git Integration
+ * (Root directory: `infrastructure/cloudflare_cron`).
  *
- * 1. `jamietan2002/trader` (`autonomous_trading.yml`):
- *    - Mon-Fri 09:00 ET  -> Stage 2 Pre-Open Refresh (`mode: "daily"`)
- *    - Mon-Fri 09:35 ET  -> Stage 3 Market-Open Live Paper Execution (`mode: "daily"`)
- *    - Mon-Fri 16:30 ET  -> Stage 1 Post-Close Reconciliation & Review (`mode: "daily"`)
- *    - Saturday 02:00 UTC (10:00 AM SGT) -> Weekly 9-Gate Strategy Tournament (`mode: "weekly"`)
- *
- * 2. `jamietan2002/spy-daytrader` (`intraday_session.yml`):
- *    - Mon-Fri 09:20 ET  -> Session Part 1: Open -> Midday (`action: "session", until_et: "12:58"`)
- *    - Mon-Fri 12:50 ET  -> Session Part 2: Midday -> 15:55 ET Flatten (`action: "session", until_et: "16:05"`)
+ * Evaluates exact US Eastern (`America/New_York`) wall-clock time (auto-handling EDT <-> EST
+ * Daylight Saving Time transitions) on a single 5-minute Cron Trigger (`*\/5 * * * *`):
+ *   - Mon-Fri 09:00 ET  -> Stage 2 Pre-Open Refresh (`mode: "daily"`)
+ *   - Mon-Fri 09:35 ET  -> Stage 3 Market-Open Live Paper Execution (`mode: "daily"`)
+ *   - Mon-Fri 16:30 ET  -> Stage 1 Post-Close Reconciliation & Review (`mode: "daily"`)
+ *   - Saturday 02:00 UTC (10:00 AM SGT) -> Weekly 9-Gate Strategy Tournament (`mode: "weekly"`)
  *
  * Required Worker Secret:
  *   - `GITHUB_PAT`: Fine-grained GitHub Personal Access Token scoped to `jamietan2002/trader`
- *     and `jamietan2002/spy-daytrader` with `Actions: Read and write` permission.
- * Optional Worker Variable / Secret:
+ *     with `Actions: Read and write` permission.
+ * Optional Worker Variables / Secrets:
  *   - `GITHUB_OWNER`: Defaults to `"jamietan2002"`.
+ *   - `GITHUB_REPO`: Defaults to `"trader"`.
  *   - `TRIGGER_SECRET`: Optional bearer secret enabling manual HTTP POST `/dispatch?job=<id>`.
  */
 
@@ -30,21 +28,9 @@ const JOBS = [
     weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri"],
     hour: 9,
     minute: 0,
-    repo: "trader",
     workflow: "autonomous_trading.yml",
     ref: "main",
     inputs: { mode: "daily" },
-  },
-  {
-    id: "spy_morning_session",
-    tz: "America/New_York",
-    weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri"],
-    hour: 9,
-    minute: 20,
-    repo: "spy-daytrader",
-    workflow: "intraday_session.yml",
-    ref: "main",
-    inputs: { action: "session", until_et: "12:58" },
   },
   {
     id: "trader_market_open",
@@ -52,21 +38,9 @@ const JOBS = [
     weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri"],
     hour: 9,
     minute: 35,
-    repo: "trader",
     workflow: "autonomous_trading.yml",
     ref: "main",
     inputs: { mode: "daily" },
-  },
-  {
-    id: "spy_afternoon_session",
-    tz: "America/New_York",
-    weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri"],
-    hour: 12,
-    minute: 50,
-    repo: "spy-daytrader",
-    workflow: "intraday_session.yml",
-    ref: "main",
-    inputs: { action: "session", until_et: "16:05" },
   },
   {
     id: "trader_post_close",
@@ -74,7 +48,6 @@ const JOBS = [
     weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri"],
     hour: 16,
     minute: 30,
-    repo: "trader",
     workflow: "autonomous_trading.yml",
     ref: "main",
     inputs: { mode: "daily" },
@@ -85,7 +58,6 @@ const JOBS = [
     weekdays: ["Sat"],
     hour: 2,
     minute: 0,
-    repo: "trader",
     workflow: "autonomous_trading.yml",
     ref: "main",
     inputs: { mode: "weekly" },
@@ -115,18 +87,19 @@ function getWallClockParts(dateObj, timeZone) {
 
 async function dispatchWorkflow(env, job) {
   const owner = env.GITHUB_OWNER || "jamietan2002";
+  const repo = env.GITHUB_REPO || "trader";
   const pat = (env.GITHUB_PAT || "").trim();
   if (!pat) {
     throw new Error("Missing GITHUB_PAT secret in Cloudflare Worker environment.");
   }
-  const url = `https://api.github.com/repos/${owner}/${job.repo}/actions/workflows/${job.workflow}/dispatches`;
+  const url = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${job.workflow}/dispatches`;
   const resp = await fetch(url, {
     method: "POST",
     headers: {
       Accept: "application/vnd.github+json",
       Authorization: `Bearer ${pat}`,
       "Content-Type": "application/json",
-      "User-Agent": "antigravity-cloudflare-cron-dispatcher/1.0",
+      "User-Agent": "trader-cloudflare-cron-dispatcher/1.0",
       "X-GitHub-Api-Version": "2022-11-28",
     },
     body: JSON.stringify({
@@ -138,7 +111,7 @@ async function dispatchWorkflow(env, job) {
     const errBody = await resp.text();
     throw new Error(`GitHub dispatch failed (${resp.status}) for ${job.id}: ${errBody}`);
   }
-  return { job_id: job.id, repo: `${owner}/${job.repo}`, workflow: job.workflow, status: resp.status };
+  return { job_id: job.id, repo: `${owner}/${repo}`, workflow: job.workflow, status: resp.status };
 }
 
 export default {
@@ -173,16 +146,17 @@ export default {
       const now = new Date();
       return Response.json({
         ok: true,
-        service: "trading-workflow-dispatcher",
+        service: "trader-workflow-dispatcher",
+        repo: `${env.GITHUB_OWNER || "jamietan2002"}/${env.GITHUB_REPO || "trader"}`,
         et_clock: getWallClockParts(now, "America/New_York"),
         utc_clock: getWallClockParts(now, "UTC"),
         configured_jobs: JOBS.map((j) => ({
           id: j.id,
-          repo: j.repo,
           workflow: j.workflow,
           tz: j.tz,
           weekdays: j.weekdays,
           time: `${String(j.hour).padStart(2, "0")}:${String(j.minute).padStart(2, "0")}`,
+          inputs: j.inputs,
         })),
       });
     }
@@ -205,4 +179,3 @@ export default {
     return Response.json({ ok: false, error: "Not Found" }, { status: 404 });
   },
 };
-

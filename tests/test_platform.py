@@ -1175,14 +1175,14 @@ class TestSwingTradingPlatform(unittest.TestCase):
 
         worker_js = (repo_root / "infrastructure" / "cloudflare_cron" / "worker.js").read_text(encoding="utf-8")
         self.assertIn("America/New_York", worker_js)
-        self.assertIn("intraday_session.yml", worker_js)
         self.assertIn("autonomous_trading.yml", worker_js)
+        self.assertNotIn("intraday_session.yml", worker_js)
 
         specs = build_dispatch_job_specs("jamietan2002", "test_pat_placeholder")
-        self.assertEqual(len(specs), 6)
+        self.assertEqual(len(specs), 4)
         et_jobs = [j for j in specs if j["schedule"]["timezone"] == "America/New_York"]
         utc_jobs = [j for j in specs if j["schedule"]["timezone"] == "UTC"]
-        self.assertEqual(len(et_jobs), 5)
+        self.assertEqual(len(et_jobs), 3)
         self.assertEqual(len(utc_jobs), 1)
         self.assertTrue(all(j["requestMethod"] == 1 for j in specs))
 

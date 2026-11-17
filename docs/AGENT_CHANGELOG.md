@@ -4,6 +4,23 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-17] — Dedicated Per-Repo Cloudflare Worker Scripts & Hardened `spy-daytrader` Midday Handoff
+
+### Summary
+- **Separated `trader` and `spy-daytrader` Edge Cron Dispatchers**:
+  - Scoped `trader/infrastructure/cloudflare_cron/` (`worker.js`, `wrangler.toml`, `setup_cronjob_org.py`) strictly to `jamietan2002/trader`'s 4 jobs so Cloudflare Workers Git Integration connects directly to each repository independently.
+- **Hardened `spy-daytrader` `12:50 ET` Midday Handoff**:
+  - Updated `spy-daytrader/.github/workflows/intraday_session.yml` to use separate per-part concurrency groups (`cancel-in-progress: false`), run an Alpaca broker preflight (`python main.py status`), and wait cleanly for Part 1's `12:58 ET` exit & SQLite sync before taking over.
+
+### Modules Added / Modified
+- `infrastructure/cloudflare_cron/worker.js`, `infrastructure/cloudflare_cron/wrangler.toml`, `infrastructure/cloudflare_cron/setup_cronjob_org.py`
+- `DEPLOYMENT.md`, `AGENTS.md`, `tests/test_platform.py`, `docs/AGENT_CHANGELOG.md`
+
+### Verification
+- Executed `.venv/bin/python .agents/skills/maintain-project-context/scripts/verify_context.py` (`exit code 0`).
+
+---
+
 ## [2026-11-17] — Option A External Edge Cron -> GitHub `workflow_dispatch` Migration (`trader` & `spy-daytrader`)
 
 ### Summary

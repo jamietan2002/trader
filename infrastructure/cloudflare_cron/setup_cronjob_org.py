@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Zero-dependency provisioner for `cron-job.org` -> GitHub `workflow_dispatch` ($0/month).
+"""Zero-dependency provisioner for `cron-job.org` -> `jamietan2002/trader` `workflow_dispatch` ($0/month).
 
-Provides a 1-command no-Cloudflare alternative (or backup) that creates/updates all 6
-DST-aware (`America/New_York` & `UTC`) webhook schedules across both `trader` and
-`spy-daytrader` via the official `cron-job.org` REST API.
+Creates/updates all 4 DST-aware (`America/New_York` & `UTC`) webhook schedules for `trader`
+via the official `cron-job.org` REST API. (For `spy-daytrader`, use the dedicated script in
+`spy-daytrader/infrastructure/cloudflare_cron/setup_cronjob_org.py`.)
 
 Usage:
     # Preview exact JSON payloads without network calls (no secrets needed):
     .venv/bin/python infrastructure/cloudflare_cron/setup_cronjob_org.py --dry-run
 
-    # Provision / update all 6 schedules on cron-job.org:
+    # Provision / update all 4 `trader` schedules on cron-job.org:
     CRONJOB_API_KEY="..." GITHUB_PAT="..." \
       .venv/bin/python infrastructure/cloudflare_cron/setup_cronjob_org.py
 """
@@ -27,23 +27,20 @@ CRONJOB_API_BASE = "https://api.cron-job.org"
 
 
 def build_dispatch_job_specs(github_owner: str, github_pat: str) -> List[Dict[str, Any]]:
-    """Build the 6 idempotent `cron-job.org` job definitions for `trader` & `spy-daytrader`."""
+    """Build the 4 idempotent `cron-job.org` job definitions for `jamietan2002/trader`."""
 
-    def _gh_url(repo: str, workflow: str) -> str:
-        return f"https://api.github.com/repos/{github_owner}/{repo}/actions/workflows/{workflow}/dispatches"
-
+    url = f"https://api.github.com/repos/{github_owner}/trader/actions/workflows/autonomous_trading.yml/dispatches"
     common_headers = {
         "Accept": "application/vnd.github+json",
         "Authorization": f"Bearer {github_pat}",
         "Content-Type": "application/json",
-        "User-Agent": "cron-job-org-trading-dispatcher/1.0",
+        "User-Agent": "trader-cronjob-org-dispatcher/1.0",
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
     raw_specs = [
         {
             "title": "[trader] Stage 2 Pre-Open Refresh (09:00 ET)",
-            "url": _gh_url("trader", "autonomous_trading.yml"),
             "timezone": "America/New_York",
             "hours": [9],
             "minutes": [0],
@@ -51,17 +48,7 @@ def build_dispatch_job_specs(github_owner: str, github_pat: str) -> List[Dict[st
             "body": {"ref": "main", "inputs": {"mode": "daily"}},
         },
         {
-            "title": "[spy-daytrader] Session Part 1 Morning -> Midday (09:20 ET)",
-            "url": _gh_url("spy-daytrader", "intraday_session.yml"),
-            "timezone": "America/New_York",
-            "hours": [9],
-            "minutes": [20],
-            "wdays": [1, 2, 3, 4, 5],
-            "body": {"ref": "main", "inputs": {"action": "session", "until_et": "12:58"}},
-        },
-        {
             "title": "[trader] Stage 3 Market-Open Execution (09:35 ET)",
-            "url": _gh_url("trader", "autonomous_trading.yml"),
             "timezone": "America/New_York",
             "hours": [9],
             "minutes": [35],
@@ -69,17 +56,7 @@ def build_dispatch_job_specs(github_owner: str, github_pat: str) -> List[Dict[st
             "body": {"ref": "main", "inputs": {"mode": "daily"}},
         },
         {
-            "title": "[spy-daytrader] Session Part 2 Midday -> Close (12:50 ET)",
-            "url": _gh_url("spy-daytrader", "intraday_session.yml"),
-            "timezone": "America/New_York",
-            "hours": [12],
-            "minutes": [50],
-            "wdays": [1, 2, 3, 4, 5],
-            "body": {"ref": "main", "inputs": {"action": "session", "until_et": "16:05"}},
-        },
-        {
             "title": "[trader] Stage 1 Post-Close Reconciliation (16:30 ET)",
-            "url": _gh_url("trader", "autonomous_trading.yml"),
             "timezone": "America/New_York",
             "hours": [16],
             "minutes": [30],
@@ -88,7 +65,6 @@ def build_dispatch_job_specs(github_owner: str, github_pat: str) -> List[Dict[st
         },
         {
             "title": "[trader] Weekly 9-Gate Strategy Tournament (Sat 02:00 UTC / 10:00 SGT)",
-            "url": _gh_url("trader", "autonomous_trading.yml"),
             "timezone": "UTC",
             "hours": [2],
             "minutes": [0],
@@ -102,7 +78,7 @@ def build_dispatch_job_specs(github_owner: str, github_pat: str) -> List[Dict[st
         jobs.append(
             {
                 "title": item["title"],
-                "url": item["url"],
+                "url": url,
                 "enabled": True,
                 "saveResponses": True,
                 "requestMethod": 1,  # 1 = HTTP POST in cron-job.org API
@@ -143,7 +119,7 @@ def _cronjob_api_request(method: str, path: str, api_key: str, payload: Dict[str
 
 
 def main(argv: List[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Provision DST-aware GitHub workflow_dispatch jobs on cron-job.org")
+    parser = argparse.ArgumentParser(description="Provision DST-aware GitHub workflow_dispatch jobs for trader")
     parser.add_argument("--owner", default=os.environ.get("GITHUB_OWNER", "jamietan2002"), help="GitHub owner/org")
     parser.add_argument("--dry-run", action="store_true", help="Print scrubbed job specs without calling the API")
     args = parser.parse_args(argv)
@@ -185,4 +161,3 @@ def main(argv: List[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

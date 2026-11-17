@@ -1,17 +1,15 @@
-name = "trading-workflow-dispatcher"
+name = "trader-workflow-dispatcher"
 main = "worker.js"
 compatibility_date = "2026-01-01"
 
-# Uses 1 single Cron Trigger (out of Cloudflare Free Plan's 5-trigger limit) and ~288 req/day
-# (<0.3% of Cloudflare Free's 100,000 req/day quota), evaluating exact `America/New_York`
-# wall-clock time so EDT <-> EST Daylight Saving Time shifts require zero manual updates.
+# Uses 1 Cron Trigger (~288 req/day, <0.3% of Cloudflare Free's 100,000 req/day quota),
+# evaluating exact `America/New_York` wall-clock time so EDT <-> EST transitions are automatic.
 [triggers]
 crons = ["*/5 * * * *"]
 
 [vars]
 GITHUB_OWNER = "jamietan2002"
+GITHUB_REPO = "trader"
 
 # Set `GITHUB_PAT` securely as an encrypted Worker Secret (never commit tokens here):
-#   npx wrangler secret put GITHUB_PAT
-# Or in Cloudflare Dashboard -> Workers & Pages -> trading-workflow-dispatcher -> Settings -> Variables and Secrets
-
+#   Cloudflare Dashboard -> Workers & Pages -> trader-workflow-dispatcher -> Settings -> Variables and Secrets
