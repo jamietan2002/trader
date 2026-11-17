@@ -71,7 +71,8 @@ This repository implements an autonomous **AI-Powered Swing Trading Research, Ba
 | `api/server.py` | HTTP REST API & Web Dashboard server | `PlatformApplication`, `run_server()` |
 | `dashboard/ui_template.py` | Interactive 7-tab local HTML/SVG/JS frontend | `DASHBOARD_HTML` |
 | `dashboard/streamlit_app.py` | Minimalist Dark 3-Tab Autonomous Paper Portfolio Hub (`Overview & Open Trades`, `Daily Journal`, `Performance & System`) | `main()` |
-| `.github/workflows/autonomous_trading.yml` | Scheduled Daily & Weekly GitHub Actions automation | `autonomous-trading-cycle` |
+| `infrastructure/cloudflare_cron/` | DST-aware External Edge Cron (`Cloudflare Workers` & `cron-job.org`) -> GitHub `workflow_dispatch` bridge for `trader` & `spy-daytrader` | `worker.js`, `wrangler.toml`, `setup_cronjob_org.py` |
+| `.github/workflows/autonomous_trading.yml` | On-time `workflow_dispatch` Daily & Weekly GitHub Actions runner | `autonomous-trading-cycle` |
 | `tests/test_platform.py` | 11-suite unit & end-to-end integration test runner | `TestSwingTradingPlatform` |
 
 ---

@@ -4,6 +4,24 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-17] — Option A External Edge Cron -> GitHub `workflow_dispatch` Migration (`trader` & `spy-daytrader`)
+
+### Summary
+- **Eliminated Native GitHub `on: schedule` Queue Delays & Dropped Runs**:
+  - Removed unreliable `on: schedule` blocks from `.github/workflows/autonomous_trading.yml` (and `spy-daytrader/.github/workflows/intraday_session.yml`), standardizing strictly on instant-boot `workflow_dispatch` (`concurrency` serialized).
+- **Added DST-Aware External Edge Cron Bridge (`infrastructure/cloudflare_cron/`)**:
+  - Added `worker.js` and `wrangler.toml` (single `*/5 * * * *` Cloudflare Worker Cron Trigger evaluating exact `America/New_York` and `UTC` wall-clock windows across `09:00 ET` Pre-Open, `09:20 ET` SPY Part 1, `09:35 ET` Market-Open, `12:50 ET` SPY Part 2, `16:30 ET` Post-Close, and `Sat 02:00 UTC` Weekly Tournament).
+  - Added zero-dependency `setup_cronjob_org.py` CLI (`--dry-run` + idempotent REST API provisioning) for one-command `cron-job.org` webhook setup as a no-Cloudflare `$0/month` option.
+
+### Modules Added / Modified
+- `.github/workflows/autonomous_trading.yml`, `infrastructure/cloudflare_cron/worker.js`, `infrastructure/cloudflare_cron/wrangler.toml`, `infrastructure/cloudflare_cron/setup_cronjob_org.py`
+- `DEPLOYMENT.md`, `AGENTS.md`, `USER_GUIDE.md`, `tests/test_platform.py`, `docs/AGENT_CHANGELOG.md`
+
+### Verification
+- Executed `.venv/bin/python .agents/skills/maintain-project-context/scripts/verify_context.py`: all context files, safety locks, headless UI checks, and unit/integration suites passed (`exit code 0`).
+
+---
+
 ## [2026-11-15] — Dedicated Account #3 (`ALPACA_API_KEY_3`) Reallocation to `spy-daytrader` & 2-Account Swing Pod Streamlining
 
 ### Summary

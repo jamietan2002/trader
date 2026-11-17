@@ -1164,6 +1164,28 @@ class TestSwingTradingPlatform(unittest.TestCase):
         self.assertAlmostEqual(slb_work["take_profit_price"], 57.75, places=2)
         self.assertIn("QUEUED_ON_ALPACA", slb_work["order_status"])
 
+    def test_external_edge_cron_workflow_dispatch_and_provisioner_specs(self) -> None:
+        from pathlib import Path
+        from infrastructure.cloudflare_cron.setup_cronjob_org import build_dispatch_job_specs
+
+        repo_root = Path(__file__).resolve().parents[1]
+        wf_text = (repo_root / ".github" / "workflows" / "autonomous_trading.yml").read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", wf_text)
+        self.assertNotIn("\n  schedule:", wf_text)
+
+        worker_js = (repo_root / "infrastructure" / "cloudflare_cron" / "worker.js").read_text(encoding="utf-8")
+        self.assertIn("America/New_York", worker_js)
+        self.assertIn("intraday_session.yml", worker_js)
+        self.assertIn("autonomous_trading.yml", worker_js)
+
+        specs = build_dispatch_job_specs("jamietan2002", "test_pat_placeholder")
+        self.assertEqual(len(specs), 6)
+        et_jobs = [j for j in specs if j["schedule"]["timezone"] == "America/New_York"]
+        utc_jobs = [j for j in specs if j["schedule"]["timezone"] == "UTC"]
+        self.assertEqual(len(et_jobs), 5)
+        self.assertEqual(len(utc_jobs), 1)
+        self.assertTrue(all(j["requestMethod"] == 1 for j in specs))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

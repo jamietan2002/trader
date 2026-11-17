@@ -1,21 +1,19 @@
 name: Autonomous Swing Trading Loop (Daily & Weekly)
 
+# Triggered on-time ($0/mo) via External Edge Cron -> GitHub `workflow_dispatch` REST API
+# (Cloudflare Workers Cron Trigger in `infrastructure/cloudflare_cron/` or `cron-job.org`).
+# Native GitHub `on: schedule` is intentionally omitted to prevent 2-8h queue delays and dropped runs.
 on:
-  schedule:
-    # Stage 1 (Post-Close): Monday-Friday at 21:30 UTC (5:30 AM SGT, after 4:00 PM ET / 5:00 AM SGT close)
-    - cron: "30 21 * * 1-5"
-    # Stage 2 (Pre-Open): Monday-Friday at 14:00 UTC (10:00 PM SGT / 9:00 AM EST) and 13:00 UTC (9:00 PM SGT / 9:00 AM EDT)
-    - cron: "0 13,14 * * 1-5"
-    # Stage 3 (Market-Open Live Paper Execution): Monday-Friday at 14:35 UTC (10:35 PM SGT / 9:35 AM EST) and 13:35 UTC (9:35 PM SGT / 9:35 AM EDT)
-    - cron: "35 13,14 * * 1-5"
-    # Weekly Self-Improving Strategy Discovery Loop: Saturday at 02:00 UTC (10:00 AM SGT)
-    - cron: "0 2 * * 6"
   workflow_dispatch:
     inputs:
       mode:
         description: "Workflow mode to execute (auto | daily | weekly | demo)"
         required: false
         default: "auto"
+
+concurrency:
+  group: autonomous-swing-trading-loop
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -35,7 +33,6 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       INPUT_MODE: ${{ github.event.inputs.mode }}
-      EVENT_SCHEDULE: ${{ github.event.schedule }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -57,7 +54,6 @@ jobs:
           import os
           from datetime import datetime, timezone
           from api.server import PlatformApplication
-          from core.market_data.models import USTradingCalendar
 
           app = PlatformApplication()
 
@@ -67,12 +63,9 @@ jobs:
               app.orchestrator.bootstrap_baseline_system()
 
           mode = (os.environ.get("INPUT_MODE") or "auto").strip().lower()
-          event_schedule = (os.environ.get("EVENT_SCHEDULE") or "").strip()
-          is_weekly_schedule = (
-              event_schedule == "0 2 * * 6"
-              or (not event_schedule and datetime.now(timezone.utc).weekday() == 5)
-          )
-          today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+          now_utc = datetime.now(timezone.utc)
+          is_saturday_utc = now_utc.weekday() == 5
+          today_str = now_utc.strftime("%Y-%m-%d")
 
           # Refresh latest market data up to today
           app.orchestrator.market_data.ingest_universe_and_history(
@@ -87,12 +80,12 @@ jobs:
           if mode == "demo":
               from main import cmd_demo
               cmd_demo(app)
-          elif mode == "weekly" or (mode == "auto" and is_weekly_schedule):
+          elif mode == "weekly" or (mode == "auto" and is_saturday_utc):
               print(f"[WEEKLY] Running Weekly AI Strategy Discovery & Walk-Forward Validation for {session_date}...")
               app.orchestrator.run_daily_workflow(trading_date=session_date, force=False)
               app.orchestrator.run_weekly_workflow(week_ending_date=session_date, force=True)
           else:
-              print(f"[DAILY] Running Daily Post-Close / Pre-Open Refresh for {session_date}...")
+              print(f"[DAILY] Running Daily Post-Close / Pre-Open / Market-Open Refresh for {session_date}...")
               app.orchestrator.run_daily_workflow(trading_date=session_date, force=False)
               app.orchestrator.run_pre_open_refresh(session_date=session_date)
           EOF
@@ -110,4 +103,3 @@ jobs:
           else
             echo "No state changes to commit."
           fi
-

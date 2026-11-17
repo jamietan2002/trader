@@ -11,7 +11,7 @@ This platform runs a systematic **All-Weather Long + Short swing-trading engine*
 2. **Minimalist Dark 3-Tab Portfolio Hub (`dashboard/streamlit_app.py`)**: A clean, beginner-friendly Linear / Apple Stocks matte-dark interface with no left sidebar, zero emojis, zero neon borders, and plain-English trade explanations across 3 focused views: `Overview & Open Trades`, `Daily Journal` (single-day focused view with `← Previous` / `Next →` navigation, 1-sentence Daily Takeaway, unified activity grouping, compact Positions Held table, and a single combined expandable footer), and `Performance & System`.
 
 ### Core Operating Modes
-- **100% Hands-Off Cloud Mode**: GitHub Actions runs the Daily loop (`Mon–Fri 21:30 UTC`) and Weekly self-improvement loop (`Sat 10:00 SGT`), committing updated state to `data/swing_trader.db` so the 24/7 Streamlit Cloud dashboard stays current with zero user intervention.
+- **100% Hands-Off Cloud Mode**: External Edge Cron (`Cloudflare Workers` / `cron-job.org` -> GitHub `workflow_dispatch`) triggers the Daily loop on exact US Eastern time (`09:00 ET` Pre-Open, `09:35 ET` Market-Open, `16:30 ET` Post-Close) and Weekly self-improvement loop (`Sat 10:00 SGT`), committing updated state to `data/swing_trader.db` so the 24/7 Streamlit Cloud dashboard stays current with zero user intervention and zero GitHub cron queue lag.
 - **One-Word IDE AI Mode (`run`)**: Type **`run`** in this IDE chat (or paste AI JSON in Tab 4) to have the LLM search live web news catalysts (`search_web`), veto negative-news traps, boost high-catalyst setups, and run a 9-gate strategy tournament—with `$0` external API key cost.
 
 ---
@@ -60,7 +60,7 @@ This platform runs a systematic **All-Weather Long + Short swing-trading engine*
 ### Daily User Actions (Concise 4-Step Checklist, `SGT` & `ET`)
 1. **`9:45–10:25 PM SGT` (`8:45–9:25 AM EST` / `8:45–9:25 PM SGT` in EDT) — Pre-Open AI & Gap Check (`type run in IDE`)**:
    - Type **`run`** in the IDE after `BMO` earnings (`8:30 AM ET`) and before the `10:30 PM SGT` (`9:30 AM EST`, or `9:30 PM SGT` during EDT) open so overnight news vetoes, catalyst re-rankings, and pre-market gap checks update your `Live Copilot` checklist. Running `run` before market open **never** executes paper trades prematurely (`MARKET_CLOSED_DEFERRED`).
-   - *What if you skip `run`?* GitHub Actions automatically runs Post-Close (`21:30 UTC`), Pre-Open (`13:00/14:00 UTC`), and Market-Open (`13:35/14:35 UTC`), and your **Buy-Zone Limit Order (`<= Max Chase`)** automatically protects you from chasing overnight gap-ups.
+   - *What if you skip `run`?* External Edge Cron (`Cloudflare Workers` / `cron-job.org` -> GitHub `workflow_dispatch`) automatically dispatches Pre-Open (`09:00 ET`), Market-Open (`09:35 ET`), and Post-Close (`16:30 ET`) on time, and your **Buy-Zone Limit Order (`<= Max Chase`)** automatically protects you from chasing overnight gap-ups.
 2. **`10:30–10:35 PM SGT` (`9:30–9:35 AM EST`) — Execute `SELL` Exits & Raise `+1R` Stops First**:
    - Execute **`SELL` cards first** to free cash and lock in P&L, then raise your broker's `GTC Stop-Loss` on any holding showing a **`Raise Stop`** alert (`+1R` Breakeven / Chandelier).
 3. **`10:30–10:45 PM SGT` (`9:30–9:45 AM EST`, or Pre-Set `RTH` Limit) — Place `BUY` Limit Orders in `Buy-Zone` + `GTC Bracket`**:
