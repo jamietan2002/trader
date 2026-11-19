@@ -7,6 +7,8 @@ Commands:
   Paper Trading Execution, Post-Close Reconciliation & Performance Analysis).
 - `python3 main.py weekly --date 2025-06-27`: Run the autonomous weekly AI Strategy Discovery,
   Backtesting, and Walk-Forward Validation loop.
+- `python3 main.py scheduled --stage {auto,pre_open,market_open,post_close,weekly}`: Calendar-driven
+  scheduled stage (target session derived from the ET clock; hard data-freshness gate; exits 1 on stale data).
 - `python3 main.py demo`: Run a complete end-to-end lifecycle demonstration and print a full summary.
 - `python3 main.py serve`: Launch the REST API & Interactive 7-Tab Web Dashboard on http://127.0.0.1:8080.
 """
@@ -38,6 +40,33 @@ def cmd_weekly(app: PlatformApplication, week_date: str, family: str | None, for
         week_ending_date=week_date, preferred_family=family, force=force
     )
     print(json.dumps(res, indent=2))
+
+
+def cmd_scheduled(app: PlatformApplication, stage: str, force: bool) -> int:
+    """Calendar-driven scheduled stage runner. Returns a process exit code (1 = stale data / failure)."""
+    from core.market_data.models import USTradingCalendar
+    from core.market_data.providers import StaleMarketDataError
+
+    orch = app.orchestrator
+    if not orch.registry.list_strategies():
+        orch.bootstrap_baseline_system()
+    try:
+        if stage == "weekly":
+            week_end = USTradingCalendar.last_completed_session()
+            gate = orch.market_data.sync_session_bars(week_end, max_attempts=3, retry_sleep_sec=60.0)
+            res = {
+                "stage": "weekly",
+                "target_session": week_end,
+                "data_gate": gate,
+                "weekly": orch.run_weekly_workflow(week_ending_date=week_end, force=True).get("status"),
+            }
+        else:
+            res = orch.run_scheduled_stage(stage=stage, force=force)
+    except StaleMarketDataError as exc:
+        print(json.dumps({"stage": stage, "status": "FAILED_STALE_MARKET_DATA", "error": str(exc)}, indent=2))
+        return 1
+    print(json.dumps(res, indent=2, default=str))
+    return 0
 
 
 def cmd_demo(app: PlatformApplication) -> None:
@@ -126,6 +155,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     p_weekly.add_argument("--family", default=None, help="Optional StrategyFamily override")
     p_weekly.add_argument("--force", action="store_true", help="Force re-run")
 
+    p_sched = sub.add_parser(
+        "scheduled",
+        help="Run one calendar-driven scheduled stage (used by the External Edge Cron workflow)",
+    )
+    p_sched.add_argument(
+        "--stage",
+        default="auto",
+        choices=["auto", "pre_open", "market_open", "post_close", "weekly"],
+        help="Scheduled stage (auto picks from current ET time)",
+    )
+    p_sched.add_argument("--force", action="store_true", help="Force re-run of idempotent jobs")
+
     p_serve = sub.add_parser("serve", help="Start REST API and 7-tab Web Dashboard server")
     p_serve.add_argument("--host", default=None, help="Bind host (default 127.0.0.1)")
     p_serve.add_argument("--port", type=int, default=None, help="Bind port (default 8080)")
@@ -161,6 +202,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         cmd_daily(app, args.date, args.force)
     elif args.command == "weekly":
         cmd_weekly(app, args.date, args.family, args.force)
+    elif args.command == "scheduled":
+        return cmd_scheduled(app, args.stage, args.force)
     elif args.command == "revert-baseline":
         restored = app.orchestrator.registry.revert_to_golden_baseline(args.strategy_id)
         print(json.dumps({"restored": [s.to_dict() for s in restored]}, indent=2))

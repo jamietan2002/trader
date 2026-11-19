@@ -133,7 +133,56 @@ class USTradingCalendar:
         # Presidents' Day (3rd Monday of February)
         if d.month == 2 and d.weekday() == 0 and 15 <= d.day <= 21:
             return False
+        # Good Friday (2 days before Western Easter Sunday)
+        if d == cls._easter_sunday(d.year) - timedelta(days=2):
+            return False
         return True
+
+    @staticmethod
+    def _easter_sunday(year: int) -> date:
+        """Western (Gregorian) Easter Sunday via the Anonymous Gregorian algorithm."""
+        a = year % 19
+        b, c = divmod(year, 100)
+        d, e = divmod(b, 4)
+        f = (b + 8) // 25
+        g = (b - f + 1) // 3
+        h = (19 * a + b - d - g + 15) % 30
+        i, k = divmod(c, 4)
+        l = (32 + 2 * e + 2 * i - h - k) % 7
+        m = (a + 11 * h + 22 * l) // 451
+        month, day = divmod(h + l - 7 * m + 114, 31)
+        return date(year, month, day + 1)
+
+    @classmethod
+    def is_early_close_day(cls, d: date) -> bool:
+        """NYSE 1:00 PM ET half-days: July 3, Day after Thanksgiving, Christmas Eve (when trading days)."""
+        if not cls.is_trading_day(d):
+            return False
+        if d.month == 11 and d.weekday() == 4 and 23 <= d.day <= 29:
+            return True
+        if (d.month, d.day) in {(7, 3), (12, 24)}:
+            return True
+        return False
+
+    @classmethod
+    def session_close_et(cls, d: date) -> time:
+        """Regular-session close time (ET) for trading day `d` (13:00 on half-days, else 16:00)."""
+        return time(13, 0) if cls.is_early_close_day(d) else time(16, 0)
+
+    @classmethod
+    def last_completed_session(cls, at: Optional[datetime] = None, settle_minutes: int = 15) -> str:
+        """Most recent trading session whose official close (+ settle buffer) has passed.
+
+        Derived purely from the wall clock and exchange calendar — never from stored data —
+        so scheduled runs always target the correct session even if the local DB is stale.
+        """
+        now_et = (at or datetime.now(timezone.utc)).astimezone(ZoneInfo("America/New_York"))
+        today = now_et.date()
+        if cls.is_trading_day(today):
+            close_dt = datetime.combine(today, cls.session_close_et(today), tzinfo=now_et.tzinfo)
+            if now_et >= close_dt + timedelta(minutes=settle_minutes):
+                return today.isoformat()
+        return cls.previous_trading_day(today, include_same_day=False)
 
     @classmethod
     def get_trading_days(cls, start_date: str | date, end_date: str | date) -> List[str]:

@@ -80,3 +80,27 @@ trader/
 └── main.py                            # CLI entrypoint (demo, bootstrap, daily, weekly, serve)
 ```
 
+
+
+---
+
+## Scheduled Run Reliability (Calendar-Driven Stages)
+
+```mermaid
+flowchart LR
+    CF["Cloudflare Worker cron (*/5, ET wall clock)"] -->|"workflow_dispatch stage=..."| GH["GitHub Actions: main.py scheduled"]
+    GH --> CAL["USTradingCalendar: target session from clock"]
+    CAL --> GATE["sync_session_bars: cache-bypassed fetch + final-bar check"]
+    GATE -->|"stale"| FAIL["StaleMarketDataError: FAILED job row + red run"]
+    GATE -->|"fresh"| CATCH["Back-fill missed post-close reviews (last 5 sessions)"]
+    CATCH --> STAGE["pre_open / market_open / post_close"]
+```
+
+| Stage | ET dispatch (+ backstop) | Target session | Work performed |
+|---|---|---|---|
+| `pre_open` | 09:00 | previous trading day | research scan, AI catalyst sync, pod sync |
+| `market_open` | 09:35 (+10:00) | previous trading day (signals), today (execution) | paper session + Alpaca pod orders, idempotent per calendar day |
+| `post_close` | 16:30 (+18:00) | today (waits up to ~20 min for final bar) | post-close reconciliation, risk audit, analyst review |
+| `weekly` | Sat 02:00 UTC | last completed session | 9-gate strategy tournament |
+
+Backstop dispatches are no-ops when the primary run succeeded (idempotency keys) and self-heal when it did not.

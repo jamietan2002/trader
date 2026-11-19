@@ -6,10 +6,11 @@ To eliminate GitHub Actions' native `on: schedule` queue delays (2–8+ hours) a
 
 1. **External Edge Cron Dispatcher (`infrastructure/cloudflare_cron/`)**:
    - Evaluates exact **`America/New_York`** wall-clock time (automatically handling `EDT <-> EST` Daylight Saving Time transitions with zero manual cron edits) and triggers GitHub's instant `workflow_dispatch` runner queue (~10s boot):
-     - **Mon–Fri `09:00 ET`** (`10:00 PM SGT` EST / `9:00 PM SGT` EDT) -> `trader` Stage 2 Pre-Open Refresh (`mode=daily`)
-     - **Mon–Fri `09:35 ET`** (`10:35 PM SGT` EST / `9:35 PM SGT` EDT) -> `trader` Stage 3 Market-Open Live Paper Execution (`mode=daily`)
-     - **Mon–Fri `16:30 ET`** (`5:30 AM SGT` EST / `4:30 AM SGT` EDT) -> `trader` Stage 1 Post-Close Reconciliation & Review (`mode=daily`)
-     - **Saturday `02:00 UTC`** (`10:00 AM SGT`) -> `trader` Weekly 9-Gate Strategy Tournament (`mode=weekly`)
+     - **Mon–Fri `09:00 ET`** -> `stage=pre_open` (final bars for previous session, catch-up reviews, research, pod sync)
+     - **Mon–Fri `09:35 ET`** (+ `10:00 ET` backstop) -> `stage=market_open` (paper session + Alpaca pod execution)
+     - **Mon–Fri `16:30 ET`** (+ `18:00 ET` backstop) -> `stage=post_close` (waits for today's FINAL bar, then post-close review)
+     - **Saturday `02:00 UTC`** (`10:00 AM SGT`) -> `stage=weekly` 9-Gate Strategy Tournament
+   - **Reliability guarantees** (`main.py scheduled`): target session derived from the ET clock + exchange calendar; recent bars always fetched live (no cache) and in-progress bars discarded; hard final-bar gate raises `StaleMarketDataError` (red run + GitHub email) instead of skipping; every stage back-fills missed post-close reviews from the last 5 sessions; backstops are idempotent no-ops when the primary succeeded.
 2. **GitHub Actions Compute (`.github/workflows/autonomous_trading.yml`)**:
    - Native `on: schedule` is intentionally disabled so late GitHub crons never double-fire or cancel active sessions.
    - Executes on free unlimited public-repo `ubuntu-latest` runners via `workflow_dispatch` and commits updated `data/swing_trader.db` back to `main`.

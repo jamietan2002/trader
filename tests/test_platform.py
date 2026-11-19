@@ -1179,12 +1179,134 @@ class TestSwingTradingPlatform(unittest.TestCase):
         self.assertNotIn("intraday_session.yml", worker_js)
 
         specs = build_dispatch_job_specs("jamietan2002", "test_pat_placeholder")
-        self.assertEqual(len(specs), 4)
+        self.assertEqual(len(specs), 6)
         et_jobs = [j for j in specs if j["schedule"]["timezone"] == "America/New_York"]
         utc_jobs = [j for j in specs if j["schedule"]["timezone"] == "UTC"]
-        self.assertEqual(len(et_jobs), 3)
+        self.assertEqual(len(et_jobs), 5)
         self.assertEqual(len(utc_jobs), 1)
         self.assertTrue(all(j["requestMethod"] == 1 for j in specs))
+        import json as _json
+        stages = sorted({_json.loads(j["extendedData"]["body"])["inputs"]["stage"] for j in specs})
+        self.assertEqual(stages, ["market_open", "post_close", "pre_open", "weekly"])
+        self.assertIn('stage: "post_close"', worker_js)
+        self.assertIn("scheduled --stage", wf_text)
+
+    def test_scheduled_stage_calendar_driven_freshness_gate_and_catchup(self) -> None:
+        import dataclasses
+        import io
+        import json as _json
+        from datetime import datetime as _dt
+        from unittest import mock
+        from zoneinfo import ZoneInfo
+        from core.market_data.providers import (
+            AlpacaDataProvider,
+            HttpRateLimitedClient,
+            StaleMarketDataError,
+            _completed_bar_policy,
+        )
+
+        et = ZoneInfo("America/New_York")
+
+        # 1. Exchange calendar: Good Friday, half-days, and clock-derived last completed session
+        self.assertFalse(USTradingCalendar.is_trading_day(__import__("datetime").date(2026, 4, 3)))
+        self.assertFalse(USTradingCalendar.is_trading_day(__import__("datetime").date(2025, 4, 18)))
+        self.assertEqual(str(USTradingCalendar.session_close_et(__import__("datetime").date(2026, 11, 27))), "13:00:00")
+        self.assertEqual(USTradingCalendar.last_completed_session(_dt(2026, 11, 18, 9, 0, tzinfo=et)), "2026-11-17")
+        self.assertEqual(USTradingCalendar.last_completed_session(_dt(2026, 11, 18, 16, 5, tzinfo=et)), "2026-11-17")
+        self.assertEqual(USTradingCalendar.last_completed_session(_dt(2026, 11, 18, 16, 20, tzinfo=et)), "2026-11-18")
+        self.assertEqual(USTradingCalendar.last_completed_session(_dt(2026, 11, 21, 12, 0, tzinfo=et)), "2026-11-20")
+        self.assertEqual(USTradingCalendar.last_completed_session(_dt(2026, 11, 27, 13, 20, tzinfo=et)), "2026-11-27")
+
+        # 2. Recent bar windows never use the HTTP cache; ancient windows may
+        use_cache_recent, last_completed = _completed_bar_policy(last_completed_iso := USTradingCalendar.last_completed_session())
+        self.assertFalse(use_cache_recent)
+        self.assertEqual(last_completed, last_completed_iso)
+        self.assertTrue(_completed_bar_policy("2024-01-05")[0])
+
+        # 3. use_cache=False ignores a stale cached payload (the 09:00 ET pre-market response)
+        client = HttpRateLimitedClient(self.db, "alpaca", min_interval_sec=0.0)
+        url = "https://data.alpaca.markets/v2/stocks/SPY/bars?end=today"
+        import hashlib
+        self.db.set_cached_response(
+            f"alpaca:{hashlib.sha256(url.encode()).hexdigest()}", "alpaca", {"bars": ["STALE"]}, "2999-01-01T00:00:00+00:00"
+        )
+        fake_resp = mock.MagicMock()
+        fake_resp.__enter__.return_value = io.BytesIO(_json.dumps({"bars": ["FRESH"]}).encode())
+        with mock.patch("urllib.request.urlopen", return_value=fake_resp):
+            self.assertEqual(client.get_json(url, use_cache=True), {"bars": ["STALE"]})
+            self.assertEqual(client.get_json(url, use_cache=False), {"bars": ["FRESH"]})
+
+        # 4. Alpaca provider drops the in-progress (not yet closed) session bar
+        live_settings = dataclasses.replace(self.settings, alpaca_api_key="k", alpaca_secret_key="s")
+        alp = AlpacaDataProvider(live_settings, self.db)
+        future_day = USTradingCalendar.next_trading_day(last_completed_iso)
+        bar = lambda d: {"t": f"{d}T05:00:00Z", "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}
+        with mock.patch.object(alp.client, "get_json", return_value={"bars": [bar(last_completed_iso), bar(future_day)]}) as gj:
+            got = alp.fetch_daily_bars("SPY", "2026-01-01", future_day)
+        self.assertEqual([b.bar_date for b in got], [last_completed_iso])
+        self.assertFalse(gj.call_args.kwargs["use_cache"])
+
+        # 5. Freshness gate retries until the final benchmark bar lands, then reports FRESH
+        session = "2025-05-06"
+
+        class LateCloseProvider(LocalSeededDataProvider):
+            provider_name = "alpaca"
+            spy_calls = 0
+
+            def fetch_daily_bars(self, ticker, start_date, end_date):
+                out = [dataclasses.replace(b, provider_source="alpaca", retrieved_at="") for b in super().fetch_daily_bars(ticker, start_date, end_date)]
+                if ticker == "SPY":
+                    LateCloseProvider.spy_calls += 1
+                    if LateCloseProvider.spy_calls < 2:
+                        out = [b for b in out if b.bar_date != session]
+                return out
+
+        class LiveService(MarketDataService):
+            def _is_live_api_configured(self) -> bool:
+                return True
+
+        live_md = LiveService(self.settings, self.db, LateCloseProvider())
+        sleeps: list = []
+        gate = live_md.sync_session_bars(session, max_attempts=3, retry_sleep_sec=5, sleep_fn=sleeps.append)
+        self.assertEqual(gate["status"], "FRESH")
+        self.assertEqual(gate["attempts"], 2)
+        self.assertEqual(sleeps, [5])
+        with self.assertRaises(StaleMarketDataError):
+            live_md.sync_session_bars("2999-01-04")
+
+        # 6. Scheduled post_close stage targets the CALENDAR session, back-fills missed reviews, is idempotent
+        self.market_data.ingest_universe_and_history(start_date="2024-06-01", end_date="2025-06-30")
+        orch = AutonomousWorkflowOrchestrator(self.settings, self.db, self.market_data)
+        res = orch.run_scheduled_stage("post_close", now=_dt(2025, 5, 6, 16, 30, tzinfo=et))
+        self.assertEqual(res["target_session"], "2025-05-06")
+        self.assertEqual(res["post_close"]["status"], "COMPLETED")
+        self.assertEqual(len(res["post_close_catchup"]), 4)  # 4 prior sessions had no review yet
+        again = orch.run_scheduled_stage("post_close", now=_dt(2025, 5, 6, 18, 0, tzinfo=et))  # backstop
+        self.assertEqual(again["post_close"]["status"], "SKIPPED_IDEMPOTENT")
+        self.assertEqual(again["post_close_catchup"], [])
+
+        # Weekend `auto` dispatch reviews Friday; holidays skip pre_open/market_open cleanly
+        wk = orch.run_scheduled_stage("auto", now=_dt(2025, 5, 10, 12, 0, tzinfo=et))
+        self.assertEqual((wk["stage"], wk["target_session"]), ("post_close", "2025-05-09"))
+        hol = orch.run_scheduled_stage("pre_open", now=_dt(2025, 4, 18, 9, 0, tzinfo=et))
+        self.assertEqual(hol["status"], "MARKET_HOLIDAY_OR_WEEKEND")
+
+        # 7. Stale data fails LOUDLY (raises + FAILED job row) instead of silently skipping
+        with mock.patch.object(self.market_data, "sync_session_bars", side_effect=StaleMarketDataError("no final bar")):
+            with self.assertRaises(StaleMarketDataError):
+                orch.run_scheduled_stage("post_close", now=_dt(2025, 5, 7, 16, 30, tzinfo=et))
+        row = self.db.fetch_one(
+            "SELECT status, error_message FROM job_executions WHERE idempotency_key = ?",
+            ("scheduled_post_close:2025-05-07:data_gate",),
+        )
+        self.assertEqual(row["status"], "FAILED")
+        self.assertIn("no final bar", row["error_message"])
+
+        # 8. Legacy run_daily_workflow never runs a post-close review for an unclosed session
+        future_dt = USTradingCalendar.next_trading_day(USTradingCalendar.last_completed_session())
+        with mock.patch.object(orch.paper_engine, "run_trading_session_for_strategies", return_value={}):
+            fut = orch.run_daily_workflow(future_dt)
+        self.assertEqual(fut["post_close"]["status"], "DEFERRED_SESSION_NOT_CLOSED")
 
 
 if __name__ == "__main__":

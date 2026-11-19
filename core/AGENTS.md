@@ -17,4 +17,8 @@ Rules for modifying any module inside `core/` (`market_data`, `indicators`, `str
    - Every order must carry a deterministic `idempotency_key` (`PaperTradingEngine.build_idempotency_key`) or Pod `client_order_id` to prevent duplicate execution.
    - Every fill must write an immutable record to `trade_ledger` and reconcile `paper_accounts.cash_balance` and `paper_positions`.
    - When switching `provider_source` in `MarketDataService` (e.g., `local_seeded` to `alpaca`), mixed-provider bars must be purged and paper positions reset so positions are never marked-to-market across incompatible price scales.
+5. **Session Resolution & Bar Freshness (`core/market_data/`)**:
+   - Use `USTradingCalendar.last_completed_session()` (ET clock + calendar, 15-min post-close settle, half-days, Good Friday) to decide which session is final — never `MAX(bar_date)` from the DB.
+   - Daily-bar fetches ending within 7 days must call `HttpRateLimitedClient.get_json(..., use_cache=False)` and drop bars dated after the last completed session.
+   - Scheduled callers must gate on `MarketDataService.sync_session_bars(session)` and let `StaleMarketDataError` propagate.
 

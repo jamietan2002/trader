@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
 from agents.market_researcher.agent import MarketResearchAgent
@@ -359,35 +359,21 @@ class AutonomousWorkflowOrchestrator:
             )
 
         # 3. Post-Close: Reconciliation, Risk Audit, and Performance Analyst Review
-        def _post_close_fn() -> Dict[str, Any]:
-            from core.indicators.technical import compute_indicator_series
-            spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker, end_date=trading_date)
-            spy_inds = compute_indicator_series(spy_bars) if spy_bars else {}
-            spy_ind = spy_inds.get(trading_date) or (list(spy_inds.values())[-1] if spy_inds else None)
-            detected_regime = self.backtest_engine._classify_regime(spy_ind)
-            if detected_regime == "UNKNOWN":
-                detected_regime = "BULL_LOW_VOL"
-
-            risk_audit = self.risk_agent.audit_portfolio_health(eval_date=trading_date)
-            perf_review = self.analyst_agent.review_session_performance(
-                session_date=trading_date,
-                current_regime=detected_regime,
+        #    Only once `trading_date`'s official close (+15m settle) has passed — never on partial intraday data.
+        if trading_date <= USTradingCalendar.last_completed_session():
+            post_close_res = self.run_idempotent_job(
+                job_name="daily_post_close",
+                idempotency_key=f"daily_post_close:{trading_date}",
+                fn=lambda: self._post_close_review(trading_date),
+                force=force,
             )
-            now_op = datetime.now(self.settings.operator_tz).strftime("%Y-%m-%d %H:%M:%S %Z")
-            return {
-                "trading_date": trading_date,
-                "operator_report_timestamp": now_op,
-                "market_regime": detected_regime,
-                "risk_audit": risk_audit,
-                "performance_review": perf_review,
+        else:
+            post_close_res = {
+                "job_name": "daily_post_close",
+                "idempotency_key": f"daily_post_close:{trading_date}",
+                "status": "DEFERRED_SESSION_NOT_CLOSED",
+                "summary": {},
             }
-
-        post_close_res = self.run_idempotent_job(
-            job_name="daily_post_close",
-            idempotency_key=f"daily_post_close:{trading_date}",
-            fn=_post_close_fn,
-            force=force,
-        )
 
         import sys as _sys
         pod_sync_res = self.pod_manager.evaluate_and_sync_all_pods(
@@ -402,6 +388,222 @@ class AutonomousWorkflowOrchestrator:
             "post_close": post_close_res,
             "strategy_pods_sync": pod_sync_res,
         }
+
+    def _post_close_review(self, trading_date: str) -> Dict[str, Any]:
+        """Post-close reconciliation, risk audit & performance analyst review for one completed session."""
+        from core.indicators.technical import compute_indicator_series
+        spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker, end_date=trading_date)
+        spy_inds = compute_indicator_series(spy_bars) if spy_bars else {}
+        spy_ind = spy_inds.get(trading_date) or (list(spy_inds.values())[-1] if spy_inds else None)
+        detected_regime = self.backtest_engine._classify_regime(spy_ind)
+        if detected_regime == "UNKNOWN":
+            detected_regime = "BULL_LOW_VOL"
+
+        risk_audit = self.risk_agent.audit_portfolio_health(eval_date=trading_date)
+        perf_review = self.analyst_agent.review_session_performance(
+            session_date=trading_date,
+            current_regime=detected_regime,
+        )
+        now_op = datetime.now(self.settings.operator_tz).strftime("%Y-%m-%d %H:%M:%S %Z")
+        return {
+            "trading_date": trading_date,
+            "operator_report_timestamp": now_op,
+            "market_regime": detected_regime,
+            "benchmark_bar_date": spy_bars[-1].bar_date if spy_bars else None,
+            "risk_audit": risk_audit,
+            "performance_review": perf_review,
+        }
+
+    # ── Calendar-Driven Scheduled Stages (External Edge Cron -> workflow_dispatch) ──────────
+    SCHEDULED_STAGES = ("auto", "pre_open", "market_open", "post_close")
+    POST_CLOSE_CATCHUP_SESSIONS = 5
+
+    def _record_stage_failure(self, stage: str, session_date: str, err: Exception) -> None:
+        now_iso = utc_now_iso()
+        self.db.execute(
+            """
+            INSERT INTO job_executions (
+                job_run_id, job_name, idempotency_key, status, started_at, completed_at, summary_json, error_message
+            ) VALUES (?, ?, ?, 'FAILED', ?, ?, NULL, ?)
+            ON CONFLICT(idempotency_key) DO UPDATE SET
+                status='FAILED', completed_at=excluded.completed_at, error_message=excluded.error_message
+            """,
+            (
+                f"job_{uuid.uuid4().hex[:12]}",
+                f"scheduled_{stage}",
+                f"scheduled_{stage}:{session_date}:data_gate",
+                now_iso,
+                now_iso,
+                str(err)[:2000],
+            ),
+        )
+
+    def _missing_post_close_sessions(self, up_to_session: str) -> List[str]:
+        """Completed sessions (within the catch-up window) that have no COMPLETED post-close review."""
+        start = date.fromisoformat(up_to_session) - timedelta(days=self.POST_CLOSE_CATCHUP_SESSIONS * 2 + 4)
+        sessions = USTradingCalendar.get_trading_days(start, up_to_session)[-self.POST_CLOSE_CATCHUP_SESSIONS:]
+        missing: List[str] = []
+        for s in sessions:
+            row = self.db.fetch_one(
+                "SELECT status FROM job_executions WHERE idempotency_key = ?",
+                (f"daily_post_close:{s}",),
+            )
+            if row is None or row["status"] != "COMPLETED":
+                missing.append(s)
+        return missing
+
+    def run_scheduled_stage(
+        self,
+        stage: str = "auto",
+        now: Optional[datetime] = None,
+        force: bool = False,
+        bar_sync_attempts: Optional[int] = None,
+        bar_sync_retry_sec: float = 120.0,
+    ) -> Dict[str, Any]:
+        """Execute one scheduled stage whose target session is derived ONLY from the ET clock + calendar.
+
+        Stages (dispatched by the External Edge Cron on exact `America/New_York` time):
+          - `pre_open`    (~09:00 ET): sync final bars for the previous session (hard gate), catch up any
+                                       missed post-close reviews, research scan, AI catalyst & pod sync.
+          - `market_open` (~09:35 ET): sync previous-session bars (hard gate) and execute today's paper
+                                       session + Alpaca pod orders (idempotent per calendar day).
+          - `post_close`  (~16:30 ET): wait/retry for today's FINAL closing bar (hard gate), then run the
+                                       post-close review for today plus any missed prior sessions.
+          - `auto`: picks the stage from the current ET time (manual dispatches / backstops).
+
+        If the required final bars cannot be obtained, the failure is recorded in `job_executions` and
+        `StaleMarketDataError` is raised (non-zero exit -> red GitHub run) instead of silently skipping.
+        """
+        from core.market_data.providers import StaleMarketDataError
+
+        stage = (stage or "auto").strip().lower()
+        if stage not in self.SCHEDULED_STAGES:
+            raise ValueError(f"Unknown stage '{stage}'. Expected one of {self.SCHEDULED_STAGES}.")
+
+        now_et = USTradingCalendar.current_et_datetime(now)
+        today = now_et.date()
+        today_iso = today.isoformat()
+        is_trading_today = USTradingCalendar.is_trading_day(today)
+        last_completed = USTradingCalendar.last_completed_session(now)
+
+        if stage == "auto":
+            if not is_trading_today:
+                stage = "post_close"
+            else:
+                close_t = USTradingCalendar.session_close_et(today)
+                if now_et.time() < USTradingCalendar._MARKET_OPEN_ET:
+                    stage = "pre_open"
+                elif now_et.time() < close_t:
+                    stage = "market_open"
+                else:
+                    stage = "post_close"
+
+        if stage in ("pre_open", "market_open") and not is_trading_today:
+            return {
+                "stage": stage,
+                "calendar_date": today_iso,
+                "status": "MARKET_HOLIDAY_OR_WEEKEND",
+                "message": USTradingCalendar.non_trading_reason(today),
+            }
+
+        if stage == "post_close":
+            target_session = last_completed
+        else:
+            target_session = USTradingCalendar.previous_trading_day(today, include_same_day=False)
+
+        default_attempts = 10 if stage == "post_close" else 3
+        try:
+            data_gate = self.market_data.sync_session_bars(
+                target_session,
+                max_attempts=bar_sync_attempts if bar_sync_attempts is not None else default_attempts,
+                retry_sleep_sec=bar_sync_retry_sec,
+            )
+        except (StaleMarketDataError, Exception) as exc:
+            self._record_stage_failure(stage, target_session, exc)
+            logger.error(f"[{stage}] Data freshness gate FAILED for {target_session}: {exc}")
+            raise StaleMarketDataError(f"[{stage}] {exc}") from exc
+
+        import sys as _sys
+        live = "unittest" not in _sys.modules
+        if live:
+            self.ensure_all_golden_strategies_registered()
+
+        result: Dict[str, Any] = {
+            "stage": stage,
+            "calendar_date": today_iso,
+            "target_session": target_session,
+            "data_gate": data_gate,
+        }
+
+        # Safety net: every stage backfills post-close reviews missed for any completed session.
+        catchup: List[Dict[str, Any]] = []
+        for missed in self._missing_post_close_sessions(target_session):
+            if missed == target_session and stage == "post_close":
+                continue  # handled below as the primary review
+            catchup.append(
+                self.run_idempotent_job(
+                    job_name="daily_post_close",
+                    idempotency_key=f"daily_post_close:{missed}",
+                    fn=lambda s=missed: self._post_close_review(s),
+                )
+            )
+        result["post_close_catchup"] = [
+            {"idempotency_key": c["idempotency_key"], "status": c["status"]} for c in catchup
+        ]
+
+        if stage == "pre_open":
+            if live:
+                self._refresh_live_news_and_screener_onboarding(target_session)
+            result["pre_market_scan"] = self.run_idempotent_job(
+                job_name="daily_pre_market",
+                idempotency_key=f"daily_pre_market:{today_iso}",
+                fn=lambda: self.research_agent.run_market_scan(as_of_date=target_session, top_n=8),
+                force=force,
+            )["status"]
+            result["pre_open_refresh"] = self.run_pre_open_refresh(session_date=target_session)
+
+        elif stage == "market_open":
+            if live and not USTradingCalendar.is_market_open(now):
+                result["market_execution"] = {"status": "DEFERRED_MARKET_CLOSED"}
+            else:
+                active_strats = self.registry.list_strategies(status=StrategyStatus.PAPER_TRADING.value)
+                exec_res = self.run_idempotent_job(
+                    job_name="daily_market_execution",
+                    idempotency_key=f"daily_market_execution:{today_iso}",
+                    fn=lambda: self.paper_engine.run_trading_session_for_strategies(
+                        active_strategies=active_strats,
+                        trading_date=today_iso,
+                    ),
+                    force=force,
+                )
+                result["market_execution"] = {
+                    "status": exec_res["status"],
+                    "idempotency_key": exec_res["idempotency_key"],
+                }
+            pod_sync = self.pod_manager.evaluate_and_sync_all_pods(
+                session_date=target_session,
+                execute_live_orders=live,
+            )
+            result["strategy_pods_synced"] = len(pod_sync.get("pods") or [])
+
+        else:  # post_close
+            primary = self.run_idempotent_job(
+                job_name="daily_post_close",
+                idempotency_key=f"daily_post_close:{target_session}",
+                fn=lambda: self._post_close_review(target_session),
+                force=force,
+            )
+            result["post_close"] = {
+                "status": primary["status"],
+                "idempotency_key": primary["idempotency_key"],
+            }
+            pod_sync = self.pod_manager.evaluate_and_sync_all_pods(
+                session_date=target_session,
+                execute_live_orders=live,
+            )
+            result["strategy_pods_synced"] = len(pod_sync.get("pods") or [])
+
+        return result
 
     def run_pre_open_refresh(self, session_date: str) -> Dict[str, Any]:
         """Stage 2 (Pre-Open 9:00 AM ET / 9:00 PM SGT): Refresh research scan, live extended-hours quote cache, and paper AI catalyst sync."""
@@ -607,7 +809,17 @@ class AutonomousWorkflowOrchestrator:
             self.market_data.ensure_latest_market_data(target_date=trading_date)
 
         spy_bars = self.market_data.get_bars(self.settings.benchmark_ticker)
-        latest_date = trading_date or (spy_bars[-1].bar_date if spy_bars else date.today().isoformat())
+        data_freshness: Dict[str, Any] = {"status": "NOT_CHECKED"}
+        if trading_date is None and self.market_data._is_live_api_configured():
+            # Session derived from the ET clock + calendar (never from whatever happens to be stored).
+            latest_date = USTradingCalendar.last_completed_session()
+            try:
+                data_freshness = self.market_data.sync_session_bars(latest_date, max_attempts=1)
+            except Exception as exc:
+                data_freshness = {"status": "STALE", "session_date": latest_date, "error": str(exc)}
+                logger.warning(f"IDE context data freshness warning for {latest_date}: {exc}")
+        else:
+            latest_date = trading_date or (spy_bars[-1].bar_date if spy_bars else date.today().isoformat())
 
         daily_res = None
         if run_daily_first:
@@ -691,6 +903,7 @@ class AutonomousWorkflowOrchestrator:
                 date.today(), include_same_day=USTradingCalendar.is_trading_day(date.today())
             ),
             "session_date": latest_date,
+            "data_freshness": data_freshness,
             "market_regime": {
                 "regime": regime,
                 "spy_close": live_spy_px,

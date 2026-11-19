@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Zero-dependency provisioner for `cron-job.org` -> `jamietan2002/trader` `workflow_dispatch` ($0/month).
 
-Creates/updates all 4 DST-aware (`America/New_York` & `UTC`) webhook schedules for `trader`
+Creates/updates all 6 DST-aware (`America/New_York` & `UTC`) webhook schedules for `trader`
 via the official `cron-job.org` REST API. (For `spy-daytrader`, use the dedicated script in
 `spy-daytrader/infrastructure/cloudflare_cron/setup_cronjob_org.py`.)
 
@@ -9,7 +9,7 @@ Usage:
     # Preview exact JSON payloads without network calls (no secrets needed):
     .venv/bin/python infrastructure/cloudflare_cron/setup_cronjob_org.py --dry-run
 
-    # Provision / update all 4 `trader` schedules on cron-job.org:
+    # Provision / update all 6 `trader` schedules on cron-job.org:
     CRONJOB_API_KEY="..." GITHUB_PAT="..." \
       .venv/bin/python infrastructure/cloudflare_cron/setup_cronjob_org.py
 """
@@ -27,7 +27,7 @@ CRONJOB_API_BASE = "https://api.cron-job.org"
 
 
 def build_dispatch_job_specs(github_owner: str, github_pat: str) -> List[Dict[str, Any]]:
-    """Build the 4 idempotent `cron-job.org` job definitions for `jamietan2002/trader`."""
+    """Build the 6 idempotent `cron-job.org` job definitions for `jamietan2002/trader`."""
 
     url = f"https://api.github.com/repos/{github_owner}/trader/actions/workflows/autonomous_trading.yml/dispatches"
     common_headers = {
@@ -38,39 +38,24 @@ def build_dispatch_job_specs(github_owner: str, github_pat: str) -> List[Dict[st
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
+    def _spec(title: str, tz: str, hour: int, minute: int, wdays: List[int], inputs: Dict[str, str]) -> Dict[str, Any]:
+        return {"title": title, "timezone": tz, "hours": [hour], "minutes": [minute], "wdays": wdays,
+                "body": {"ref": "main", "inputs": inputs}}
+
+    wk = [1, 2, 3, 4, 5]
     raw_specs = [
-        {
-            "title": "[trader] Stage 2 Pre-Open Refresh (09:00 ET)",
-            "timezone": "America/New_York",
-            "hours": [9],
-            "minutes": [0],
-            "wdays": [1, 2, 3, 4, 5],
-            "body": {"ref": "main", "inputs": {"mode": "daily"}},
-        },
-        {
-            "title": "[trader] Stage 3 Market-Open Execution (09:35 ET)",
-            "timezone": "America/New_York",
-            "hours": [9],
-            "minutes": [35],
-            "wdays": [1, 2, 3, 4, 5],
-            "body": {"ref": "main", "inputs": {"mode": "daily"}},
-        },
-        {
-            "title": "[trader] Stage 1 Post-Close Reconciliation (16:30 ET)",
-            "timezone": "America/New_York",
-            "hours": [16],
-            "minutes": [30],
-            "wdays": [1, 2, 3, 4, 5],
-            "body": {"ref": "main", "inputs": {"mode": "daily"}},
-        },
-        {
-            "title": "[trader] Weekly 9-Gate Strategy Tournament (Sat 02:00 UTC / 10:00 SGT)",
-            "timezone": "UTC",
-            "hours": [2],
-            "minutes": [0],
-            "wdays": [6],
-            "body": {"ref": "main", "inputs": {"mode": "weekly"}},
-        },
+        _spec("[trader] Pre-Open Stage (09:00 ET)", "America/New_York", 9, 0, wk,
+              {"mode": "daily", "stage": "pre_open"}),
+        _spec("[trader] Market-Open Stage (09:35 ET)", "America/New_York", 9, 35, wk,
+              {"mode": "daily", "stage": "market_open"}),
+        _spec("[trader] Market-Open Backstop (10:00 ET)", "America/New_York", 10, 0, wk,
+              {"mode": "daily", "stage": "market_open"}),
+        _spec("[trader] Post-Close Stage (16:30 ET)", "America/New_York", 16, 30, wk,
+              {"mode": "daily", "stage": "post_close"}),
+        _spec("[trader] Post-Close Backstop (18:00 ET)", "America/New_York", 18, 0, wk,
+              {"mode": "daily", "stage": "post_close"}),
+        _spec("[trader] Weekly 9-Gate Strategy Tournament (Sat 02:00 UTC / 10:00 SGT)", "UTC", 2, 0, [6],
+              {"mode": "weekly", "stage": "weekly"}),
     ]
 
     jobs: List[Dict[str, Any]] = []

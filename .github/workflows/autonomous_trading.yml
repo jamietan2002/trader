@@ -1,13 +1,26 @@
 name: Autonomous Swing Trading Loop (Daily & Weekly)
 
-# Triggered on-time ($0/mo) via External Edge Cron -> GitHub `workflow_dispatch` REST API
-# (Cloudflare Workers Cron Trigger in `infrastructure/cloudflare_cron/` or `cron-job.org`).
-# Native GitHub `on: schedule` is intentionally omitted to prevent 2-8h queue delays and dropped runs.
+# Triggered on exact US Eastern time ($0/mo) via the dedicated Cloudflare Worker
+# (`infrastructure/cloudflare_cron/worker.js`) -> GitHub `workflow_dispatch` REST API.
+# Native GitHub `on: schedule` is intentionally omitted (2-8h queue delays & dropped runs).
+#
+# Reliability design:
+#   - Each dispatch names an explicit `stage`; the target trading session is derived from the
+#     ET clock + exchange calendar inside `main.py scheduled` (never from what is already stored).
+#   - A hard data-freshness gate re-fetches the final closing bars (cache-bypassed) and fails the
+#     run (red X + GitHub failure email) instead of silently skipping when bars are stale/missing.
+#   - Every stage also back-fills any missed post-close reviews from the last 5 sessions.
+#   - Backstop dispatches (10:00 ET market_open, 18:00 ET post_close) are idempotent no-ops when
+#     the primary run already succeeded, and self-heal when it did not.
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "Workflow mode to execute (auto | daily | weekly | demo)"
+        description: "Workflow mode (daily | weekly | demo) — legacy; prefer `stage`"
+        required: false
+        default: "daily"
+      stage:
+        description: "Scheduled stage (auto | pre_open | market_open | post_close | weekly)"
         required: false
         default: "auto"
 
@@ -21,6 +34,7 @@ permissions:
 jobs:
   autonomous-trading-cycle:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       TRADING_MODE: paper
@@ -33,6 +47,7 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       INPUT_MODE: ${{ github.event.inputs.mode }}
+      INPUT_STAGE: ${{ github.event.inputs.stage }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -48,49 +63,20 @@ jobs:
         run: |
           python3 .agents/skills/maintain-project-context/scripts/verify_context.py
 
-      - name: Execute Autonomous Daily / Weekly Trading & Self-Improvement Loop
+      - name: Execute Calendar-Driven Scheduled Stage
         run: |
-          python3 - << 'EOF'
-          import os
-          from datetime import datetime, timezone
-          from api.server import PlatformApplication
-
-          app = PlatformApplication()
-
-          # Ensure baseline strategies & historical dataset are initialized
-          if not app.orchestrator.registry.list_strategies():
-              print("[INIT] Bootstrapping baseline strategies and historical dataset...")
-              app.orchestrator.bootstrap_baseline_system()
-
-          mode = (os.environ.get("INPUT_MODE") or "auto").strip().lower()
-          now_utc = datetime.now(timezone.utc)
-          is_saturday_utc = now_utc.weekday() == 5
-          today_str = now_utc.strftime("%Y-%m-%d")
-
-          # Refresh latest market data up to today
-          app.orchestrator.market_data.ingest_universe_and_history(
-              start_date="2023-01-03",
-              end_date=today_str,
-          )
-
-          # Determine latest actual bar_date ingested for SPY
-          spy_bars = app.orchestrator.market_data.get_bars("SPY")
-          session_date = spy_bars[-1].bar_date if spy_bars else "2025-06-27"
-
-          if mode == "demo":
-              from main import cmd_demo
-              cmd_demo(app)
-          elif mode == "weekly" or (mode == "auto" and is_saturday_utc):
-              print(f"[WEEKLY] Running Weekly AI Strategy Discovery & Walk-Forward Validation for {session_date}...")
-              app.orchestrator.run_daily_workflow(trading_date=session_date, force=False)
-              app.orchestrator.run_weekly_workflow(week_ending_date=session_date, force=True)
-          else:
-              print(f"[DAILY] Running Daily Post-Close / Pre-Open / Market-Open Refresh for {session_date}...")
-              app.orchestrator.run_daily_workflow(trading_date=session_date, force=False)
-              app.orchestrator.run_pre_open_refresh(session_date=session_date)
-          EOF
+          MODE="${INPUT_MODE:-daily}"
+          STAGE="${INPUT_STAGE:-auto}"
+          if [ "$MODE" = "demo" ]; then
+            python3 main.py demo
+          elif [ "$MODE" = "weekly" ] || [ "$STAGE" = "weekly" ]; then
+            python3 main.py scheduled --stage weekly
+          else
+            python3 main.py scheduled --stage "$STAGE"
+          fi
 
       - name: Commit & Push Updated Paper Account & Strategy Registry State
+        if: always()
         run: |
           git config user.name "swing-trading-ai-bot"
           git config user.email "actions@users.noreply.github.com"

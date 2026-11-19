@@ -40,7 +40,10 @@ This repository implements an autonomous **AI-Powered Swing Trading Research, Ba
    - Delisted securities (`is_active=False`, `delisted_date`) must remain in historical backtests until their delisting date.
 4. **Immutable Active Strategies**:
    - Never overwrite a `StrategyConfig` version in `strategy_registry` whose status is `PAPER_TRADING`. Use `StrategyRegistry.create_new_version()` to create `v+1` in `DRAFT` status.
-5. **Role Permission Enforcement**:
+5. **Calendar-Driven Scheduling (Never Infer Sessions From Stored Data)**:
+   - Scheduled runs (`main.py scheduled --stage ...`) must derive their target session from `USTradingCalendar` + the ET clock (`last_completed_session()`), never from `MAX(bar_date)` in the DB.
+   - Bar requests ending within 7 days of today must bypass `api_cache`; in-progress (unclosed) session bars must never be persisted; a missing final bar must raise `StaleMarketDataError` (red run) rather than silently skip.
+6. **Role Permission Enforcement**:
    - Every agent method must call `self.assert_permission("<action>")` (`agents/base.py`) and validate outputs with `validate_required_fields()`.
 
 ---
@@ -49,13 +52,13 @@ This repository implements an autonomous **AI-Powered Swing Trading Research, Ba
 
 | Directory / File | Responsibility | Key Symbols |
 |---|---|---|
-| `main.py` | CLI entrypoint (`demo`, `bootstrap`, `daily`, `weekly`, `ide-context`, `ide-apply`, `serve`) | `main()`, `cmd_demo()` |
+| `main.py` | CLI entrypoint (`demo`, `bootstrap`, `daily`, `weekly`, `scheduled`, `ide-context`, `ide-apply`, `serve`) | `main()`, `cmd_demo()`, `cmd_scheduled()` |
 | `infrastructure/configuration/settings.py` | Environment config, risk & promotion defaults, paper-mode lock | `Settings`, `RiskParametersConfig`, `PromotionCriteriaConfig`, `LiveTradingProhibitedError` |
 | `infrastructure/database/db.py` | 23-table SQLite/PostgreSQL relational persistence & API cache | `DatabaseManager`, `SCHEMA_SQL` |
 | `infrastructure/logging/logger.py` | Structured logging with regex & explicit secret redaction | `get_logger()`, `SecretScrubbingFilter` |
-| `infrastructure/scheduler/orchestrator.py` | Idempotent Daily & Weekly workflow job orchestration | `AutonomousWorkflowOrchestrator` |
-| `core/market_data/models.py` | Domain models & NYSE/NASDAQ holiday calendar | `DailyBar`, `EarningsEvent`, `EquityMetadata`, `USTradingCalendar` |
-| `core/market_data/providers.py` | Pluggable data providers, 40-stock + dynamic universe & 24/7 Alpaca news scanner | `MarketDataService`, `LocalSeededDataProvider`, `AlpacaDataProvider`, `PolygonDataProvider` |
+| `infrastructure/scheduler/orchestrator.py` | Idempotent Daily & Weekly workflow orchestration; calendar-driven scheduled stages with data-freshness gate & post-close catch-up | `AutonomousWorkflowOrchestrator`, `run_scheduled_stage()` |
+| `core/market_data/models.py` | Domain models & NYSE/NASDAQ calendar (holidays incl. Good Friday, half-days, clock-derived last completed session) | `DailyBar`, `EarningsEvent`, `EquityMetadata`, `USTradingCalendar.last_completed_session()` |
+| `core/market_data/providers.py` | Pluggable data providers, 40-stock + dynamic universe, 24/7 Alpaca news scanner, cache-bypassed final-bar freshness gate | `MarketDataService.sync_session_bars()`, `StaleMarketDataError`, `AlpacaDataProvider`, `PolygonDataProvider` |
 | `core/indicators/technical.py` | Causal technical indicators & relative strength vs `SPY` | `compute_indicator_series()`, `IndicatorSnapshot` |
 | `core/strategies/registry.py` | 6 Strategy families (Long & Short), deterministic signal engine, version registry | `StrategyConfig`, `StrategySignalEngine`, `StrategyRegistry`, `get_baseline_strategies()`, `get_all_golden_base_strategies()` |
 | `core/backtesting/engine.py` | Event-driven Long & Short chronological backtester, walk-forward, stress tests | `BacktestEngine`, `BacktestResult` |

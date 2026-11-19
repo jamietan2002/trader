@@ -4,6 +4,25 @@ This log tracks architectural additions, strategy changes, schema updates, and v
 
 ---
 
+## [2026-11-19] — Calendar-Driven Scheduled Stages, Final-Bar Freshness Gate & Post-Close Catch-Up
+
+### Summary
+- **Root cause fixed (silent Nov 18 post-close skip)**: `HttpRateLimitedClient` cached Alpaca bar responses for 12h keyed by URL (persisted in the git-committed `api_cache`), so the 09:00 ET pre-open fetch masked the closing bar at 09:35/16:30 ET; partial intraday bars (e.g. Nov 17 at 09:34 ET) were stored as final, and the session date was inferred from `MAX(bar_date)`, so the 16:30 ET run re-targeted an already-reviewed day and idempotently skipped.
+- **Calendar-driven sessions**: Added `USTradingCalendar.last_completed_session()`, `session_close_et()`, `is_early_close_day()` and Good Friday; new `AutonomousWorkflowOrchestrator.run_scheduled_stage()` (`pre_open` / `market_open` / `post_close` / `auto`) and `main.py scheduled --stage` derive the target session from the ET clock only.
+- **Hard data-freshness gate**: `MarketDataService.sync_session_bars()` re-fetches the trailing 21 days cache-free, verifies the benchmark bar was retrieved after the session close, retries with backoff (up to ~20 min post-close), and raises `StaleMarketDataError` (FAILED `job_executions` row + non-zero exit) instead of skipping. Recent bar requests bypass `api_cache`; in-progress bars are dropped; upserts refresh `retrieved_at`.
+- **Self-healing schedule**: Every stage back-fills missed `daily_post_close` reviews for the last 5 sessions; the Worker adds idempotent backstops (10:00 ET market-open, 18:00 ET post-close) and retries GitHub dispatches on 5xx/network errors. Legacy `run_daily_workflow` now defers post-close for unclosed sessions; `ide-context` targets the calendar session and reports `data_freshness`.
+
+### Modules Added / Modified
+- `core/market_data/models.py`, `core/market_data/providers.py`, `infrastructure/scheduler/orchestrator.py`, `main.py`
+- `.github/workflows/autonomous_trading.yml`, `infrastructure/cloudflare_cron/worker.js`, `infrastructure/cloudflare_cron/setup_cronjob_org.py`
+- `AGENTS.md`, `core/AGENTS.md`, `ARCHITECTURE.md`, `DATA_SOURCES.md`, `DEPLOYMENT.md`, `USER_GUIDE.md`, `tests/test_platform.py`, `docs/AGENT_CHANGELOG.md`
+
+### Verification
+- New `test_scheduled_stage_calendar_driven_freshness_gate_and_catchup` covers calendar resolution, cache bypass, partial-bar dropping, gate retry/raise, catch-up, backstop idempotency, holiday handling, and loud failure recording.
+- Executed `.venv/bin/python .agents/skills/maintain-project-context/scripts/verify_context.py` (`exit code 0`).
+
+---
+
 ## [2026-11-17] — Dedicated Per-Repo Cloudflare Worker Scripts & Hardened `spy-daytrader` Midday Handoff
 
 ### Summary

@@ -39,6 +39,29 @@ from infrastructure.logging.logger import get_logger
 
 logger = get_logger("core.market_data")
 
+# Bar requests whose window ends within this many calendar days of today are NEVER served from
+# the HTTP response cache, so a pre-open fetch can never mask the final closing bar later that day.
+RECENT_BAR_NO_CACHE_DAYS = 7
+
+
+class StaleMarketDataError(RuntimeError):
+    """Raised when the final closing bar for a required trading session is unavailable."""
+
+
+def _completed_bar_policy(end_date: str) -> tuple[bool, str]:
+    """Return (use_http_cache, last_completed_session) for a daily-bar request ending at `end_date`.
+
+    - Recent windows bypass the cache entirely (prevents stale pre-market payload reuse).
+    - Bars dated after the last completed session (in-progress / intraday partial bars) must be dropped.
+    """
+    last_completed = USTradingCalendar.last_completed_session()
+    try:
+        end_dt = date.fromisoformat(str(end_date)[:10])
+    except ValueError:
+        return False, last_completed
+    use_cache = end_dt < (date.fromisoformat(last_completed) - timedelta(days=RECENT_BAR_NO_CACHE_DAYS))
+    return use_cache, last_completed
+
 
 class MarketDataProvider(ABC):
     """Abstract interface for replaceable market data providers."""
@@ -86,11 +109,12 @@ class HttpRateLimitedClient:
         self.cache_ttl_hours = cache_ttl_hours
         self._last_call_ts = 0.0
 
-    def get_json(self, url: str, headers: Optional[Dict[str, str]] = None) -> Any:
+    def get_json(self, url: str, headers: Optional[Dict[str, str]] = None, use_cache: bool = True) -> Any:
         cache_key = f"{self.provider_name}:{hashlib.sha256(url.encode('utf-8')).hexdigest()}"
-        cached = self.db.get_cached_response(cache_key)
-        if cached is not None:
-            return cached
+        if use_cache:
+            cached = self.db.get_cached_response(cache_key)
+            if cached is not None:
+                return cached
 
         elapsed = time.monotonic() - self._last_call_ts
         if elapsed < self.min_interval_sec:
@@ -107,10 +131,11 @@ class HttpRateLimitedClient:
                 req = urllib.request.Request(url, headers=req_headers, method="GET")
                 with urllib.request.urlopen(req, timeout=15) as resp:
                     payload = json.loads(resp.read().decode("utf-8"))
-                expires = (
-                    datetime.now(timezone.utc) + timedelta(hours=self.cache_ttl_hours)
-                ).isoformat()
-                self.db.set_cached_response(cache_key, self.provider_name, payload, expires)
+                if use_cache:
+                    expires = (
+                        datetime.now(timezone.utc) + timedelta(hours=self.cache_ttl_hours)
+                    ).isoformat()
+                    self.db.set_cached_response(cache_key, self.provider_name, payload, expires)
                 return payload
             except urllib.error.HTTPError as exc:
                 last_err = exc
@@ -524,8 +549,9 @@ class AlpacaDataProvider(MarketDataProvider):
             "APCA-API-KEY-ID": self.settings.alpaca_api_key,
             "APCA-API-SECRET-KEY": self.settings.alpaca_secret_key,
         }
+        use_cache, last_completed = _completed_bar_policy(end_date)
         try:
-            data = self.client.get_json(url, headers=headers)
+            data = self.client.get_json(url, headers=headers, use_cache=use_cache)
         except Exception as exc:
             if self._has_existing_live_bars(ticker):
                 logger.warning(f"Alpaca bar fetch for {ticker} failed ({exc}); preserving existing live DB bars.")
@@ -541,6 +567,9 @@ class AlpacaDataProvider(MarketDataProvider):
         bars: List[DailyBar] = []
         for b in raw_bars:
             bar_date = str(b["t"])[:10]
+            if bar_date > last_completed:
+                # In-progress session bar (market not yet closed + settled) — never persist partial OHLCV.
+                continue
             o, h, l, c, v = float(b["o"]), float(b["h"]), float(b["l"]), float(b["c"]), float(b["v"])
             bars.append(
                 DailyBar(
@@ -589,11 +618,14 @@ class PolygonDataProvider(MarketDataProvider):
             f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/{start_date}/{end_date}"
             f"?adjusted=true&sort=asc&limit=50000&apiKey={self.settings.polygon_api_key}"
         )
-        data = self.client.get_json(url)
+        use_cache, last_completed = _completed_bar_policy(end_date)
+        data = self.client.get_json(url, use_cache=use_cache)
         now_iso = utc_now_iso()
         bars: List[DailyBar] = []
         for r in data.get("results", []) or []:
             dt = datetime.fromtimestamp(r["t"] / 1000.0, tz=timezone.utc).strftime("%Y-%m-%d")
+            if dt > last_completed:
+                continue
             o, h, l, c, v = float(r["o"]), float(r["h"]), float(r["l"]), float(r["c"]), float(r["v"])
             bars.append(
                 DailyBar(
@@ -669,24 +701,14 @@ class MarketDataService:
                 return str(row2["max_dt"]) if (row2 and row2.get("max_dt")) else None
             return max_dt
 
-        ref_dt = date.fromisoformat(target_date[:10]) if target_date else date.today()
-        # Determine the latest completed US trading session:
-        # - For past dates (< today), that date's close has already occurred if it was a trading day.
-        # - For weekends/holidays, the latest completed session is the prior trading day (e.g. Friday).
-        # - For today on an active trading day, include today only after 4:15 PM ET (15 mins after NYSE/NASDAQ close).
-        today_dt = date.today()
-        if ref_dt < today_dt:
-            include_same = USTradingCalendar.is_trading_day(ref_dt)
-        elif not USTradingCalendar.is_trading_day(ref_dt):
-            include_same = False
+        ref_dt = date.fromisoformat(target_date[:10]) if target_date else USTradingCalendar.current_et_datetime().date()
+        # Latest completed US session is derived from the ET wall clock + exchange calendar only
+        # (16:15 ET settle buffer, 13:15 ET on half-days), never from what is already stored.
+        last_completed = USTradingCalendar.last_completed_session()
+        if ref_dt.isoformat() >= last_completed:
+            expected_min_session = last_completed
         else:
-            try:
-                from zoneinfo import ZoneInfo
-                now_et = datetime.now(ZoneInfo("America/New_York"))
-                include_same = (now_et.hour > 16) or (now_et.hour == 16 and now_et.minute >= 15)
-            except Exception:
-                include_same = False
-        expected_min_session = USTradingCalendar.previous_trading_day(ref_dt, include_same_day=include_same)
+            expected_min_session = USTradingCalendar.previous_trading_day(ref_dt, include_same_day=True)
 
         # Also check if any active core symbol in provider universe has 0 bars in market_bars_daily
         expected_active_syms = [
@@ -725,6 +747,86 @@ class MarketDataService:
             except Exception as exc:
                 logger.warning(f"Auto-refresh of market data failed ({exc}); using cached DB bars ({max_dt}).")
         return max_dt
+
+    def sync_session_bars(
+        self,
+        session_date: str,
+        lookback_days: int = 21,
+        max_attempts: int = 3,
+        retry_sleep_sec: float = 60.0,
+        sleep_fn: Any = None,
+    ) -> Dict[str, Any]:
+        """Hard data-freshness gate for scheduled runs.
+
+        Always re-fetches (cache-bypassed) the trailing `lookback_days` of completed daily bars up to
+        `session_date`, then verifies the benchmark's final bar for `session_date` exists and was
+        retrieved after that session's official close. Retries with backoff (e.g. while the provider
+        finalizes the closing bar) and raises `StaleMarketDataError` instead of silently proceeding.
+        """
+        sleep_fn = sleep_fn or time.sleep
+        sess = date.fromisoformat(session_date[:10])
+        if not USTradingCalendar.is_trading_day(sess):
+            raise ValueError(f"{session_date} is not a NYSE/NASDAQ trading session.")
+        if session_date > USTradingCalendar.last_completed_session():
+            raise StaleMarketDataError(
+                f"Session {session_date} has not closed yet (+15m settle); refusing to treat partial bars as final."
+            )
+
+        if not self._is_live_api_configured():
+            row = self.db.fetch_one(
+                "SELECT bar_date FROM market_bars_daily WHERE ticker = ? AND bar_date = ?",
+                (self.settings.benchmark_ticker, session_date),
+            )
+            return {
+                "session_date": session_date,
+                "status": "OFFLINE_PROVIDER",
+                "benchmark_bar_present": bool(row),
+                "attempts": 0,
+            }
+
+        close_et = datetime.combine(
+            sess, USTradingCalendar.session_close_et(sess), tzinfo=USTradingCalendar._ET
+        ).astimezone(timezone.utc).isoformat()
+        start = (sess - timedelta(days=lookback_days)).isoformat()
+        last_err: Optional[str] = None
+        for attempt in range(1, max(1, max_attempts) + 1):
+            try:
+                summary = self.ingest_universe_and_history(start_date=start, end_date=session_date)
+            except Exception as exc:  # network / provider outage
+                summary = {}
+                last_err = f"ingest error: {exc}"
+            row = self.db.fetch_one(
+                "SELECT bar_date, close, retrieved_at, provider_source FROM market_bars_daily "
+                "WHERE ticker = ? AND bar_date = ?",
+                (self.settings.benchmark_ticker, session_date),
+            )
+            fresh = bool(
+                row
+                and str(row.get("provider_source")) == self.provider.provider_name
+                and str(row.get("retrieved_at") or "") >= close_et
+            )
+            if fresh:
+                return {
+                    "session_date": session_date,
+                    "status": "FRESH",
+                    "benchmark_close": float(row["close"]),
+                    "benchmark_retrieved_at": row["retrieved_at"],
+                    "bars_ingested": int(summary.get("bars_ingested", 0) or 0),
+                    "attempts": attempt,
+                }
+            last_err = last_err or (
+                f"benchmark bar for {session_date} missing or retrieved before close "
+                f"(row={dict(row) if row else None})"
+            )
+            logger.warning(
+                f"Session bar freshness check failed for {session_date} (attempt {attempt}/{max_attempts}): {last_err}"
+            )
+            if attempt < max_attempts:
+                sleep_fn(retry_sleep_sec)
+                last_err = None
+        raise StaleMarketDataError(
+            f"Final {self.settings.benchmark_ticker} bar for {session_date} unavailable after {max_attempts} attempts: {last_err}"
+        )
 
     def fetch_live_quote_snapshots(
         self,
@@ -1030,7 +1132,9 @@ class MarketDataService:
                     adj_open=excluded.adj_open, adj_high=excluded.adj_high,
                     adj_low=excluded.adj_low, adj_close=excluded.adj_close,
                     adj_volume=excluded.adj_volume, split_factor=excluded.split_factor,
-                    dividend_amount=excluded.dividend_amount
+                    dividend_amount=excluded.dividend_amount,
+                    provider_source=excluded.provider_source,
+                    retrieved_at=excluded.retrieved_at
                 """,
                 bar_rows,
             )
